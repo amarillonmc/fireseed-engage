@@ -1,0 +1,687 @@
+# 种火集结号 - 优先级1：训练完成检查系统
+时间戳: 2025-04-09 22:40:00
+
+## 训练完成检查系统设计
+
+### 1. 创建训练完成检查脚本 (cron_training_completion.php)
+```php
+<?php
+// 包含初始化文件
+require_once 'includes/init.php';
+
+// 检查并完成所有已完成训练的士兵
+$completedTrainings = Soldier::checkAndCompleteTraining();
+
+// 记录完成的训练
+if (!empty($completedTrainings)) {
+    error_log('Completed trainings: ' . json_encode($completedTrainings));
+}
+```
+
+### 2. 创建训练完成检查API (api/check_training_completion.php)
+```php
+<?php
+// 包含初始化文件
+require_once '../includes/init.php';
+
+// 设置响应头
+header('Content-Type: application/json');
+
+// 检查用户是否已登录
+if (!isset($_SESSION['user_id'])) {
+    echo json_encode([
+        'success' => false,
+        'message' => '未登录'
+    ]);
+    exit;
+}
+
+// 获取用户的所有城池
+$cities = City::getUserCities($_SESSION['user_id']);
+$cityIds = [];
+
+foreach ($cities as $city) {
+    $cityIds[] = $city->getCityId();
+}
+
+// 如果用户没有城池，直接返回
+if (empty($cityIds)) {
+    echo json_encode([
+        'success' => true,
+        'completed_trainings' => []
+    ]);
+    exit;
+}
+
+// 检查用户城池中的士兵训练完成情况
+$completedTrainings = [];
+
+$db = Database::getInstance()->getConnection();
+$now = date('Y-m-d H:i:s');
+
+// 检查训练完成的士兵
+$trainingQuery = "SELECT s.soldier_id FROM soldiers s 
+                  JOIN cities c ON s.city_id = c.city_id 
+                  WHERE c.owner_id = ? AND s.in_training > 0 AND s.training_complete_time IS NOT NULL AND s.training_complete_time <= ?";
+$trainingStmt = $db->prepare($trainingQuery);
+$trainingStmt->bind_param('is', $_SESSION['user_id'], $now);
+$trainingStmt->execute();
+$trainingResult = $trainingStmt->get_result();
+
+if ($trainingResult) {
+    while ($row = $trainingResult->fetch_assoc()) {
+        $soldier = new Soldier($row['soldier_id']);
+        if ($soldier->isValid() && $soldier->completeTraining()) {
+            // 获取士兵所在的城池
+            $city = new City($soldier->getCityId());
+            
+            $completedTrainings[] = [
+                'soldier_id' => $soldier->getSoldierId(),
+                'city_id' => $soldier->getCityId(),
+                'city_name' => $city->isValid() ? $city->getName() : '',
+                'type' => $soldier->getType(),
+                'name' => $soldier->getName(),
+                'quantity' => $soldier->getQuantity()
+            ];
+        }
+    }
+}
+
+$trainingStmt->close();
+
+// 返回完成的训练
+echo json_encode([
+    'success' => true,
+    'completed_trainings' => $completedTrainings
+]);
+```
+
+### 3. 修改前端JavaScript，定期检查训练完成情况 (script.js)
+```javascript
+// 在script.js中添加以下代码
+
+// 检查训练完成情况
+function checkTrainingCompletion() {
+    fetch('api/check_training_completion.php')
+        .then(response => response.json())
+        .then(data => {
+            if (data.success) {
+                // 处理完成的训练
+                if (data.completed_trainings && data.completed_trainings.length > 0) {
+                    data.completed_trainings.forEach(soldier => {
+                        showNotification(`${soldier.city_name} 的 ${soldier.quantity} 个 ${soldier.name} 训练完成！`);
+                        
+                        // 如果当前页面是兵营页面，刷新兵营视图
+                        if (window.location.pathname.includes('barracks.php')) {
+                            refreshBarracksView();
+                        }
+                    });
+                }
+            }
+        })
+        .catch(error => console.error('Error checking training completion:', error));
+}
+
+// 刷新兵营视图
+function refreshBarracksView() {
+    // 获取当前城池ID
+    const cityId = document.querySelector('.barracks-view').getAttribute('data-city-id');
+    
+    if (cityId) {
+        fetch(`api/get_soldiers.php?city_id=${cityId}`)
+            .then(response => response.json())
+            .then(data => {
+                if (data.success) {
+                    // 更新兵营视图
+                    updateBarracksView(data.soldiers);
+                }
+            })
+            .catch(error => console.error('Error refreshing barracks view:', error));
+    }
+}
+
+// 更新兵营视图
+function updateBarracksView(soldiers) {
+    // 获取兵营表格
+    const barracksTable = document.querySelector('.barracks-table tbody');
+    
+    // 清空现有的行
+    barracksTable.innerHTML = '';
+    
+    // 添加士兵行
+    for (const type in soldiers) {
+        const soldier = soldiers[type];
+        
+        const row = document.createElement('tr');
+        
+        // 士兵类型
+        const typeCell = document.createElement('td');
+        typeCell.textContent = getSoldierName(type);
+        row.appendChild(typeCell);
+        
+        // 士兵等级
+        const levelCell = document.createElement('td');
+        levelCell.textContent = soldier.level;
+        row.appendChild(levelCell);
+        
+        // 士兵数量
+        const quantityCell = document.createElement('td');
+        quantityCell.textContent = soldier.quantity;
+        row.appendChild(quantityCell);
+        
+        // 训练中的数量
+        const inTrainingCell = document.createElement('td');
+        if (soldier.in_training > 0) {
+            const trainingTime = new Date(soldier.training_complete_time);
+            const now = new Date();
+            
+            if (trainingTime > now) {
+                const timeRemaining = Math.floor((trainingTime - now) / 1000); // 剩余秒数
+                inTrainingCell.textContent = `${soldier.in_training} (${formatTime(timeRemaining)})`;
+                
+                // 添加倒计时更新
+                const countdownInterval = setInterval(() => {
+                    const now = new Date();
+                    const timeRemaining = Math.floor((trainingTime - now) / 1000);
+                    
+                    if (timeRemaining <= 0) {
+                        clearInterval(countdownInterval);
+                        checkTrainingCompletion(); // 检查训练完成情况
+                    } else {
+                        inTrainingCell.textContent = `${soldier.in_training} (${formatTime(timeRemaining)})`;
+                    }
+                }, 1000);
+            } else {
+                inTrainingCell.textContent = `${soldier.in_training} (已完成)`;
+            }
+        } else {
+            inTrainingCell.textContent = '0';
+        }
+        row.appendChild(inTrainingCell);
+        
+        // 训练按钮
+        const actionCell = document.createElement('td');
+        const trainButton = document.createElement('button');
+        trainButton.className = 'train-button';
+        trainButton.textContent = '训练';
+        trainButton.addEventListener('click', function() {
+            showTrainingDialog(type);
+        });
+        actionCell.appendChild(trainButton);
+        row.appendChild(actionCell);
+        
+        barracksTable.appendChild(row);
+    }
+}
+
+// 获取士兵名称
+function getSoldierName(type) {
+    switch (type) {
+        case 'pawn':
+            return '兵卒';
+        case 'knight':
+            return '骑士';
+        case 'rook':
+            return '城壁';
+        case 'bishop':
+            return '主教';
+        case 'golem':
+            return '锤子兵';
+        case 'scout':
+            return '侦察兵';
+        default:
+            return '未知士兵';
+    }
+}
+
+// 格式化时间
+function formatTime(seconds) {
+    const hours = Math.floor(seconds / 3600);
+    const minutes = Math.floor((seconds % 3600) / 60);
+    const secs = seconds % 60;
+    
+    return `${hours.toString().padStart(2, '0')}:${minutes.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
+}
+
+// 显示训练对话框
+function showTrainingDialog(soldierType) {
+    // 创建对话框
+    const dialog = document.createElement('div');
+    dialog.className = 'dialog';
+    
+    // 对话框内容
+    const dialogContent = document.createElement('div');
+    dialogContent.className = 'dialog-content';
+    
+    // 标题
+    const title = document.createElement('h3');
+    title.textContent = `训练 ${getSoldierName(soldierType)}`;
+    dialogContent.appendChild(title);
+    
+    // 数量输入
+    const quantityLabel = document.createElement('label');
+    quantityLabel.textContent = '数量:';
+    dialogContent.appendChild(quantityLabel);
+    
+    const quantityInput = document.createElement('input');
+    quantityInput.type = 'number';
+    quantityInput.min = 1;
+    quantityInput.value = 1;
+    dialogContent.appendChild(quantityInput);
+    
+    // 按钮容器
+    const buttonContainer = document.createElement('div');
+    buttonContainer.className = 'button-container';
+    
+    // 取消按钮
+    const cancelButton = document.createElement('button');
+    cancelButton.textContent = '取消';
+    cancelButton.addEventListener('click', function() {
+        document.body.removeChild(dialog);
+    });
+    buttonContainer.appendChild(cancelButton);
+    
+    // 确认按钮
+    const confirmButton = document.createElement('button');
+    confirmButton.textContent = '训练';
+    confirmButton.addEventListener('click', function() {
+        const quantity = parseInt(quantityInput.value);
+        
+        if (quantity > 0) {
+            trainSoldiers(soldierType, quantity);
+            document.body.removeChild(dialog);
+        }
+    });
+    buttonContainer.appendChild(confirmButton);
+    
+    dialogContent.appendChild(buttonContainer);
+    dialog.appendChild(dialogContent);
+    
+    // 添加到页面
+    document.body.appendChild(dialog);
+}
+
+// 训练士兵
+function trainSoldiers(soldierType, quantity) {
+    // 获取当前城池ID
+    const cityId = document.querySelector('.barracks-view').getAttribute('data-city-id');
+    
+    if (cityId) {
+        const formData = new FormData();
+        formData.append('city_id', cityId);
+        formData.append('soldier_type', soldierType);
+        formData.append('quantity', quantity);
+        
+        fetch('api/train_soldiers.php', {
+            method: 'POST',
+            body: formData
+        })
+        .then(response => response.json())
+        .then(data => {
+            if (data.success) {
+                showNotification(`开始训练 ${quantity} 个 ${getSoldierName(soldierType)}`);
+                refreshBarracksView();
+            } else {
+                showNotification(`训练失败: ${data.message}`);
+            }
+        })
+        .catch(error => console.error('Error training soldiers:', error));
+    }
+}
+
+// 每30秒检查一次训练完成情况
+setInterval(checkTrainingCompletion, 30000);
+
+// 页面加载完成后立即检查一次训练完成情况
+document.addEventListener('DOMContentLoaded', function() {
+    checkTrainingCompletion();
+    
+    // 其他初始化代码...
+});
+```
+
+### 4. 添加对话框样式 (style.css)
+```css
+/* 在style.css中添加以下样式 */
+
+/* 对话框样式 */
+.dialog {
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    background-color: rgba(0, 0, 0, 0.5);
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    z-index: 1000;
+}
+
+.dialog-content {
+    background-color: #fff;
+    padding: 20px;
+    border-radius: 5px;
+    box-shadow: 0 2px 10px rgba(0, 0, 0, 0.3);
+    width: 300px;
+}
+
+.dialog h3 {
+    margin-top: 0;
+    margin-bottom: 20px;
+}
+
+.dialog label {
+    display: block;
+    margin-bottom: 5px;
+}
+
+.dialog input {
+    width: 100%;
+    padding: 8px;
+    margin-bottom: 20px;
+    border: 1px solid #ccc;
+    border-radius: 3px;
+}
+
+.button-container {
+    display: flex;
+    justify-content: space-between;
+}
+
+.button-container button {
+    padding: 8px 15px;
+    border: none;
+    border-radius: 3px;
+    cursor: pointer;
+}
+
+.button-container button:first-child {
+    background-color: #ccc;
+}
+
+.button-container button:last-child {
+    background-color: #333;
+    color: #fff;
+}
+
+/* 兵营表格样式 */
+.barracks-table {
+    width: 100%;
+    border-collapse: collapse;
+    margin-top: 20px;
+}
+
+.barracks-table th,
+.barracks-table td {
+    padding: 10px;
+    text-align: center;
+    border: 1px solid #ccc;
+}
+
+.barracks-table th {
+    background-color: #f0f0f0;
+    font-weight: bold;
+}
+
+.barracks-table tr:nth-child(even) {
+    background-color: #f9f9f9;
+}
+
+.train-button {
+    padding: 5px 10px;
+    background-color: #333;
+    color: #fff;
+    border: none;
+    border-radius: 3px;
+    cursor: pointer;
+}
+
+.train-button:hover {
+    background-color: #555;
+}
+```
+
+### 5. 创建兵营页面 (barracks.php)
+```php
+<?php
+// 包含初始化文件
+require_once 'includes/init.php';
+
+// 检查用户是否已登录
+if (!isset($_SESSION['user_id'])) {
+    header('Location: login.php');
+    exit;
+}
+
+// 获取用户信息
+$user = new User($_SESSION['user_id']);
+if (!$user->isValid()) {
+    session_unset();
+    session_destroy();
+    header('Location: login.php');
+    exit;
+}
+
+// 获取用户资源
+$resource = new Resource($user->getUserId());
+
+// 获取城池ID
+$cityId = isset($_GET['city_id']) ? intval($_GET['city_id']) : 0;
+
+// 如果没有指定城池ID，获取用户的主城
+if ($cityId <= 0) {
+    $mainCity = City::getUserMainCity($user->getUserId());
+    if ($mainCity) {
+        $cityId = $mainCity->getCityId();
+    }
+}
+
+// 获取城池信息
+$city = null;
+if ($cityId > 0) {
+    $city = new City($cityId);
+    
+    // 检查城池是否存在且属于当前用户
+    if (!$city->isValid() || $city->getOwnerId() != $user->getUserId()) {
+        $city = null;
+    }
+}
+
+// 如果没有有效的城池，重定向到主页
+if (!$city) {
+    header('Location: index.php');
+    exit;
+}
+
+// 获取城池中的兵营
+$barracks = Facility::getCityFacilitiesByType($city->getCityId(), 'barracks');
+
+// 检查是否有可用的兵营
+$hasBarracks = !empty($barracks);
+
+// 获取城池中的士兵
+$soldiers = $city->getSoldiers();
+
+// 页面标题
+$pageTitle = $city->getName() . ' - 兵营';
+?>
+
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title><?php echo SITE_NAME; ?> - <?php echo $pageTitle; ?></title>
+    <link rel="stylesheet" href="assets/css/style.css">
+</head>
+<body>
+    <div class="container">
+        <!-- 页首 -->
+        <header>
+            <h1 class="site-title"><?php echo SITE_NAME; ?></h1>
+            <h2 class="page-title"><?php echo $pageTitle; ?></h2>
+            <nav class="main-nav">
+                <ul>
+                    <li><a href="index.php">主基地</a></li>
+                    <li><a href="profile.php">档案</a></li>
+                    <li><a href="generals.php">武将</a></li>
+                    <li><a href="map.php">地图</a></li>
+                    <li><a href="internal.php">内政</a></li>
+                    <li><a href="ranking.php">排名</a></li>
+                    <li class="circuit-points">思考回路: <?php echo $user->getCircuitPoints(); ?> / <?php echo $user->getMaxCircuitPoints(); ?></li>
+                </ul>
+            </nav>
+        </header>
+        
+        <!-- 主内容 -->
+        <main>
+            <!-- 资源显示 -->
+            <div class="resource-bar">
+                <div class="resource bright-crystal">
+                    <span class="resource-name">亮晶晶</span>
+                    <span class="resource-value"><?php echo number_format($resource->getBrightCrystal()); ?></span>
+                </div>
+                <div class="resource warm-crystal">
+                    <span class="resource-name">暖洋洋</span>
+                    <span class="resource-value"><?php echo number_format($resource->getWarmCrystal()); ?></span>
+                </div>
+                <div class="resource cold-crystal">
+                    <span class="resource-name">冷冰冰</span>
+                    <span class="resource-value"><?php echo number_format($resource->getColdCrystal()); ?></span>
+                </div>
+                <div class="resource green-crystal">
+                    <span class="resource-name">郁萌萌</span>
+                    <span class="resource-value"><?php echo number_format($resource->getGreenCrystal()); ?></span>
+                </div>
+                <div class="resource day-crystal">
+                    <span class="resource-name">昼闪闪</span>
+                    <span class="resource-value"><?php echo number_format($resource->getDayCrystal()); ?></span>
+                </div>
+                <div class="resource night-crystal">
+                    <span class="resource-name">夜静静</span>
+                    <span class="resource-value"><?php echo number_format($resource->getNightCrystal()); ?></span>
+                </div>
+            </div>
+            
+            <!-- 兵营视图 -->
+            <div class="barracks-view" data-city-id="<?php echo $city->getCityId(); ?>">
+                <h3>兵营 - <?php echo $city->getName(); ?></h3>
+                
+                <?php if ($hasBarracks): ?>
+                    <div class="barracks-info">
+                        <p>兵营等级: <?php echo $barracks[0]->getLevel(); ?></p>
+                        <p>可训练士兵等级: <?php echo $barracks[0]->getMaxSoldierLevel(); ?></p>
+                    </div>
+                    
+                    <table class="barracks-table">
+                        <thead>
+                            <tr>
+                                <th>士兵类型</th>
+                                <th>等级</th>
+                                <th>数量</th>
+                                <th>训练中</th>
+                                <th>操作</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            <?php
+                            // 定义可训练的士兵类型
+                            $trainableSoldierTypes = ['pawn', 'knight', 'rook', 'bishop'];
+                            
+                            foreach ($trainableSoldierTypes as $type) {
+                                $soldierFound = false;
+                                
+                                // 查找该类型的士兵
+                                foreach ($soldiers as $soldier) {
+                                    if ($soldier->getType() == $type) {
+                                        $soldierFound = true;
+                                        ?>
+                                        <tr>
+                                            <td><?php echo $soldier->getName(); ?></td>
+                                            <td><?php echo $soldier->getLevel(); ?></td>
+                                            <td><?php echo $soldier->getQuantity(); ?></td>
+                                            <td>
+                                                <?php if ($soldier->getInTraining() > 0): ?>
+                                                    <?php echo $soldier->getInTraining(); ?>
+                                                    <?php if ($soldier->getTrainingCompleteTime()): ?>
+                                                        <?php
+                                                        $trainingCompleteTime = strtotime($soldier->getTrainingCompleteTime());
+                                                        $now = time();
+                                                        $timeRemaining = max(0, $trainingCompleteTime - $now);
+                                                        $hours = floor($timeRemaining / 3600);
+                                                        $minutes = floor(($timeRemaining % 3600) / 60);
+                                                        $seconds = $timeRemaining % 60;
+                                                        ?>
+                                                        (<?php echo sprintf('%02d:%02d:%02d', $hours, $minutes, $seconds); ?>)
+                                                    <?php endif; ?>
+                                                <?php else: ?>
+                                                    0
+                                                <?php endif; ?>
+                                            </td>
+                                            <td>
+                                                <button class="train-button" onclick="showTrainingDialog('<?php echo $type; ?>')">训练</button>
+                                            </td>
+                                        </tr>
+                                        <?php
+                                        break;
+                                    }
+                                }
+                                
+                                // 如果没有找到该类型的士兵，显示空行
+                                if (!$soldierFound) {
+                                    ?>
+                                    <tr>
+                                        <td><?php echo getSoldierName($type); ?></td>
+                                        <td><?php echo $barracks[0]->getMaxSoldierLevel(); ?></td>
+                                        <td>0</td>
+                                        <td>0</td>
+                                        <td>
+                                            <button class="train-button" onclick="showTrainingDialog('<?php echo $type; ?>')">训练</button>
+                                        </td>
+                                    </tr>
+                                    <?php
+                                }
+                            }
+                            
+                            // 获取士兵名称的辅助函数
+                            function getSoldierName($type) {
+                                switch ($type) {
+                                    case 'pawn':
+                                        return '兵卒';
+                                    case 'knight':
+                                        return '骑士';
+                                    case 'rook':
+                                        return '城壁';
+                                    case 'bishop':
+                                        return '主教';
+                                    case 'golem':
+                                        return '锤子兵';
+                                    case 'scout':
+                                        return '侦察兵';
+                                    default:
+                                        return '未知士兵';
+                                }
+                            }
+                            ?>
+                        </tbody>
+                    </table>
+                <?php else: ?>
+                    <div class="message info">
+                        <p>该城池没有兵营，请先建造兵营。</p>
+                        <p><a href="index.php?city_id=<?php echo $city->getCityId(); ?>">返回城池</a></p>
+                    </div>
+                <?php endif; ?>
+            </div>
+        </main>
+        
+        <!-- 页脚 -->
+        <footer>
+            <p>&copy; <?php echo date('Y'); ?> <?php echo SITE_NAME; ?> - 版本 <?php echo GAME_VERSION; ?></p>
+        </footer>
+    </div>
+    
+    <script src="assets/js/script.js"></script>
+</body>
+</html>
+```

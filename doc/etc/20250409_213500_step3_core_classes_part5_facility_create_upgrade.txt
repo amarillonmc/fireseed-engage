@@ -1,0 +1,401 @@
+# 种火集结号 - 核心PHP类设计 (步骤3 - 第5部分 - 设施类创建和升级)
+时间戳: 2025-04-09 21:35:00
+
+## 设施类设计 - 创建和升级功能
+
+### Facility.php (设施类) - 第2部分
+```php
+    /**
+     * 创建新设施
+     * @param int $cityId 城池ID
+     * @param string $type 设施类型
+     * @param string|null $subtype 设施子类型
+     * @param int $level 设施等级
+     * @param int $xPos 设施X坐标
+     * @param int $yPos 设施Y坐标
+     * @param string|null $constructionTime 建造完成时间
+     * @param string|null $upgradeTime 升级完成时间
+     * @return bool|int 成功返回设施ID，失败返回false
+     */
+    public function createFacility($cityId, $type, $subtype = null, $level = 1, $xPos = 0, $yPos = 0, $constructionTime = null, $upgradeTime = null) {
+        // 检查城池ID是否存在
+        $cityQuery = "SELECT city_id FROM cities WHERE city_id = ?";
+        $cityStmt = $this->db->prepare($cityQuery);
+        $cityStmt->bind_param('i', $cityId);
+        $cityStmt->execute();
+        $cityResult = $cityStmt->get_result();
+        
+        if (!$cityResult || $cityResult->num_rows == 0) {
+            $cityStmt->close();
+            return false; // 城池ID不存在
+        }
+        
+        $cityStmt->close();
+        
+        // 检查设施类型是否有效
+        $validTypes = ['resource_production', 'governor_office', 'barracks', 'research_lab', 'dormitory', 'storage', 'watchtower', 'workshop'];
+        if (!in_array($type, $validTypes)) {
+            return false;
+        }
+        
+        // 检查设施子类型是否有效
+        if ($type == 'resource_production') {
+            $validSubtypes = ['bright', 'warm', 'cold', 'green', 'day', 'night'];
+            if (!in_array($subtype, $validSubtypes)) {
+                return false;
+            }
+        }
+        
+        // 检查坐标是否已被占用
+        $positionQuery = "SELECT facility_id FROM facilities WHERE city_id = ? AND x_pos = ? AND y_pos = ?";
+        $positionStmt = $this->db->prepare($positionQuery);
+        $positionStmt->bind_param('iii', $cityId, $xPos, $yPos);
+        $positionStmt->execute();
+        $positionResult = $positionStmt->get_result();
+        
+        if ($positionResult && $positionResult->num_rows > 0) {
+            $positionStmt->close();
+            return false; // 坐标已被占用
+        }
+        
+        $positionStmt->close();
+        
+        // 检查是否已经有同类型的唯一设施
+        if (in_array($type, ['governor_office', 'research_lab', 'watchtower', 'workshop'])) {
+            $uniqueQuery = "SELECT facility_id FROM facilities WHERE city_id = ? AND type = ?";
+            $uniqueStmt = $this->db->prepare($uniqueQuery);
+            $uniqueStmt->bind_param('is', $cityId, $type);
+            $uniqueStmt->execute();
+            $uniqueResult = $uniqueStmt->get_result();
+            
+            if ($uniqueResult && $uniqueResult->num_rows > 0) {
+                $uniqueStmt->close();
+                return false; // 已经有同类型的唯一设施
+            }
+            
+            $uniqueStmt->close();
+        }
+        
+        // 创建新设施
+        $query = "INSERT INTO facilities (city_id, type, subtype, level, x_pos, y_pos, construction_time, upgrade_time) 
+                  VALUES (?, ?, ?, ?, ?, ?, ?, ?)";
+        $stmt = $this->db->prepare($query);
+        $stmt->bind_param('issiisss', $cityId, $type, $subtype, $level, $xPos, $yPos, $constructionTime, $upgradeTime);
+        $result = $stmt->execute();
+        
+        if ($result) {
+            $facilityId = $this->db->insert_id;
+            $stmt->close();
+            
+            // 设置对象属性
+            $this->facilityId = $facilityId;
+            $this->cityId = $cityId;
+            $this->type = $type;
+            $this->subtype = $subtype;
+            $this->level = $level;
+            $this->xPos = $xPos;
+            $this->yPos = $yPos;
+            $this->constructionTime = $constructionTime;
+            $this->upgradeTime = $upgradeTime;
+            $this->isValid = true;
+            
+            return $facilityId;
+        }
+        
+        $stmt->close();
+        return false;
+    }
+    
+    /**
+     * 开始升级设施
+     * @param int $userId 用户ID
+     * @return bool
+     */
+    public function startUpgrade($userId) {
+        if (!$this->isValid || $this->isUpgrading()) {
+            return false;
+        }
+        
+        // 检查用户是否拥有该设施所在的城池
+        $cityQuery = "SELECT owner_id FROM cities WHERE city_id = ?";
+        $cityStmt = $this->db->prepare($cityQuery);
+        $cityStmt->bind_param('i', $this->cityId);
+        $cityStmt->execute();
+        $cityResult = $cityStmt->get_result();
+        
+        if (!$cityResult || $cityResult->num_rows == 0) {
+            $cityStmt->close();
+            return false; // 城池不存在
+        }
+        
+        $cityData = $cityResult->fetch_assoc();
+        $cityStmt->close();
+        
+        if ($cityData['owner_id'] != $userId) {
+            return false; // 用户不拥有该城池
+        }
+        
+        // 获取升级所需资源
+        $upgradeCost = $this->getUpgradeCost();
+        
+        // 检查用户是否有足够的资源
+        $resource = new Resource($userId);
+        if (!$resource->isValid() || !$resource->hasEnoughResources($upgradeCost)) {
+            return false; // 资源不足
+        }
+        
+        // 计算升级时间
+        $upgradeTime = $this->calculateUpgradeTime();
+        $upgradeCompleteTime = date('Y-m-d H:i:s', time() + $upgradeTime);
+        
+        // 开始事务
+        $this->db->beginTransaction();
+        
+        try {
+            // 扣除资源
+            if (!$resource->reduceResources($upgradeCost)) {
+                throw new Exception('Failed to reduce resources');
+            }
+            
+            // 更新设施升级时间
+            $query = "UPDATE facilities SET upgrade_time = ? WHERE facility_id = ?";
+            $stmt = $this->db->prepare($query);
+            $stmt->bind_param('si', $upgradeCompleteTime, $this->facilityId);
+            $result = $stmt->execute();
+            $stmt->close();
+            
+            if (!$result) {
+                throw new Exception('Failed to update facility upgrade time');
+            }
+            
+            $this->upgradeTime = $upgradeCompleteTime;
+            
+            $this->db->commit();
+            return true;
+        } catch (Exception $e) {
+            $this->db->rollback();
+            error_log('Facility upgrade failed: ' . $e->getMessage());
+            return false;
+        }
+    }
+    
+    /**
+     * 完成设施升级
+     * @return bool
+     */
+    public function completeUpgrade() {
+        if (!$this->isValid || !$this->isUpgrading()) {
+            return false;
+        }
+        
+        $now = time();
+        $upgradeTime = strtotime($this->upgradeTime);
+        
+        if ($now < $upgradeTime) {
+            return false; // 升级尚未完成
+        }
+        
+        // 升级设施
+        $newLevel = $this->level + 1;
+        
+        $query = "UPDATE facilities SET level = ?, upgrade_time = NULL WHERE facility_id = ?";
+        $stmt = $this->db->prepare($query);
+        $stmt->bind_param('ii', $newLevel, $this->facilityId);
+        $result = $stmt->execute();
+        $stmt->close();
+        
+        if ($result) {
+            $this->level = $newLevel;
+            $this->upgradeTime = null;
+            return true;
+        }
+        
+        return false;
+    }
+    
+    /**
+     * 获取升级所需资源
+     * @return array 资源数组，格式为 ['type' => amount]
+     */
+    public function getUpgradeCost() {
+        if (!$this->isValid) {
+            return [];
+        }
+        
+        $baseCost = [];
+        $levelCoefficient = 0.5; // 默认等级系数
+        
+        switch ($this->type) {
+            case 'resource_production':
+                switch ($this->subtype) {
+                    case 'bright':
+                        $baseCost = [
+                            'warm' => 500,
+                            'cold' => 500,
+                            'green' => 500,
+                            'day' => 500
+                        ];
+                        break;
+                    case 'warm':
+                        $baseCost = [
+                            'bright' => 500,
+                            'cold' => 500,
+                            'green' => 500,
+                            'day' => 500
+                        ];
+                        break;
+                    case 'cold':
+                        $baseCost = [
+                            'bright' => 500,
+                            'warm' => 500,
+                            'green' => 500,
+                            'day' => 500
+                        ];
+                        break;
+                    case 'green':
+                        $baseCost = [
+                            'bright' => 500,
+                            'warm' => 500,
+                            'cold' => 500,
+                            'day' => 500
+                        ];
+                        break;
+                    case 'day':
+                        $baseCost = [
+                            'bright' => 500,
+                            'warm' => 500,
+                            'cold' => 500,
+                            'green' => 500
+                        ];
+                        break;
+                    case 'night':
+                        $baseCost = [
+                            'bright' => 500,
+                            'warm' => 500,
+                            'cold' => 500,
+                            'green' => 500,
+                            'day' => 500
+                        ];
+                        break;
+                }
+                break;
+            case 'governor_office':
+                $baseCost = [
+                    'bright' => 1000,
+                    'warm' => 1000,
+                    'cold' => 1000,
+                    'green' => 1000,
+                    'day' => 1000,
+                    'night' => 1000
+                ];
+                break;
+            case 'barracks':
+                $baseCost = [
+                    'bright' => 2000,
+                    'warm' => 1000,
+                    'cold' => 1000,
+                    'green' => 1000,
+                    'day' => 1000
+                ];
+                break;
+            case 'research_lab':
+                $baseCost = [
+                    'bright' => 4000,
+                    'warm' => 2000,
+                    'cold' => 2000,
+                    'green' => 2000,
+                    'day' => 2000,
+                    'night' => 2000
+                ];
+                break;
+            case 'dormitory':
+                $baseCost = [
+                    'bright' => 1000,
+                    'warm' => 1000,
+                    'cold' => 1000,
+                    'green' => 1000
+                ];
+                break;
+            case 'storage':
+                $baseCost = [
+                    'bright' => 1000,
+                    'warm' => 1000,
+                    'cold' => 1000,
+                    'green' => 1000
+                ];
+                break;
+            case 'watchtower':
+                $baseCost = [
+                    'bright' => 2000,
+                    'warm' => 1000,
+                    'cold' => 1000,
+                    'green' => 1000,
+                    'day' => 1000,
+                    'night' => 2000
+                ];
+                break;
+            case 'workshop':
+                $baseCost = [
+                    'bright' => 2000,
+                    'warm' => 2000,
+                    'cold' => 2000,
+                    'green' => 2000,
+                    'day' => 1000
+                ];
+                break;
+        }
+        
+        // 根据当前等级计算实际升级费用
+        $actualCost = [];
+        foreach ($baseCost as $type => $amount) {
+            $actualCost[$type] = round($amount * (1 + $this->level * $levelCoefficient));
+        }
+        
+        return $actualCost;
+    }
+    
+    /**
+     * 计算升级时间（秒）
+     * @return int
+     */
+    public function calculateUpgradeTime() {
+        if (!$this->isValid) {
+            return 0;
+        }
+        
+        $baseTime = 0;
+        
+        switch ($this->type) {
+            case 'resource_production':
+                $baseTime = 3600; // 1小时
+                break;
+            case 'governor_office':
+                $baseTime = 7200; // 2小时
+                break;
+            case 'barracks':
+                $baseTime = 7200; // 2小时
+                break;
+            case 'research_lab':
+                $baseTime = 14400; // 4小时
+                break;
+            case 'dormitory':
+                $baseTime = 3600; // 1小时
+                break;
+            case 'storage':
+                $baseTime = 3600; // 1小时
+                break;
+            case 'watchtower':
+                $baseTime = 7200; // 2小时
+                break;
+            case 'workshop':
+                $baseTime = 7200; // 2小时
+                break;
+        }
+        
+        // 根据当前等级计算实际升级时间
+        $levelCoefficient = 0.5; // 默认等级系数
+        $actualTime = round($baseTime * (1 + $this->level * $levelCoefficient));
+        
+        return $actualTime;
+    }
+```

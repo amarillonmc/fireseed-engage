@@ -1,0 +1,760 @@
+# 种火集结号 - 核心PHP类设计 (步骤3 - 第2部分 - 地图类)
+时间戳: 2025-04-09 21:10:00
+
+## 地图类设计
+
+### Map.php (地图类)
+```php
+<?php
+// 种火集结号 - 地图类
+
+class Map {
+    private $db;
+    private $mapId;
+    private $x;
+    private $y;
+    private $type;
+    private $ownerId;
+    private $name;
+    private $level;
+    private $durability;
+    private $maxDurability;
+    private $isValid = false;
+    
+    /**
+     * 构造函数
+     * @param int $mapId 地图ID
+     * @param int $x X坐标
+     * @param int $y Y坐标
+     */
+    public function __construct($mapId = null, $x = null, $y = null) {
+        $this->db = Database::getInstance()->getConnection();
+        
+        if ($mapId !== null) {
+            $this->mapId = $mapId;
+            $this->loadMapDataById();
+        } elseif ($x !== null && $y !== null) {
+            $this->x = $x;
+            $this->y = $y;
+            $this->loadMapDataByCoordinates();
+        }
+    }
+    
+    /**
+     * 通过ID加载地图数据
+     */
+    private function loadMapDataById() {
+        $query = "SELECT * FROM map WHERE map_id = ?";
+        $stmt = $this->db->prepare($query);
+        $stmt->bind_param('i', $this->mapId);
+        $stmt->execute();
+        $result = $stmt->get_result();
+        
+        if ($result && $result->num_rows > 0) {
+            $mapData = $result->fetch_assoc();
+            $this->x = $mapData['x'];
+            $this->y = $mapData['y'];
+            $this->type = $mapData['type'];
+            $this->ownerId = $mapData['owner_id'];
+            $this->name = $mapData['name'];
+            $this->level = $mapData['level'];
+            $this->durability = $mapData['durability'];
+            $this->maxDurability = $mapData['max_durability'];
+            $this->isValid = true;
+        }
+        
+        $stmt->close();
+    }
+    
+    /**
+     * 通过坐标加载地图数据
+     */
+    private function loadMapDataByCoordinates() {
+        $query = "SELECT * FROM map WHERE x = ? AND y = ?";
+        $stmt = $this->db->prepare($query);
+        $stmt->bind_param('ii', $this->x, $this->y);
+        $stmt->execute();
+        $result = $stmt->get_result();
+        
+        if ($result && $result->num_rows > 0) {
+            $mapData = $result->fetch_assoc();
+            $this->mapId = $mapData['map_id'];
+            $this->type = $mapData['type'];
+            $this->ownerId = $mapData['owner_id'];
+            $this->name = $mapData['name'];
+            $this->level = $mapData['level'];
+            $this->durability = $mapData['durability'];
+            $this->maxDurability = $mapData['max_durability'];
+            $this->isValid = true;
+        }
+        
+        $stmt->close();
+    }
+    
+    /**
+     * 检查地图是否有效
+     * @return bool
+     */
+    public function isValid() {
+        return $this->isValid;
+    }
+    
+    /**
+     * 获取地图ID
+     * @return int
+     */
+    public function getMapId() {
+        return $this->mapId;
+    }
+    
+    /**
+     * 获取X坐标
+     * @return int
+     */
+    public function getX() {
+        return $this->x;
+    }
+    
+    /**
+     * 获取Y坐标
+     * @return int
+     */
+    public function getY() {
+        return $this->y;
+    }
+    
+    /**
+     * 获取地图类型
+     * @return string
+     */
+    public function getType() {
+        return $this->type;
+    }
+    
+    /**
+     * 获取拥有者ID
+     * @return int|null
+     */
+    public function getOwnerId() {
+        return $this->ownerId;
+    }
+    
+    /**
+     * 获取地图名称
+     * @return string|null
+     */
+    public function getName() {
+        return $this->name;
+    }
+    
+    /**
+     * 获取地图等级
+     * @return int
+     */
+    public function getLevel() {
+        return $this->level;
+    }
+    
+    /**
+     * 获取耐久度
+     * @return int|null
+     */
+    public function getDurability() {
+        return $this->durability;
+    }
+    
+    /**
+     * 获取最大耐久度
+     * @return int|null
+     */
+    public function getMaxDurability() {
+        return $this->maxDurability;
+    }
+    
+    /**
+     * 设置地图拥有者
+     * @param int|null $ownerId 拥有者ID
+     * @return bool
+     */
+    public function setOwner($ownerId) {
+        if (!$this->isValid) {
+            return false;
+        }
+        
+        $query = "UPDATE map SET owner_id = ? WHERE map_id = ?";
+        $stmt = $this->db->prepare($query);
+        $stmt->bind_param('ii', $ownerId, $this->mapId);
+        $result = $stmt->execute();
+        $stmt->close();
+        
+        if ($result) {
+            $this->ownerId = $ownerId;
+            return true;
+        }
+        
+        return false;
+    }
+    
+    /**
+     * 设置地图名称
+     * @param string $name 地图名称
+     * @return bool
+     */
+    public function setName($name) {
+        if (!$this->isValid) {
+            return false;
+        }
+        
+        $query = "UPDATE map SET name = ? WHERE map_id = ?";
+        $stmt = $this->db->prepare($query);
+        $stmt->bind_param('si', $name, $this->mapId);
+        $result = $stmt->execute();
+        $stmt->close();
+        
+        if ($result) {
+            $this->name = $name;
+            return true;
+        }
+        
+        return false;
+    }
+    
+    /**
+     * 设置地图类型
+     * @param string $type 地图类型
+     * @return bool
+     */
+    public function setType($type) {
+        if (!$this->isValid) {
+            return false;
+        }
+        
+        $validTypes = ['empty', 'resource_point', 'npc_fort', 'npc_gateway', 'silver_hole', 'player_fort'];
+        if (!in_array($type, $validTypes)) {
+            return false;
+        }
+        
+        $query = "UPDATE map SET type = ? WHERE map_id = ?";
+        $stmt = $this->db->prepare($query);
+        $stmt->bind_param('si', $type, $this->mapId);
+        $result = $stmt->execute();
+        $stmt->close();
+        
+        if ($result) {
+            $this->type = $type;
+            return true;
+        }
+        
+        return false;
+    }
+    
+    /**
+     * 减少耐久度
+     * @param int $amount 减少的数量
+     * @return bool
+     */
+    public function reduceDurability($amount) {
+        if (!$this->isValid || $this->durability === null || $amount <= 0) {
+            return false;
+        }
+        
+        $newDurability = max(0, $this->durability - $amount);
+        
+        $query = "UPDATE map SET durability = ? WHERE map_id = ?";
+        $stmt = $this->db->prepare($query);
+        $stmt->bind_param('ii', $newDurability, $this->mapId);
+        $result = $stmt->execute();
+        $stmt->close();
+        
+        if ($result) {
+            $this->durability = $newDurability;
+            return true;
+        }
+        
+        return false;
+    }
+    
+    /**
+     * 恢复耐久度
+     * @param int $amount 恢复的数量
+     * @return bool
+     */
+    public function restoreDurability($amount) {
+        if (!$this->isValid || $this->durability === null || $this->maxDurability === null || $amount <= 0) {
+            return false;
+        }
+        
+        $newDurability = min($this->maxDurability, $this->durability + $amount);
+        
+        $query = "UPDATE map SET durability = ? WHERE map_id = ?";
+        $stmt = $this->db->prepare($query);
+        $stmt->bind_param('ii', $newDurability, $this->mapId);
+        $result = $stmt->execute();
+        $stmt->close();
+        
+        if ($result) {
+            $this->durability = $newDurability;
+            return true;
+        }
+        
+        return false;
+    }
+    
+    /**
+     * 创建新地图格子
+     * @param int $x X坐标
+     * @param int $y Y坐标
+     * @param string $type 地图类型
+     * @param int|null $ownerId 拥有者ID
+     * @param string|null $name 地图名称
+     * @param int $level 地图等级
+     * @param int|null $durability 耐久度
+     * @param int|null $maxDurability 最大耐久度
+     * @return bool|int 成功返回地图ID，失败返回false
+     */
+    public function createMapTile($x, $y, $type, $ownerId = null, $name = null, $level = 1, $durability = null, $maxDurability = null) {
+        // 检查坐标是否已存在
+        $query = "SELECT map_id FROM map WHERE x = ? AND y = ?";
+        $stmt = $this->db->prepare($query);
+        $stmt->bind_param('ii', $x, $y);
+        $stmt->execute();
+        $result = $stmt->get_result();
+        
+        if ($result && $result->num_rows > 0) {
+            $stmt->close();
+            return false; // 坐标已存在
+        }
+        
+        $stmt->close();
+        
+        // 检查类型是否有效
+        $validTypes = ['empty', 'resource_point', 'npc_fort', 'npc_gateway', 'silver_hole', 'player_fort'];
+        if (!in_array($type, $validTypes)) {
+            return false;
+        }
+        
+        // 创建新地图格子
+        $query = "INSERT INTO map (x, y, type, owner_id, name, level, durability, max_durability) 
+                  VALUES (?, ?, ?, ?, ?, ?, ?, ?)";
+        $stmt = $this->db->prepare($query);
+        $stmt->bind_param('iisisiii', $x, $y, $type, $ownerId, $name, $level, $durability, $maxDurability);
+        $result = $stmt->execute();
+        
+        if ($result) {
+            $mapId = $this->db->insert_id;
+            $stmt->close();
+            
+            // 设置对象属性
+            $this->mapId = $mapId;
+            $this->x = $x;
+            $this->y = $y;
+            $this->type = $type;
+            $this->ownerId = $ownerId;
+            $this->name = $name;
+            $this->level = $level;
+            $this->durability = $durability;
+            $this->maxDurability = $maxDurability;
+            $this->isValid = true;
+            
+            return $mapId;
+        }
+        
+        $stmt->close();
+        return false;
+    }
+    
+    /**
+     * 获取周围的地图格子
+     * @return array 周围的地图格子数组
+     */
+    public function getSurroundingTiles() {
+        if (!$this->isValid) {
+            return [];
+        }
+        
+        $surroundingCoordinates = [
+            [$this->x - 1, $this->y],     // 左
+            [$this->x + 1, $this->y],     // 右
+            [$this->x, $this->y - 1],     // 上
+            [$this->x, $this->y + 1],     // 下
+            [$this->x - 1, $this->y - 1], // 左上
+            [$this->x + 1, $this->y - 1], // 右上
+            [$this->x - 1, $this->y + 1], // 左下
+            [$this->x + 1, $this->y + 1]  // 右下
+        ];
+        
+        $surroundingTiles = [];
+        
+        foreach ($surroundingCoordinates as $coordinate) {
+            $x = $coordinate[0];
+            $y = $coordinate[1];
+            
+            // 检查坐标是否在地图范围内
+            if ($x >= 0 && $x < MAP_WIDTH && $y >= 0 && $y < MAP_HEIGHT) {
+                $tile = new Map(null, $x, $y);
+                if ($tile->isValid()) {
+                    $surroundingTiles[] = $tile;
+                }
+            }
+        }
+        
+        return $surroundingTiles;
+    }
+    
+    /**
+     * 获取相邻的地图格子（只考虑上下左右四个方向）
+     * @return array 相邻的地图格子数组
+     */
+    public function getAdjacentTiles() {
+        if (!$this->isValid) {
+            return [];
+        }
+        
+        $adjacentCoordinates = [
+            [$this->x - 1, $this->y], // 左
+            [$this->x + 1, $this->y], // 右
+            [$this->x, $this->y - 1], // 上
+            [$this->x, $this->y + 1]  // 下
+        ];
+        
+        $adjacentTiles = [];
+        
+        foreach ($adjacentCoordinates as $coordinate) {
+            $x = $coordinate[0];
+            $y = $coordinate[1];
+            
+            // 检查坐标是否在地图范围内
+            if ($x >= 0 && $x < MAP_WIDTH && $y >= 0 && $y < MAP_HEIGHT) {
+                $tile = new Map(null, $x, $y);
+                if ($tile->isValid()) {
+                    $adjacentTiles[] = $tile;
+                }
+            }
+        }
+        
+        return $adjacentTiles;
+    }
+    
+    /**
+     * 计算两个地图格子之间的距离
+     * @param Map $targetTile 目标地图格子
+     * @return float 距离
+     */
+    public function getDistanceTo($targetTile) {
+        if (!$this->isValid || !$targetTile->isValid()) {
+            return -1;
+        }
+        
+        $dx = $this->x - $targetTile->getX();
+        $dy = $this->y - $targetTile->getY();
+        
+        return sqrt($dx * $dx + $dy * $dy);
+    }
+    
+    /**
+     * 初始化地图
+     * 创建银白之孔和12个NPC主城
+     * @return bool
+     */
+    public static function initializeMap() {
+        $db = Database::getInstance()->getConnection();
+        
+        // 开始事务
+        $db->beginTransaction();
+        
+        try {
+            // 创建银白之孔
+            $silverHole = new Map();
+            $silverHoleId = $silverHole->createMapTile(
+                MAP_CENTER_X,
+                MAP_CENTER_Y,
+                'silver_hole',
+                null,
+                '银白之孔',
+                11, // 默认等级为11
+                NPC_FORT_BASE_DURABILITY * pow(NPC_FORT_LEVEL_COEFFICIENT, 10), // 耐久度
+                NPC_FORT_BASE_DURABILITY * pow(NPC_FORT_LEVEL_COEFFICIENT, 10)  // 最大耐久度
+            );
+            
+            if (!$silverHoleId) {
+                throw new Exception('Failed to create Silver Hole');
+            }
+            
+            // 创建12个NPC主城
+            $npcGateways = [
+                ['明京', 1], // 1点方向
+                ['宁海', 2], // 2点方向
+                ['五岳', 3], // 3点方向
+                ['陆合', 4], // 4点方向
+                ['米萨瓦', 5], // 5点方向
+                ['卡拉塔', 6], // 6点方向
+                ['约左拉', 7], // 7点方向
+                ['娜奥美', 8], // 8点方向
+                ['明斯特尔', 9], // 9点方向
+                ['艾尔利斯', 10], // 10点方向
+                ['雷德奈芙', 11], // 11点方向
+                ['开里培拉', 12]  // 12点方向
+            ];
+            
+            $radius = min(MAP_WIDTH, MAP_HEIGHT) / 3; // 距离中心的距离为地图边长的1/3
+            
+            foreach ($npcGateways as $index => $gateway) {
+                $name = $gateway[0];
+                $position = $gateway[1];
+                
+                // 计算坐标
+                $angle = ($position - 3) * (M_PI / 6); // 从3点钟方向开始，每个位置相差30度
+                $x = round(MAP_CENTER_X + $radius * cos($angle));
+                $y = round(MAP_CENTER_Y + $radius * sin($angle));
+                
+                // 确保坐标在地图范围内
+                $x = max(0, min(MAP_WIDTH - 1, $x));
+                $y = max(0, min(MAP_HEIGHT - 1, $y));
+                
+                // 创建NPC主城
+                $npcGateway = new Map();
+                $npcGatewayId = $npcGateway->createMapTile(
+                    $x,
+                    $y,
+                    'npc_gateway',
+                    null,
+                    $name,
+                    10, // 等级为10
+                    NPC_FORT_BASE_DURABILITY * pow(NPC_FORT_LEVEL_COEFFICIENT, 9), // 耐久度
+                    NPC_FORT_BASE_DURABILITY * pow(NPC_FORT_LEVEL_COEFFICIENT, 9)  // 最大耐久度
+                );
+                
+                if (!$npcGatewayId) {
+                    throw new Exception('Failed to create NPC Gateway: ' . $name);
+                }
+            }
+            
+            $db->commit();
+            return true;
+        } catch (Exception $e) {
+            $db->rollback();
+            error_log('Map initialization failed: ' . $e->getMessage());
+            return false;
+        }
+    }
+    
+    /**
+     * 生成随机地图
+     * 生成NPC城池、资源点和空白方格
+     * @return bool
+     */
+    public static function generateRandomMap() {
+        $db = Database::getInstance()->getConnection();
+        
+        // 开始事务
+        $db->beginTransaction();
+        
+        try {
+            // 获取已占用的坐标
+            $query = "SELECT x, y FROM map";
+            $result = $db->query($query);
+            
+            $occupiedCoordinates = [];
+            while ($row = $result->fetch_assoc()) {
+                $occupiedCoordinates[$row['x'] . '_' . $row['y']] = true;
+            }
+            
+            // 计算剩余可用格子数量
+            $totalTiles = MAP_WIDTH * MAP_HEIGHT;
+            $occupiedTiles = count($occupiedCoordinates);
+            $remainingTiles = $totalTiles - $occupiedTiles;
+            
+            // 计算各类型格子的数量
+            $npcFortCount = round($remainingTiles * 0.25); // 25%的格子为NPC城池
+            $resourcePointCount = round($remainingTiles * 0.5); // 50%的格子为资源点
+            $emptyCount = $remainingTiles - $npcFortCount - $resourcePointCount; // 剩余为空白格子
+            
+            // 生成NPC城池
+            for ($i = 0; $i < $npcFortCount; $i++) {
+                $level = self::getRandomNpcFortLevel();
+                $coordinates = self::getRandomUnoccupiedCoordinates($occupiedCoordinates);
+                
+                if ($coordinates) {
+                    $x = $coordinates[0];
+                    $y = $coordinates[1];
+                    
+                    $npcFort = new Map();
+                    $npcFortId = $npcFort->createMapTile(
+                        $x,
+                        $y,
+                        'npc_fort',
+                        null,
+                        'NPC城池-' . $level,
+                        $level,
+                        NPC_FORT_BASE_DURABILITY * pow(NPC_FORT_LEVEL_COEFFICIENT, $level - 1), // 耐久度
+                        NPC_FORT_BASE_DURABILITY * pow(NPC_FORT_LEVEL_COEFFICIENT, $level - 1)  // 最大耐久度
+                    );
+                    
+                    if (!$npcFortId) {
+                        throw new Exception('Failed to create NPC Fort at ' . $x . ',' . $y);
+                    }
+                    
+                    $occupiedCoordinates[$x . '_' . $y] = true;
+                }
+            }
+            
+            // 生成资源点
+            for ($i = 0; $i < $resourcePointCount; $i++) {
+                $coordinates = self::getRandomUnoccupiedCoordinates($occupiedCoordinates);
+                
+                if ($coordinates) {
+                    $x = $coordinates[0];
+                    $y = $coordinates[1];
+                    
+                    $resourcePoint = new Map();
+                    $resourcePointId = $resourcePoint->createMapTile(
+                        $x,
+                        $y,
+                        'resource_point',
+                        null,
+                        null,
+                        1,
+                        null,
+                        null
+                    );
+                    
+                    if (!$resourcePointId) {
+                        throw new Exception('Failed to create Resource Point at ' . $x . ',' . $y);
+                    }
+                    
+                    // 创建资源点设施
+                    self::createRandomResourcePointFacilities($resourcePointId);
+                    
+                    $occupiedCoordinates[$x . '_' . $y] = true;
+                }
+            }
+            
+            // 生成空白格子
+            for ($i = 0; $i < $emptyCount; $i++) {
+                $coordinates = self::getRandomUnoccupiedCoordinates($occupiedCoordinates);
+                
+                if ($coordinates) {
+                    $x = $coordinates[0];
+                    $y = $coordinates[1];
+                    
+                    $emptyTile = new Map();
+                    $emptyTileId = $emptyTile->createMapTile(
+                        $x,
+                        $y,
+                        'empty',
+                        null,
+                        null,
+                        1,
+                        null,
+                        null
+                    );
+                    
+                    if (!$emptyTileId) {
+                        throw new Exception('Failed to create Empty Tile at ' . $x . ',' . $y);
+                    }
+                    
+                    $occupiedCoordinates[$x . '_' . $y] = true;
+                }
+            }
+            
+            $db->commit();
+            return true;
+        } catch (Exception $e) {
+            $db->rollback();
+            error_log('Random map generation failed: ' . $e->getMessage());
+            return false;
+        }
+    }
+    
+    /**
+     * 获取随机未占用的坐标
+     * @param array $occupiedCoordinates 已占用的坐标
+     * @return array|false 成功返回坐标数组[x, y]，失败返回false
+     */
+    private static function getRandomUnoccupiedCoordinates($occupiedCoordinates) {
+        $maxAttempts = 100;
+        $attempts = 0;
+        
+        while ($attempts < $maxAttempts) {
+            $x = rand(0, MAP_WIDTH - 1);
+            $y = rand(0, MAP_HEIGHT - 1);
+            
+            if (!isset($occupiedCoordinates[$x . '_' . $y])) {
+                return [$x, $y];
+            }
+            
+            $attempts++;
+        }
+        
+        return false;
+    }
+    
+    /**
+     * 获取随机NPC城池等级
+     * 等级与数量成反比
+     * @return int
+     */
+    private static function getRandomNpcFortLevel() {
+        $rand = rand(1, 100);
+        
+        if ($rand <= 40) {
+            return 1; // 40%的概率为1级
+        } elseif ($rand <= 70) {
+            return 2; // 30%的概率为2级
+        } elseif ($rand <= 85) {
+            return 3; // 15%的概率为3级
+        } elseif ($rand <= 93) {
+            return 4; // 8%的概率为4级
+        } elseif ($rand <= 97) {
+            return 5; // 4%的概率为5级
+        } elseif ($rand <= 99) {
+            return 6; // 2%的概率为6级
+        } else {
+            return rand(7, 9); // 1%的概率为7-9级
+        }
+    }
+    
+    /**
+     * 创建随机资源点设施
+     * @param int $mapId 地图ID
+     * @return bool
+     */
+    private static function createRandomResourcePointFacilities($mapId) {
+        $db = Database::getInstance()->getConnection();
+        
+        // 随机决定资源点包含的资源种类数量（1-4种）
+        $resourceTypeCount = rand(1, 4);
+        
+        // 可用的资源类型
+        $resourceTypes = ['bright_crystal_facility', 'warm_crystal_facility', 'cold_crystal_facility', 'green_crystal_facility', 'day_crystal_facility', 'night_crystal_facility'];
+        
+        // 随机选择资源类型
+        shuffle($resourceTypes);
+        $selectedTypes = array_slice($resourceTypes, 0, $resourceTypeCount);
+        
+        // 为每种选中的资源类型随机分配设施数量（1-3个）
+        $facilities = [];
+        foreach ($selectedTypes as $type) {
+            $facilities[$type] = rand(1, 3);
+        }
+        
+        // 创建资源点记录
+        $query = "INSERT INTO resource_points (map_id, bright_crystal_facility, warm_crystal_facility, cold_crystal_facility, green_crystal_facility, day_crystal_facility, night_crystal_facility) 
+                  VALUES (?, ?, ?, ?, ?, ?, ?)";
+        $stmt = $db->prepare($query);
+        
+        $brightCrystal = isset($facilities['bright_crystal_facility']) ? $facilities['bright_crystal_facility'] : 0;
+        $warmCrystal = isset($facilities['warm_crystal_facility']) ? $facilities['warm_crystal_facility'] : 0;
+        $coldCrystal = isset($facilities['cold_crystal_facility']) ? $facilities['cold_crystal_facility'] : 0;
+        $greenCrystal = isset($facilities['green_crystal_facility']) ? $facilities['green_crystal_facility'] : 0;
+        $dayCrystal = isset($facilities['day_crystal_facility']) ? $facilities['day_crystal_facility'] : 0;
+        $nightCrystal = isset($facilities['night_crystal_facility']) ? $facilities['night_crystal_facility'] : 0;
+        
+        $stmt->bind_param('iiiiiii', $mapId, $brightCrystal, $warmCrystal, $coldCrystal, $greenCrystal, $dayCrystal, $nightCrystal);
+        $result = $stmt->execute();
+        $stmt->close();
+        
+        return $result;
+    }
+}
+```

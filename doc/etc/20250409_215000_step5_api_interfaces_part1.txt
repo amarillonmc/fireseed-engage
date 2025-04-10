@@ -1,0 +1,458 @@
+# 种火集结号 - API接口设计 (步骤5 - 第1部分)
+时间戳: 2025-04-09 21:50:00
+
+## API接口设计 - 基础接口
+
+### 1. api/get_resources.php (获取资源接口)
+```php
+<?php
+// 包含初始化文件
+require_once '../includes/init.php';
+
+// 设置响应头
+header('Content-Type: application/json');
+
+// 检查用户是否已登录
+if (!isset($_SESSION['user_id'])) {
+    echo json_encode([
+        'success' => false,
+        'message' => '未登录'
+    ]);
+    exit;
+}
+
+// 获取用户资源
+$resource = new Resource($_SESSION['user_id']);
+if (!$resource->isValid()) {
+    echo json_encode([
+        'success' => false,
+        'message' => '获取资源失败'
+    ]);
+    exit;
+}
+
+// 返回资源数据
+echo json_encode([
+    'success' => true,
+    'resources' => [
+        'bright_crystal' => $resource->getBrightCrystal(),
+        'warm_crystal' => $resource->getWarmCrystal(),
+        'cold_crystal' => $resource->getColdCrystal(),
+        'green_crystal' => $resource->getGreenCrystal(),
+        'day_crystal' => $resource->getDayCrystal(),
+        'night_crystal' => $resource->getNightCrystal()
+    ]
+]);
+```
+
+### 2. api/get_user_info.php (获取用户信息接口)
+```php
+<?php
+// 包含初始化文件
+require_once '../includes/init.php';
+
+// 设置响应头
+header('Content-Type: application/json');
+
+// 检查用户是否已登录
+if (!isset($_SESSION['user_id'])) {
+    echo json_encode([
+        'success' => false,
+        'message' => '未登录'
+    ]);
+    exit;
+}
+
+// 获取用户信息
+$user = new User($_SESSION['user_id']);
+if (!$user->isValid()) {
+    echo json_encode([
+        'success' => false,
+        'message' => '获取用户信息失败'
+    ]);
+    exit;
+}
+
+// 返回用户数据
+echo json_encode([
+    'success' => true,
+    'user' => [
+        'user_id' => $user->getUserId(),
+        'username' => $user->getUsername(),
+        'level' => $user->getLevel(),
+        'circuit_points' => $user->getCircuitPoints(),
+        'max_circuit_points' => $user->getMaxCircuitPoints(),
+        'max_general_cost' => $user->getMaxGeneralCost()
+    ]
+]);
+```
+
+### 3. api/get_city_info.php (获取城池信息接口)
+```php
+<?php
+// 包含初始化文件
+require_once '../includes/init.php';
+
+// 设置响应头
+header('Content-Type: application/json');
+
+// 检查用户是否已登录
+if (!isset($_SESSION['user_id'])) {
+    echo json_encode([
+        'success' => false,
+        'message' => '未登录'
+    ]);
+    exit;
+}
+
+// 获取城池ID
+$cityId = isset($_GET['city_id']) ? intval($_GET['city_id']) : 0;
+
+// 如果没有指定城池ID，获取用户的主城
+if ($cityId <= 0) {
+    $mainCity = City::getUserMainCity($_SESSION['user_id']);
+    if ($mainCity) {
+        $cityId = $mainCity->getCityId();
+    }
+}
+
+// 获取城池信息
+if ($cityId > 0) {
+    $city = new City($cityId);
+    
+    // 检查城池是否存在且属于当前用户
+    if (!$city->isValid() || $city->getOwnerId() != $_SESSION['user_id']) {
+        echo json_encode([
+            'success' => false,
+            'message' => '城池不存在或不属于当前用户'
+        ]);
+        exit;
+    }
+    
+    // 获取城池坐标
+    $coordinates = $city->getCoordinates();
+    
+    // 获取城池中的设施
+    $facilities = $city->getFacilities();
+    $facilitiesData = [];
+    
+    foreach ($facilities as $facility) {
+        $facilitiesData[] = [
+            'facility_id' => $facility->getFacilityId(),
+            'type' => $facility->getType(),
+            'subtype' => $facility->getSubtype(),
+            'name' => $facility->getName(),
+            'level' => $facility->getLevel(),
+            'x_pos' => $facility->getXPos(),
+            'y_pos' => $facility->getYPos(),
+            'is_under_construction' => $facility->isUnderConstruction(),
+            'is_upgrading' => $facility->isUpgrading()
+        ];
+    }
+    
+    // 获取城池中的士兵
+    $soldiers = $city->getSoldiers();
+    $soldiersData = [];
+    
+    foreach ($soldiers as $soldier) {
+        $soldiersData[$soldier->getType()] = [
+            'level' => $soldier->getLevel(),
+            'quantity' => $soldier->getQuantity(),
+            'in_training' => $soldier->getInTraining(),
+            'training_complete_time' => $soldier->getTrainingCompleteTime()
+        ];
+    }
+    
+    // 获取城池中驻扎的武将
+    $generals = $city->getGenerals();
+    $generalsData = [];
+    
+    foreach ($generals as $general) {
+        $generalsData[] = [
+            'general_id' => $general->getGeneralId(),
+            'name' => $general->getName(),
+            'rarity' => $general->getRarity(),
+            'level' => $general->getLevel(),
+            'hp' => $general->getHp(),
+            'max_hp' => $general->getMaxHp()
+        ];
+    }
+    
+    // 返回城池数据
+    echo json_encode([
+        'success' => true,
+        'city' => [
+            'city_id' => $city->getCityId(),
+            'name' => $city->getName(),
+            'coordinates' => $coordinates,
+            'is_main_city' => $city->isMainCity(),
+            'is_sub_base' => $city->isSubBase(),
+            'durability' => $city->getDurability(),
+            'max_durability' => $city->getMaxDurability(),
+            'facilities' => $facilitiesData,
+            'soldiers' => $soldiersData,
+            'generals' => $generalsData
+        ]
+    ]);
+} else {
+    echo json_encode([
+        'success' => false,
+        'message' => '未找到城池'
+    ]);
+}
+```
+
+### 4. api/get_facility_info.php (获取设施信息接口)
+```php
+<?php
+// 包含初始化文件
+require_once '../includes/init.php';
+
+// 设置响应头
+header('Content-Type: application/json');
+
+// 检查用户是否已登录
+if (!isset($_SESSION['user_id'])) {
+    echo json_encode([
+        'success' => false,
+        'message' => '未登录'
+    ]);
+    exit;
+}
+
+// 获取设施ID
+$facilityId = isset($_GET['facility_id']) ? intval($_GET['facility_id']) : 0;
+
+if ($facilityId <= 0) {
+    echo json_encode([
+        'success' => false,
+        'message' => '设施ID无效'
+    ]);
+    exit;
+}
+
+// 获取设施信息
+$facility = new Facility($facilityId);
+
+// 检查设施是否存在
+if (!$facility->isValid()) {
+    echo json_encode([
+        'success' => false,
+        'message' => '设施不存在'
+    ]);
+    exit;
+}
+
+// 获取设施所在的城池
+$city = new City($facility->getCityId());
+
+// 检查城池是否属于当前用户
+if (!$city->isValid() || $city->getOwnerId() != $_SESSION['user_id']) {
+    echo json_encode([
+        'success' => false,
+        'message' => '设施所在的城池不属于当前用户'
+    ]);
+    exit;
+}
+
+// 获取设施升级费用
+$upgradeCost = $facility->getUpgradeCost();
+
+// 获取设施效果值
+$effectValue = $facility->getEffectValue();
+
+// 返回设施数据
+echo json_encode([
+    'success' => true,
+    'facility' => [
+        'facility_id' => $facility->getFacilityId(),
+        'city_id' => $facility->getCityId(),
+        'type' => $facility->getType(),
+        'subtype' => $facility->getSubtype(),
+        'name' => $facility->getName(),
+        'description' => $facility->getDescription(),
+        'level' => $facility->getLevel(),
+        'x_pos' => $facility->getXPos(),
+        'y_pos' => $facility->getYPos(),
+        'is_under_construction' => $facility->isUnderConstruction(),
+        'is_upgrading' => $facility->isUpgrading(),
+        'construction_time' => $facility->getConstructionTime(),
+        'upgrade_time' => $facility->getUpgradeTime(),
+        'effect_value' => $effectValue,
+        'upgrade_cost' => $upgradeCost,
+        'upgrade_time_seconds' => $facility->calculateUpgradeTime()
+    ]
+]);
+```
+
+### 5. api/build_facility.php (建造设施接口)
+```php
+<?php
+// 包含初始化文件
+require_once '../includes/init.php';
+
+// 设置响应头
+header('Content-Type: application/json');
+
+// 检查请求方法
+if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
+    echo json_encode([
+        'success' => false,
+        'message' => '请求方法不正确'
+    ]);
+    exit;
+}
+
+// 检查用户是否已登录
+if (!isset($_SESSION['user_id'])) {
+    echo json_encode([
+        'success' => false,
+        'message' => '未登录'
+    ]);
+    exit;
+}
+
+// 获取POST数据
+$cityId = isset($_POST['city_id']) ? intval($_POST['city_id']) : 0;
+$type = isset($_POST['type']) ? $_POST['type'] : '';
+$subtype = isset($_POST['subtype']) ? $_POST['subtype'] : null;
+$xPos = isset($_POST['x_pos']) ? intval($_POST['x_pos']) : 0;
+$yPos = isset($_POST['y_pos']) ? intval($_POST['y_pos']) : 0;
+
+// 验证数据
+if ($cityId <= 0 || empty($type) || $xPos < 0 || $xPos >= 24 || $yPos < 0 || $yPos >= 24) {
+    echo json_encode([
+        'success' => false,
+        'message' => '参数无效'
+    ]);
+    exit;
+}
+
+// 检查城池是否属于当前用户
+$city = new City($cityId);
+if (!$city->isValid() || $city->getOwnerId() != $_SESSION['user_id']) {
+    echo json_encode([
+        'success' => false,
+        'message' => '城池不存在或不属于当前用户'
+    ]);
+    exit;
+}
+
+// 检查坐标是否已被占用
+$facilities = $city->getFacilities();
+foreach ($facilities as $facility) {
+    if ($facility->getXPos() == $xPos && $facility->getYPos() == $yPos) {
+        echo json_encode([
+            'success' => false,
+            'message' => '该位置已有设施'
+        ]);
+        exit;
+    }
+}
+
+// 检查设施类型是否有效
+$validTypes = ['resource_production', 'barracks', 'research_lab', 'dormitory', 'storage', 'watchtower', 'workshop'];
+if (!in_array($type, $validTypes)) {
+    echo json_encode([
+        'success' => false,
+        'message' => '设施类型无效'
+    ]);
+    exit;
+}
+
+// 检查是否已经有同类型的唯一设施
+if (in_array($type, ['research_lab', 'watchtower', 'workshop'])) {
+    foreach ($facilities as $facility) {
+        if ($facility->getType() == $type) {
+            echo json_encode([
+                'success' => false,
+                'message' => '已经有同类型的设施'
+            ]);
+            exit;
+        }
+    }
+}
+
+// 检查资源产出点的子类型
+if ($type == 'resource_production') {
+    $validSubtypes = ['bright', 'warm', 'cold', 'green', 'day', 'night'];
+    if (!in_array($subtype, $validSubtypes)) {
+        echo json_encode([
+            'success' => false,
+            'message' => '资源产出点子类型无效'
+        ]);
+        exit;
+    }
+}
+
+// 创建临时设施对象来获取建造费用
+$tempFacility = new Facility();
+$buildCost = $tempFacility->getUpgradeCost(); // 使用升级费用方法获取建造费用
+
+// 检查用户是否有足够的资源
+$resource = new Resource($_SESSION['user_id']);
+if (!$resource->isValid() || !$resource->hasEnoughResources($buildCost)) {
+    echo json_encode([
+        'success' => false,
+        'message' => '资源不足'
+    ]);
+    exit;
+}
+
+// 计算建造时间
+$buildTime = $tempFacility->calculateUpgradeTime(); // 使用升级时间方法获取建造时间
+$buildCompleteTime = date('Y-m-d H:i:s', time() + $buildTime);
+
+// 开始事务
+$db = Database::getInstance()->getConnection();
+$db->beginTransaction();
+
+try {
+    // 扣除资源
+    if (!$resource->reduceResources($buildCost)) {
+        throw new Exception('扣除资源失败');
+    }
+    
+    // 创建设施
+    $facility = new Facility();
+    $facilityId = $facility->createFacility(
+        $cityId,
+        $type,
+        $subtype,
+        1, // 初始等级为1
+        $xPos,
+        $yPos,
+        $buildCompleteTime, // 建造完成时间
+        null // 升级完成时间为空
+    );
+    
+    if (!$facilityId) {
+        throw new Exception('创建设施失败');
+    }
+    
+    $db->commit();
+    
+    // 返回成功信息
+    echo json_encode([
+        'success' => true,
+        'message' => '设施开始建造',
+        'facility' => [
+            'facility_id' => $facilityId,
+            'type' => $type,
+            'subtype' => $subtype,
+            'name' => $facility->getName(),
+            'level' => 1,
+            'x_pos' => $xPos,
+            'y_pos' => $yPos,
+            'construction_time' => $buildCompleteTime
+        ]
+    ]);
+} catch (Exception $e) {
+    $db->rollback();
+    
+    echo json_encode([
+        'success' => false,
+        'message' => $e->getMessage()
+    ]);
+}
+```

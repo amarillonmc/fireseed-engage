@@ -1,0 +1,359 @@
+# 种火集结号 - 核心PHP类设计 (步骤3 - 第6部分 - 设施类功能方法)
+时间戳: 2025-04-09 21:40:00
+
+## 设施类设计 - 功能方法
+
+### Facility.php (设施类) - 第3部分
+```php
+    /**
+     * 获取设施效果值
+     * @return float
+     */
+    public function getEffectValue() {
+        if (!$this->isValid) {
+            return 0;
+        }
+        
+        $baseValue = 0;
+        $levelCoefficient = 0.5; // 默认等级系数
+        
+        switch ($this->type) {
+            case 'resource_production':
+                $baseValue = 1; // 基础资源产出：1点/3秒
+                break;
+            case 'governor_office':
+                $baseValue = 3000; // 基础耐久值
+                break;
+            case 'barracks':
+                $baseValue = 1; // 可训练士兵等级
+                break;
+            case 'research_lab':
+                $baseValue = 1; // 可研究科技等级
+                break;
+            case 'dormitory':
+                $baseValue = 1000; // 基础士兵存放上限
+                break;
+            case 'storage':
+                $baseValue = 100000; // 基础资源存放上限
+                break;
+            case 'watchtower':
+                $baseValue = 0.1; // 基础城池防御力提升（10%）
+                break;
+            case 'workshop':
+                $baseValue = 0.1; // 基础城池防御力提升（10%）
+                break;
+        }
+        
+        // 根据当前等级计算实际效果值
+        $actualValue = $baseValue * (1 + ($this->level - 1) * $levelCoefficient);
+        
+        return $actualValue;
+    }
+    
+    /**
+     * 获取资源产出效率
+     * @return float
+     */
+    public function getResourceProductionRate() {
+        if (!$this->isValid || $this->type != 'resource_production') {
+            return 0;
+        }
+        
+        // 基础产出效率：1点/3秒
+        $baseRate = 1 / RESOURCE_PRODUCTION_INTERVAL;
+        
+        // 根据等级计算实际产出效率
+        $levelCoefficient = 0.5; // 默认等级系数
+        $actualRate = $baseRate * (1 + ($this->level - 1) * $levelCoefficient);
+        
+        return $actualRate;
+    }
+    
+    /**
+     * 计算资源产出量
+     * @param int $seconds 经过的秒数
+     * @return int
+     */
+    public function calculateResourceProduction($seconds) {
+        if (!$this->isValid || $this->type != 'resource_production' || $seconds <= 0) {
+            return 0;
+        }
+        
+        $rate = $this->getResourceProductionRate();
+        $production = floor($rate * $seconds);
+        
+        return $production;
+    }
+    
+    /**
+     * 获取士兵训练效率
+     * @param string $soldierType 士兵类型
+     * @return float
+     */
+    public function getSoldierTrainingRate($soldierType) {
+        if (!$this->isValid) {
+            return 0;
+        }
+        
+        // 检查设施类型是否匹配
+        $validFacility = false;
+        switch ($soldierType) {
+            case 'pawn':
+            case 'knight':
+            case 'rook':
+            case 'bishop':
+                $validFacility = ($this->type == 'barracks');
+                break;
+            case 'golem':
+                $validFacility = ($this->type == 'workshop');
+                break;
+            case 'scout':
+                $validFacility = ($this->type == 'watchtower');
+                break;
+            default:
+                return 0;
+        }
+        
+        if (!$validFacility) {
+            return 0;
+        }
+        
+        // 获取基础训练时间
+        $baseTime = 0;
+        switch ($soldierType) {
+            case 'pawn':
+                $baseTime = PAWN_TRAINING_TIME;
+                break;
+            case 'knight':
+                $baseTime = KNIGHT_TRAINING_TIME;
+                break;
+            case 'rook':
+                $baseTime = ROOK_TRAINING_TIME;
+                break;
+            case 'bishop':
+                $baseTime = BISHOP_TRAINING_TIME;
+                break;
+            case 'golem':
+                $baseTime = GOLEM_TRAINING_TIME;
+                break;
+            case 'scout':
+                $baseTime = SCOUT_TRAINING_TIME;
+                break;
+        }
+        
+        if ($baseTime <= 0) {
+            return 0;
+        }
+        
+        // 基础训练效率：1个/基础时间
+        $baseRate = 1 / $baseTime;
+        
+        // 根据等级计算实际训练效率
+        $levelCoefficient = 0.2; // 训练效率等级系数
+        $actualRate = $baseRate * (1 + ($this->level - 1) * $levelCoefficient);
+        
+        return $actualRate;
+    }
+    
+    /**
+     * 计算士兵训练时间
+     * @param string $soldierType 士兵类型
+     * @param int $quantity 数量
+     * @return int 训练时间（秒）
+     */
+    public function calculateSoldierTrainingTime($soldierType, $quantity) {
+        if (!$this->isValid || $quantity <= 0) {
+            return 0;
+        }
+        
+        $rate = $this->getSoldierTrainingRate($soldierType);
+        
+        if ($rate <= 0) {
+            return 0;
+        }
+        
+        $trainingTime = ceil($quantity / $rate);
+        
+        return $trainingTime;
+    }
+    
+    /**
+     * 获取士兵存放上限
+     * @return int
+     */
+    public function getSoldierStorageCapacity() {
+        if (!$this->isValid || $this->type != 'dormitory') {
+            return 0;
+        }
+        
+        return (int)$this->getEffectValue();
+    }
+    
+    /**
+     * 获取资源存放上限
+     * @return int
+     */
+    public function getResourceStorageCapacity() {
+        if (!$this->isValid || $this->type != 'storage') {
+            return 0;
+        }
+        
+        return (int)$this->getEffectValue();
+    }
+    
+    /**
+     * 获取城池防御力提升百分比
+     * @return float
+     */
+    public function getCityDefenseBoost() {
+        if (!$this->isValid || ($this->type != 'watchtower' && $this->type != 'workshop')) {
+            return 0;
+        }
+        
+        return $this->getEffectValue();
+    }
+    
+    /**
+     * 获取可训练的最高士兵等级
+     * @return int
+     */
+    public function getMaxSoldierLevel() {
+        if (!$this->isValid || $this->type != 'barracks') {
+            return 0;
+        }
+        
+        return (int)$this->getEffectValue();
+    }
+    
+    /**
+     * 获取可研究的最高科技等级
+     * @return int
+     */
+    public function getMaxTechnologyLevel() {
+        if (!$this->isValid || $this->type != 'research_lab') {
+            return 0;
+        }
+        
+        return (int)$this->getEffectValue();
+    }
+    
+    /**
+     * 获取城池中特定类型的所有设施
+     * @param int $cityId 城池ID
+     * @param string $type 设施类型
+     * @return array 设施数组
+     */
+    public static function getCityFacilitiesByType($cityId, $type) {
+        $db = Database::getInstance()->getConnection();
+        
+        $query = "SELECT facility_id FROM facilities WHERE city_id = ? AND type = ?";
+        $stmt = $db->prepare($query);
+        $stmt->bind_param('is', $cityId, $type);
+        $stmt->execute();
+        $result = $stmt->get_result();
+        
+        $facilities = [];
+        
+        if ($result) {
+            while ($row = $result->fetch_assoc()) {
+                $facility = new Facility($row['facility_id']);
+                if ($facility->isValid()) {
+                    $facilities[] = $facility;
+                }
+            }
+        }
+        
+        $stmt->close();
+        return $facilities;
+    }
+    
+    /**
+     * 获取城池中的总士兵存放上限
+     * @param int $cityId 城池ID
+     * @return int
+     */
+    public static function getCityTotalSoldierCapacity($cityId) {
+        $dormitories = self::getCityFacilitiesByType($cityId, 'dormitory');
+        
+        $totalCapacity = 0;
+        foreach ($dormitories as $dormitory) {
+            $totalCapacity += $dormitory->getSoldierStorageCapacity();
+        }
+        
+        return $totalCapacity;
+    }
+    
+    /**
+     * 获取城池中的总资源存放上限
+     * @param int $cityId 城池ID
+     * @return int
+     */
+    public static function getCityTotalResourceCapacity($cityId) {
+        $storages = self::getCityFacilitiesByType($cityId, 'storage');
+        
+        $totalCapacity = INITIAL_RESOURCE_STORAGE; // 初始资源存储上限
+        foreach ($storages as $storage) {
+            $totalCapacity += $storage->getResourceStorageCapacity();
+        }
+        
+        return $totalCapacity;
+    }
+    
+    /**
+     * 获取城池中的总防御力提升百分比
+     * @param int $cityId 城池ID
+     * @return float
+     */
+    public static function getCityTotalDefenseBoost($cityId) {
+        $watchtowers = self::getCityFacilitiesByType($cityId, 'watchtower');
+        $workshops = self::getCityFacilitiesByType($cityId, 'workshop');
+        
+        $totalBoost = 0;
+        
+        foreach ($watchtowers as $watchtower) {
+            $totalBoost += $watchtower->getCityDefenseBoost();
+        }
+        
+        foreach ($workshops as $workshop) {
+            $totalBoost += $workshop->getCityDefenseBoost();
+        }
+        
+        return $totalBoost;
+    }
+    
+    /**
+     * 获取城池中可训练的最高士兵等级
+     * @param int $cityId 城池ID
+     * @return int
+     */
+    public static function getCityMaxSoldierLevel($cityId) {
+        $barracks = self::getCityFacilitiesByType($cityId, 'barracks');
+        
+        $maxLevel = 0;
+        foreach ($barracks as $barrack) {
+            $level = $barrack->getMaxSoldierLevel();
+            if ($level > $maxLevel) {
+                $maxLevel = $level;
+            }
+        }
+        
+        return $maxLevel;
+    }
+    
+    /**
+     * 获取城池中可研究的最高科技等级
+     * @param int $cityId 城池ID
+     * @return int
+     */
+    public static function getCityMaxTechnologyLevel($cityId) {
+        $researchLabs = self::getCityFacilitiesByType($cityId, 'research_lab');
+        
+        if (empty($researchLabs)) {
+            return 0;
+        }
+        
+        // 研究所只能有一个，所以直接返回第一个研究所的最高科技等级
+        return $researchLabs[0]->getMaxTechnologyLevel();
+    }
+}
+```

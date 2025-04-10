@@ -1,0 +1,324 @@
+# 种火集结号 - 配置文件设计 (步骤2)
+时间戳: 2025-04-09 20:50:00
+
+## 配置文件结构
+
+### 1. config.php (主配置文件)
+```php
+<?php
+// 种火集结号 - 主配置文件
+// 包含数据库连接信息和基本游戏设置
+
+// 数据库配置
+define('DB_HOST', 'localhost');
+define('DB_USER', 'fireseed_user');
+define('DB_PASS', 'your_password_here');
+define('DB_NAME', 'fireseed_engage');
+define('DB_CHARSET', 'utf8mb4');
+
+// 网站基本设置
+define('SITE_NAME', '种火集结号');
+define('SITE_URL', 'http://localhost/fireseed-engage');
+define('ADMIN_EMAIL', 'admin@example.com');
+
+// 游戏基本设置
+define('GAME_VERSION', '0.1.0');
+define('DEBUG_MODE', true);
+
+// 时区设置
+date_default_timezone_set('Asia/Shanghai');
+
+// 会话设置
+ini_set('session.cookie_lifetime', 86400); // 24小时
+ini_set('session.gc_maxlifetime', 86400); // 24小时
+session_start();
+
+// 错误报告设置
+if (DEBUG_MODE) {
+    error_reporting(E_ALL);
+    ini_set('display_errors', 1);
+} else {
+    error_reporting(0);
+    ini_set('display_errors', 0);
+}
+
+// 包含其他配置文件
+require_once 'game_constants.php';
+require_once 'game_variables.php';
+```
+
+### 2. game_constants.php (游戏常量配置)
+```php
+<?php
+// 种火集结号 - 游戏常量配置文件
+// 包含游戏中的各种常量，游戏进行时无法修改
+
+// 地图设置
+define('MAP_WIDTH', 512);
+define('MAP_HEIGHT', 512);
+define('MAP_CENTER_X', 256);
+define('MAP_CENTER_Y', 256);
+
+// 资源设置
+define('RESOURCE_PRODUCTION_INTERVAL', 3); // 每3秒产出1点资源
+define('INITIAL_RESOURCE_STORAGE', 100000); // 初始资源存储上限
+define('STORAGE_FACILITY_CAPACITY', 100000); // 每个贮存所增加的存储上限
+define('STORAGE_LEVEL_COEFFICIENT', 1.5); // 贮存所每级增加的系数
+
+// 思考回路设置
+define('CIRCUIT_PRODUCTION_INTERVAL', 172800); // 每48小时产出1点思考回路
+
+// 士兵设置
+// 士兵训练时间（秒）
+define('PAWN_TRAINING_TIME', 1);
+define('KNIGHT_TRAINING_TIME', 5);
+define('ROOK_TRAINING_TIME', 5);
+define('BISHOP_TRAINING_TIME', 5);
+define('GOLEM_TRAINING_TIME', 30);
+define('SCOUT_TRAINING_TIME', 2);
+
+// 士兵移动速度（秒/格）
+define('PAWN_MOVEMENT_SPEED', 2);
+define('KNIGHT_MOVEMENT_SPEED', 1);
+define('ROOK_MOVEMENT_SPEED', 5);
+define('BISHOP_MOVEMENT_SPEED', 3);
+define('GOLEM_MOVEMENT_SPEED', 30);
+define('SCOUT_MOVEMENT_SPEED', 2);
+
+// 士兵对兵攻击力
+define('PAWN_ATTACK', 1);
+define('KNIGHT_ATTACK', 2);
+define('ROOK_ATTACK', 2);
+define('BISHOP_ATTACK', 4);
+define('GOLEM_ATTACK', 1);
+
+// 士兵对城池攻击力
+define('PAWN_CITY_ATTACK', 1);
+define('KNIGHT_CITY_ATTACK', 2);
+define('ROOK_CITY_ATTACK', 2);
+define('BISHOP_CITY_ATTACK', 2);
+define('GOLEM_CITY_ATTACK', 10);
+
+// 士兵防御力
+define('PAWN_DEFENSE', 1);
+define('KNIGHT_DEFENSE', 2);
+define('ROOK_DEFENSE', 4);
+define('BISHOP_DEFENSE', 2);
+define('GOLEM_DEFENSE', 1);
+
+// NPC设置
+define('NPC_FORT_BASE_DURABILITY', 3000); // 1级NPC城池的耐久度
+define('NPC_FORT_LEVEL_COEFFICIENT', 1.5); // NPC城池每级增加的耐久度系数
+define('NPC_FORT_BASE_GARRISON', 1000); // 1级NPC城池的驻军数量
+define('NPC_FORT_GARRISON_COEFFICIENT', 2.5); // NPC城池每级增加的驻军系数
+define('NPC_RESOURCE_POINT_GARRISON', 100); // 每种资源对应的驻军数量
+define('NPC_STRENGTH_COEFFICIENT', 1.0); // NPC强度系数
+
+// 游戏结束设置
+define('VICTORY_OCCUPATION_DAYS', 30); // 占领银白之孔需要的天数
+```
+
+### 3. game_variables.php (游戏变量配置)
+```php
+<?php
+// 种火集结号 - 游戏变量配置文件
+// 包含游戏中的各种变量，游戏进行时可以修改
+
+// 这些值会从数据库中的game_config表读取
+// 这里设置默认值
+
+// 技能冷却修正倍率
+$GLOBALS['SKILL_COOLDOWN_MODIFIER'] = 1.0;
+
+// 兵种攻击力修正倍率
+$GLOBALS['SOLDIER_ATTACK_MODIFIER'] = 1.0;
+
+// 兵种防御力修正倍率
+$GLOBALS['SOLDIER_DEFENSE_MODIFIER'] = 1.0;
+
+// 军队移动速度修正倍率
+$GLOBALS['ARMY_MOVEMENT_SPEED_MODIFIER'] = 1.0;
+
+// 武将HP回复倍率
+$GLOBALS['GENERAL_HP_RECOVERY_MODIFIER'] = 1.0;
+
+// 科技研究倍率
+$GLOBALS['TECHNOLOGY_RESEARCH_MODIFIER'] = 1.0;
+
+// 技能冷却倍率
+$GLOBALS['SKILL_COOLDOWN_RATE_MODIFIER'] = 1.0;
+
+// 从数据库加载游戏变量
+function loadGameVariables($db) {
+    $query = "SELECT `key`, `value` FROM game_config WHERE is_constant = 0";
+    $result = $db->query($query);
+    
+    if ($result && $result->num_rows > 0) {
+        while ($row = $result->fetch_assoc()) {
+            $key = strtoupper($row['key']);
+            $value = $row['value'];
+            
+            // 将数据库中的值赋给全局变量
+            $GLOBALS[$key] = $value;
+        }
+    }
+}
+
+// 更新游戏变量
+function updateGameVariable($db, $key, $value) {
+    $key = strtolower($key);
+    $query = "UPDATE game_config SET `value` = ? WHERE `key` = ? AND is_constant = 0";
+    $stmt = $db->prepare($query);
+    $stmt->bind_param('ss', $value, $key);
+    $result = $stmt->execute();
+    $stmt->close();
+    
+    if ($result) {
+        // 更新全局变量
+        $GLOBALS[strtoupper($key)] = $value;
+        return true;
+    }
+    
+    return false;
+}
+```
+
+### 4. database.php (数据库连接类)
+```php
+<?php
+// 种火集结号 - 数据库连接类
+
+class Database {
+    private $conn;
+    private static $instance;
+    
+    // 私有构造函数，防止直接创建对象
+    private function __construct() {
+        $this->connect();
+    }
+    
+    // 单例模式，获取数据库连接实例
+    public static function getInstance() {
+        if (!self::$instance) {
+            self::$instance = new self();
+        }
+        return self::$instance;
+    }
+    
+    // 连接数据库
+    private function connect() {
+        $this->conn = new mysqli(DB_HOST, DB_USER, DB_PASS, DB_NAME);
+        
+        // 检查连接
+        if ($this->conn->connect_error) {
+            die("数据库连接失败: " . $this->conn->connect_error);
+        }
+        
+        // 设置字符集
+        $this->conn->set_charset(DB_CHARSET);
+    }
+    
+    // 获取数据库连接
+    public function getConnection() {
+        return $this->conn;
+    }
+    
+    // 执行查询
+    public function query($sql) {
+        return $this->conn->query($sql);
+    }
+    
+    // 准备语句
+    public function prepare($sql) {
+        return $this->conn->prepare($sql);
+    }
+    
+    // 获取最后插入的ID
+    public function getLastInsertId() {
+        return $this->conn->insert_id;
+    }
+    
+    // 获取受影响的行数
+    public function getAffectedRows() {
+        return $this->conn->affected_rows;
+    }
+    
+    // 关闭数据库连接
+    public function close() {
+        if ($this->conn) {
+            $this->conn->close();
+        }
+    }
+    
+    // 开始事务
+    public function beginTransaction() {
+        $this->conn->autocommit(false);
+    }
+    
+    // 提交事务
+    public function commit() {
+        $this->conn->commit();
+        $this->conn->autocommit(true);
+    }
+    
+    // 回滚事务
+    public function rollback() {
+        $this->conn->rollback();
+        $this->conn->autocommit(true);
+    }
+    
+    // 转义字符串
+    public function escapeString($string) {
+        return $this->conn->real_escape_string($string);
+    }
+}
+```
+
+### 5. init.php (初始化文件)
+```php
+<?php
+// 种火集结号 - 初始化文件
+// 包含所有必要的配置和类
+
+// 包含配置文件
+require_once 'config/config.php';
+
+// 包含数据库连接类
+require_once 'includes/database.php';
+
+// 包含核心类
+require_once 'includes/classes/User.php';
+require_once 'includes/classes/Resource.php';
+require_once 'includes/classes/Map.php';
+require_once 'includes/classes/City.php';
+require_once 'includes/classes/Facility.php';
+require_once 'includes/classes/Soldier.php';
+require_once 'includes/classes/General.php';
+require_once 'includes/classes/Skill.php';
+require_once 'includes/classes/Technology.php';
+require_once 'includes/classes/Army.php';
+require_once 'includes/classes/Battle.php';
+require_once 'includes/classes/Alliance.php';
+require_once 'includes/classes/GameManager.php';
+
+// 包含辅助函数
+require_once 'includes/functions.php';
+
+// 获取数据库连接
+$db = Database::getInstance()->getConnection();
+
+// 加载游戏变量
+loadGameVariables($db);
+
+// 检查用户会话
+if (isset($_SESSION['user_id'])) {
+    $user = new User($_SESSION['user_id']);
+    if (!$user->isValid()) {
+        // 用户不存在或已被删除，清除会话
+        session_unset();
+        session_destroy();
+        header('Location: login.php');
+        exit;
+    }
+}
+```

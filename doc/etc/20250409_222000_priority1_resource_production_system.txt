@@ -1,0 +1,389 @@
+# 种火集结号 - 优先级1：资源生产系统
+时间戳: 2025-04-09 22:20:00
+
+## 资源生产系统设计
+
+### 1. 修改Resource类，添加资源产出功能
+```php
+// 在Resource.php中添加以下方法
+
+/**
+ * 更新资源产出
+ * @param int $userId 用户ID
+ * @return bool
+ */
+public static function updateResourceProduction($userId) {
+    $db = Database::getInstance()->getConnection();
+    
+    // 获取用户资源
+    $resource = new Resource($userId);
+    if (!$resource->isValid()) {
+        return false;
+    }
+    
+    // 获取上次更新时间
+    $lastUpdate = strtotime($resource->getLastUpdate());
+    $now = time();
+    
+    // 如果时间差小于1秒，不进行更新
+    if ($now - $lastUpdate < 1) {
+        return false;
+    }
+    
+    // 获取用户的所有城池
+    $cities = City::getUserCities($userId);
+    
+    // 计算资源产出
+    $brightCrystalProduction = 0;
+    $warmCrystalProduction = 0;
+    $coldCrystalProduction = 0;
+    $greenCrystalProduction = 0;
+    $dayCrystalProduction = 0;
+    $nightCrystalProduction = 0;
+    
+    foreach ($cities as $city) {
+        // 获取城池中的资源产出设施
+        $resourceFacilities = Facility::getCityFacilitiesByType($city->getCityId(), 'resource_production');
+        
+        foreach ($resourceFacilities as $facility) {
+            // 跳过正在建造或升级的设施
+            if ($facility->isUnderConstruction() || $facility->isUpgrading()) {
+                continue;
+            }
+            
+            // 计算设施产出的资源
+            $production = $facility->calculateResourceProduction($now - $lastUpdate);
+            
+            // 根据设施子类型增加对应资源
+            switch ($facility->getSubtype()) {
+                case 'bright':
+                    $brightCrystalProduction += $production;
+                    break;
+                case 'warm':
+                    $warmCrystalProduction += $production;
+                    break;
+                case 'cold':
+                    $coldCrystalProduction += $production;
+                    break;
+                case 'green':
+                    $greenCrystalProduction += $production;
+                    break;
+                case 'day':
+                    $dayCrystalProduction += $production;
+                    break;
+                case 'night':
+                    $nightCrystalProduction += $production;
+                    break;
+            }
+        }
+    }
+    
+    // 获取用户的资源存储上限
+    $storageCapacity = self::getUserResourceStorageCapacity($userId);
+    
+    // 开始事务
+    $db->beginTransaction();
+    
+    try {
+        // 更新资源
+        if ($brightCrystalProduction > 0) {
+            $newBrightCrystal = min($resource->getBrightCrystal() + $brightCrystalProduction, $storageCapacity);
+            $resource->addResource('bright', $newBrightCrystal - $resource->getBrightCrystal());
+        }
+        
+        if ($warmCrystalProduction > 0) {
+            $newWarmCrystal = min($resource->getWarmCrystal() + $warmCrystalProduction, $storageCapacity);
+            $resource->addResource('warm', $newWarmCrystal - $resource->getWarmCrystal());
+        }
+        
+        if ($coldCrystalProduction > 0) {
+            $newColdCrystal = min($resource->getColdCrystal() + $coldCrystalProduction, $storageCapacity);
+            $resource->addResource('cold', $newColdCrystal - $resource->getColdCrystal());
+        }
+        
+        if ($greenCrystalProduction > 0) {
+            $newGreenCrystal = min($resource->getGreenCrystal() + $greenCrystalProduction, $storageCapacity);
+            $resource->addResource('green', $newGreenCrystal - $resource->getGreenCrystal());
+        }
+        
+        if ($dayCrystalProduction > 0) {
+            $newDayCrystal = min($resource->getDayCrystal() + $dayCrystalProduction, $storageCapacity);
+            $resource->addResource('day', $newDayCrystal - $resource->getDayCrystal());
+        }
+        
+        if ($nightCrystalProduction > 0) {
+            $newNightCrystal = min($resource->getNightCrystal() + $nightCrystalProduction, $storageCapacity);
+            $resource->addResource('night', $newNightCrystal - $resource->getNightCrystal());
+        }
+        
+        // 更新最后更新时间
+        $query = "UPDATE resources SET last_update = ? WHERE user_id = ?";
+        $stmt = $db->prepare($query);
+        $nowDate = date('Y-m-d H:i:s', $now);
+        $stmt->bind_param('si', $nowDate, $userId);
+        $stmt->execute();
+        $stmt->close();
+        
+        $db->commit();
+        return true;
+    } catch (Exception $e) {
+        $db->rollback();
+        error_log('Resource production update failed: ' . $e->getMessage());
+        return false;
+    }
+}
+
+/**
+ * 获取用户的资源存储上限
+ * @param int $userId 用户ID
+ * @return int
+ */
+public static function getUserResourceStorageCapacity($userId) {
+    // 获取用户的所有城池
+    $cities = City::getUserCities($userId);
+    
+    // 初始资源存储上限
+    $totalCapacity = INITIAL_RESOURCE_STORAGE;
+    
+    foreach ($cities as $city) {
+        // 获取城池中的贮存所
+        $storages = Facility::getCityFacilitiesByType($city->getCityId(), 'storage');
+        
+        foreach ($storages as $storage) {
+            // 跳过正在建造或升级的设施
+            if ($storage->isUnderConstruction() || $storage->isUpgrading()) {
+                continue;
+            }
+            
+            // 增加贮存所提供的存储上限
+            $totalCapacity += $storage->getResourceStorageCapacity();
+        }
+    }
+    
+    return $totalCapacity;
+}
+
+/**
+ * 更新思考回路产出
+ * @param int $userId 用户ID
+ * @return array 产出思考回路的城池数组
+ */
+public static function updateCircuitProduction($userId) {
+    // 获取用户
+    $user = new User($userId);
+    if (!$user->isValid()) {
+        return [];
+    }
+    
+    // 获取用户的所有城池
+    $cities = City::getUserCities($userId);
+    
+    $producedCities = [];
+    
+    foreach ($cities as $city) {
+        // 检查城池是否可以产出思考回路
+        if ($city->canProduceCircuit()) {
+            // 产出思考回路
+            if ($city->produceCircuit()) {
+                $producedCities[] = [
+                    'city_id' => $city->getCityId(),
+                    'name' => $city->getName()
+                ];
+            }
+        }
+    }
+    
+    return $producedCities;
+}
+```
+
+### 2. 创建资源产出检查脚本 (cron_resource_production.php)
+```php
+<?php
+// 包含初始化文件
+require_once 'includes/init.php';
+
+// 获取所有用户
+$query = "SELECT user_id FROM users";
+$result = $db->query($query);
+
+if ($result) {
+    while ($row = $result->fetch_assoc()) {
+        $userId = $row['user_id'];
+        
+        // 更新资源产出
+        Resource::updateResourceProduction($userId);
+        
+        // 更新思考回路产出
+        Resource::updateCircuitProduction($userId);
+    }
+}
+```
+
+### 3. 创建资源产出API (api/update_resources.php)
+```php
+<?php
+// 包含初始化文件
+require_once '../includes/init.php';
+
+// 设置响应头
+header('Content-Type: application/json');
+
+// 检查用户是否已登录
+if (!isset($_SESSION['user_id'])) {
+    echo json_encode([
+        'success' => false,
+        'message' => '未登录'
+    ]);
+    exit;
+}
+
+// 更新资源产出
+$resourceUpdated = Resource::updateResourceProduction($_SESSION['user_id']);
+
+// 更新思考回路产出
+$circuitProducedCities = Resource::updateCircuitProduction($_SESSION['user_id']);
+
+// 获取更新后的资源
+$resource = new Resource($_SESSION['user_id']);
+if (!$resource->isValid()) {
+    echo json_encode([
+        'success' => false,
+        'message' => '获取资源失败'
+    ]);
+    exit;
+}
+
+// 获取用户信息
+$user = new User($_SESSION['user_id']);
+if (!$user->isValid()) {
+    echo json_encode([
+        'success' => false,
+        'message' => '获取用户信息失败'
+    ]);
+    exit;
+}
+
+// 返回资源数据
+echo json_encode([
+    'success' => true,
+    'resources' => [
+        'bright_crystal' => $resource->getBrightCrystal(),
+        'warm_crystal' => $resource->getWarmCrystal(),
+        'cold_crystal' => $resource->getColdCrystal(),
+        'green_crystal' => $resource->getGreenCrystal(),
+        'day_crystal' => $resource->getDayCrystal(),
+        'night_crystal' => $resource->getNightCrystal()
+    ],
+    'circuit_points' => $user->getCircuitPoints(),
+    'max_circuit_points' => $user->getMaxCircuitPoints(),
+    'circuit_produced_cities' => $circuitProducedCities
+]);
+```
+
+### 4. 修改前端JavaScript，定期更新资源 (script.js)
+```javascript
+// 在script.js中添加以下代码
+
+// 资源更新
+function updateResources() {
+    fetch('api/update_resources.php')
+        .then(response => response.json())
+        .then(data => {
+            if (data.success) {
+                // 更新资源显示
+                document.querySelector('.bright-crystal .resource-value').textContent = numberFormat(data.resources.bright_crystal);
+                document.querySelector('.warm-crystal .resource-value').textContent = numberFormat(data.resources.warm_crystal);
+                document.querySelector('.cold-crystal .resource-value').textContent = numberFormat(data.resources.cold_crystal);
+                document.querySelector('.green-crystal .resource-value').textContent = numberFormat(data.resources.green_crystal);
+                document.querySelector('.day-crystal .resource-value').textContent = numberFormat(data.resources.day_crystal);
+                document.querySelector('.night-crystal .resource-value').textContent = numberFormat(data.resources.night_crystal);
+                
+                // 更新思考回路显示
+                document.querySelector('.circuit-points').textContent = `思考回路: ${data.circuit_points} / ${data.max_circuit_points}`;
+                
+                // 如果有城池产出了思考回路，显示通知
+                if (data.circuit_produced_cities && data.circuit_produced_cities.length > 0) {
+                    data.circuit_produced_cities.forEach(city => {
+                        showNotification(`${city.name} 产出了1点思考回路！`);
+                    });
+                }
+            }
+        })
+        .catch(error => console.error('Error updating resources:', error));
+}
+
+// 显示通知
+function showNotification(message) {
+    const notification = document.createElement('div');
+    notification.className = 'notification';
+    notification.textContent = message;
+    
+    document.body.appendChild(notification);
+    
+    // 3秒后自动移除通知
+    setTimeout(() => {
+        notification.classList.add('fade-out');
+        setTimeout(() => {
+            document.body.removeChild(notification);
+        }, 500);
+    }, 3000);
+}
+
+// 数字格式化
+function numberFormat(number) {
+    return new Intl.NumberFormat().format(number);
+}
+
+// 每3秒更新一次资源
+setInterval(updateResources, 3000);
+
+// 页面加载完成后立即更新一次资源
+document.addEventListener('DOMContentLoaded', function() {
+    updateResources();
+    
+    // 其他初始化代码...
+});
+```
+
+### 5. 添加通知样式 (style.css)
+```css
+/* 在style.css中添加以下样式 */
+
+/* 通知样式 */
+.notification {
+    position: fixed;
+    top: 20px;
+    right: 20px;
+    background-color: rgba(0, 0, 0, 0.8);
+    color: #fff;
+    padding: 10px 20px;
+    border-radius: 5px;
+    z-index: 1000;
+    animation: slide-in 0.5s ease-out;
+}
+
+.notification.fade-out {
+    animation: fade-out 0.5s ease-out;
+}
+
+@keyframes slide-in {
+    from {
+        transform: translateX(100%);
+        opacity: 0;
+    }
+    to {
+        transform: translateX(0);
+        opacity: 1;
+    }
+}
+
+@keyframes fade-out {
+    from {
+        opacity: 1;
+    }
+    to {
+        opacity: 0;
+    }
+}
+```

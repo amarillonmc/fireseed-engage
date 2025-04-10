@@ -1,0 +1,768 @@
+# 种火集结号 - 核心PHP类设计 (步骤3 - 第3部分 - 城池类)
+时间戳: 2025-04-09 21:20:00
+
+## 城池类设计
+
+### City.php (城池类)
+```php
+<?php
+// 种火集结号 - 城池类
+
+class City {
+    private $db;
+    private $cityId;
+    private $mapId;
+    private $name;
+    private $ownerId;
+    private $isMainCity;
+    private $isSubBase;
+    private $durability;
+    private $maxDurability;
+    private $lastCircuitProduction;
+    private $isValid = false;
+    
+    /**
+     * 构造函数
+     * @param int $cityId 城池ID
+     */
+    public function __construct($cityId = null) {
+        $this->db = Database::getInstance()->getConnection();
+        
+        if ($cityId !== null) {
+            $this->cityId = $cityId;
+            $this->loadCityData();
+        }
+    }
+    
+    /**
+     * 加载城池数据
+     */
+    private function loadCityData() {
+        $query = "SELECT * FROM cities WHERE city_id = ?";
+        $stmt = $this->db->prepare($query);
+        $stmt->bind_param('i', $this->cityId);
+        $stmt->execute();
+        $result = $stmt->get_result();
+        
+        if ($result && $result->num_rows > 0) {
+            $cityData = $result->fetch_assoc();
+            $this->mapId = $cityData['map_id'];
+            $this->name = $cityData['name'];
+            $this->ownerId = $cityData['owner_id'];
+            $this->isMainCity = $cityData['is_main_city'];
+            $this->isSubBase = $cityData['is_sub_base'];
+            $this->durability = $cityData['durability'];
+            $this->maxDurability = $cityData['max_durability'];
+            $this->lastCircuitProduction = $cityData['last_circuit_production'];
+            $this->isValid = true;
+        }
+        
+        $stmt->close();
+    }
+    
+    /**
+     * 检查城池是否有效
+     * @return bool
+     */
+    public function isValid() {
+        return $this->isValid;
+    }
+    
+    /**
+     * 获取城池ID
+     * @return int
+     */
+    public function getCityId() {
+        return $this->cityId;
+    }
+    
+    /**
+     * 获取地图ID
+     * @return int
+     */
+    public function getMapId() {
+        return $this->mapId;
+    }
+    
+    /**
+     * 获取城池名称
+     * @return string
+     */
+    public function getName() {
+        return $this->name;
+    }
+    
+    /**
+     * 获取拥有者ID
+     * @return int|null
+     */
+    public function getOwnerId() {
+        return $this->ownerId;
+    }
+    
+    /**
+     * 检查是否为主城
+     * @return bool
+     */
+    public function isMainCity() {
+        return $this->isMainCity == 1;
+    }
+    
+    /**
+     * 检查是否为分基地
+     * @return bool
+     */
+    public function isSubBase() {
+        return $this->isSubBase == 1;
+    }
+    
+    /**
+     * 获取耐久度
+     * @return int
+     */
+    public function getDurability() {
+        return $this->durability;
+    }
+    
+    /**
+     * 获取最大耐久度
+     * @return int
+     */
+    public function getMaxDurability() {
+        return $this->maxDurability;
+    }
+    
+    /**
+     * 获取最后思考回路产出时间
+     * @return string|null
+     */
+    public function getLastCircuitProduction() {
+        return $this->lastCircuitProduction;
+    }
+    
+    /**
+     * 设置城池名称
+     * @param string $name 城池名称
+     * @return bool
+     */
+    public function setName($name) {
+        if (!$this->isValid) {
+            return false;
+        }
+        
+        $query = "UPDATE cities SET name = ? WHERE city_id = ?";
+        $stmt = $this->db->prepare($query);
+        $stmt->bind_param('si', $name, $this->cityId);
+        $result = $stmt->execute();
+        $stmt->close();
+        
+        if ($result) {
+            $this->name = $name;
+            return true;
+        }
+        
+        return false;
+    }
+    
+    /**
+     * 设置城池拥有者
+     * @param int|null $ownerId 拥有者ID
+     * @return bool
+     */
+    public function setOwner($ownerId) {
+        if (!$this->isValid) {
+            return false;
+        }
+        
+        $query = "UPDATE cities SET owner_id = ? WHERE city_id = ?";
+        $stmt = $this->db->prepare($query);
+        $stmt->bind_param('ii', $ownerId, $this->cityId);
+        $result = $stmt->execute();
+        $stmt->close();
+        
+        if ($result) {
+            // 同时更新地图表中的拥有者
+            $mapQuery = "UPDATE map SET owner_id = ? WHERE map_id = ?";
+            $mapStmt = $this->db->prepare($mapQuery);
+            $mapStmt->bind_param('ii', $ownerId, $this->mapId);
+            $mapStmt->execute();
+            $mapStmt->close();
+            
+            $this->ownerId = $ownerId;
+            return true;
+        }
+        
+        return false;
+    }
+    
+    /**
+     * 设置是否为主城
+     * @param bool $isMainCity 是否为主城
+     * @return bool
+     */
+    public function setMainCity($isMainCity) {
+        if (!$this->isValid) {
+            return false;
+        }
+        
+        $isMainCityInt = $isMainCity ? 1 : 0;
+        
+        $query = "UPDATE cities SET is_main_city = ? WHERE city_id = ?";
+        $stmt = $this->db->prepare($query);
+        $stmt->bind_param('ii', $isMainCityInt, $this->cityId);
+        $result = $stmt->execute();
+        $stmt->close();
+        
+        if ($result) {
+            $this->isMainCity = $isMainCityInt;
+            return true;
+        }
+        
+        return false;
+    }
+    
+    /**
+     * 设置是否为分基地
+     * @param bool $isSubBase 是否为分基地
+     * @return bool
+     */
+    public function setSubBase($isSubBase) {
+        if (!$this->isValid) {
+            return false;
+        }
+        
+        $isSubBaseInt = $isSubBase ? 1 : 0;
+        
+        $query = "UPDATE cities SET is_sub_base = ? WHERE city_id = ?";
+        $stmt = $this->db->prepare($query);
+        $stmt->bind_param('ii', $isSubBaseInt, $this->cityId);
+        $result = $stmt->execute();
+        $stmt->close();
+        
+        if ($result) {
+            $this->isSubBase = $isSubBaseInt;
+            return true;
+        }
+        
+        return false;
+    }
+    
+    /**
+     * 减少耐久度
+     * @param int $amount 减少的数量
+     * @return bool
+     */
+    public function reduceDurability($amount) {
+        if (!$this->isValid || $amount <= 0) {
+            return false;
+        }
+        
+        $newDurability = max(0, $this->durability - $amount);
+        
+        $query = "UPDATE cities SET durability = ? WHERE city_id = ?";
+        $stmt = $this->db->prepare($query);
+        $stmt->bind_param('ii', $newDurability, $this->cityId);
+        $result = $stmt->execute();
+        $stmt->close();
+        
+        if ($result) {
+            // 同时更新地图表中的耐久度
+            $mapQuery = "UPDATE map SET durability = ? WHERE map_id = ?";
+            $mapStmt = $this->db->prepare($mapQuery);
+            $mapStmt->bind_param('ii', $newDurability, $this->mapId);
+            $mapStmt->execute();
+            $mapStmt->close();
+            
+            $this->durability = $newDurability;
+            return true;
+        }
+        
+        return false;
+    }
+    
+    /**
+     * 恢复耐久度
+     * @param int $amount 恢复的数量
+     * @return bool
+     */
+    public function restoreDurability($amount) {
+        if (!$this->isValid || $amount <= 0) {
+            return false;
+        }
+        
+        $newDurability = min($this->maxDurability, $this->durability + $amount);
+        
+        $query = "UPDATE cities SET durability = ? WHERE city_id = ?";
+        $stmt = $this->db->prepare($query);
+        $stmt->bind_param('ii', $newDurability, $this->cityId);
+        $result = $stmt->execute();
+        $stmt->close();
+        
+        if ($result) {
+            // 同时更新地图表中的耐久度
+            $mapQuery = "UPDATE map SET durability = ? WHERE map_id = ?";
+            $mapStmt = $this->db->prepare($mapQuery);
+            $mapStmt->bind_param('ii', $newDurability, $this->mapId);
+            $mapStmt->execute();
+            $mapStmt->close();
+            
+            $this->durability = $newDurability;
+            return true;
+        }
+        
+        return false;
+    }
+    
+    /**
+     * 增加最大耐久度
+     * @param int $amount 增加的数量
+     * @return bool
+     */
+    public function increaseMaxDurability($amount) {
+        if (!$this->isValid || $amount <= 0) {
+            return false;
+        }
+        
+        $newMaxDurability = $this->maxDurability + $amount;
+        
+        $query = "UPDATE cities SET max_durability = ? WHERE city_id = ?";
+        $stmt = $this->db->prepare($query);
+        $stmt->bind_param('ii', $newMaxDurability, $this->cityId);
+        $result = $stmt->execute();
+        $stmt->close();
+        
+        if ($result) {
+            // 同时更新地图表中的最大耐久度
+            $mapQuery = "UPDATE map SET max_durability = ? WHERE map_id = ?";
+            $mapStmt = $this->db->prepare($mapQuery);
+            $mapStmt->bind_param('ii', $newMaxDurability, $this->mapId);
+            $mapStmt->execute();
+            $mapStmt->close();
+            
+            $this->maxDurability = $newMaxDurability;
+            return true;
+        }
+        
+        return false;
+    }
+    
+    /**
+     * 更新最后思考回路产出时间
+     * @return bool
+     */
+    public function updateLastCircuitProduction() {
+        if (!$this->isValid) {
+            return false;
+        }
+        
+        $now = date('Y-m-d H:i:s');
+        
+        $query = "UPDATE cities SET last_circuit_production = ? WHERE city_id = ?";
+        $stmt = $this->db->prepare($query);
+        $stmt->bind_param('si', $now, $this->cityId);
+        $result = $stmt->execute();
+        $stmt->close();
+        
+        if ($result) {
+            $this->lastCircuitProduction = $now;
+            return true;
+        }
+        
+        return false;
+    }
+    
+    /**
+     * 检查是否可以产出思考回路
+     * @return bool
+     */
+    public function canProduceCircuit() {
+        if (!$this->isValid || !$this->lastCircuitProduction) {
+            return true; // 如果从未产出过，则可以产出
+        }
+        
+        $lastProduction = strtotime($this->lastCircuitProduction);
+        $now = time();
+        
+        // 检查是否已经过了产出间隔时间
+        return ($now - $lastProduction) >= CIRCUIT_PRODUCTION_INTERVAL;
+    }
+    
+    /**
+     * 产出思考回路
+     * @return bool
+     */
+    public function produceCircuit() {
+        if (!$this->isValid || !$this->canProduceCircuit()) {
+            return false;
+        }
+        
+        // 获取用户对象
+        $user = new User($this->ownerId);
+        if (!$user->isValid()) {
+            return false;
+        }
+        
+        // 增加思考回路
+        if ($user->addCircuitPoints(1)) {
+            // 更新最后产出时间
+            return $this->updateLastCircuitProduction();
+        }
+        
+        return false;
+    }
+    
+    /**
+     * 创建新城池
+     * @param int $mapId 地图ID
+     * @param string $name 城池名称
+     * @param int|null $ownerId 拥有者ID
+     * @param bool $isMainCity 是否为主城
+     * @param bool $isSubBase 是否为分基地
+     * @param int $durability 耐久度
+     * @param int $maxDurability 最大耐久度
+     * @return bool|int 成功返回城池ID，失败返回false
+     */
+    public function createCity($mapId, $name, $ownerId = null, $isMainCity = false, $isSubBase = false, $durability = 3000, $maxDurability = 3000) {
+        // 检查地图ID是否存在
+        $mapQuery = "SELECT map_id FROM map WHERE map_id = ?";
+        $mapStmt = $this->db->prepare($mapQuery);
+        $mapStmt->bind_param('i', $mapId);
+        $mapStmt->execute();
+        $mapResult = $mapStmt->get_result();
+        
+        if (!$mapResult || $mapResult->num_rows == 0) {
+            $mapStmt->close();
+            return false; // 地图ID不存在
+        }
+        
+        $mapStmt->close();
+        
+        // 检查该地图ID是否已经有城池
+        $cityQuery = "SELECT city_id FROM cities WHERE map_id = ?";
+        $cityStmt = $this->db->prepare($cityQuery);
+        $cityStmt->bind_param('i', $mapId);
+        $cityStmt->execute();
+        $cityResult = $cityStmt->get_result();
+        
+        if ($cityResult && $cityResult->num_rows > 0) {
+            $cityStmt->close();
+            return false; // 该地图ID已经有城池
+        }
+        
+        $cityStmt->close();
+        
+        // 创建新城池
+        $isMainCityInt = $isMainCity ? 1 : 0;
+        $isSubBaseInt = $isSubBase ? 1 : 0;
+        
+        $query = "INSERT INTO cities (map_id, name, owner_id, is_main_city, is_sub_base, durability, max_durability) 
+                  VALUES (?, ?, ?, ?, ?, ?, ?)";
+        $stmt = $this->db->prepare($query);
+        $stmt->bind_param('isiiiiii', $mapId, $name, $ownerId, $isMainCityInt, $isSubBaseInt, $durability, $maxDurability);
+        $result = $stmt->execute();
+        
+        if ($result) {
+            $cityId = $this->db->insert_id;
+            $stmt->close();
+            
+            // 更新地图表中的类型和拥有者
+            $mapUpdateQuery = "UPDATE map SET type = 'player_fort', owner_id = ? WHERE map_id = ?";
+            $mapUpdateStmt = $this->db->prepare($mapUpdateQuery);
+            $mapUpdateStmt->bind_param('ii', $ownerId, $mapId);
+            $mapUpdateStmt->execute();
+            $mapUpdateStmt->close();
+            
+            // 设置对象属性
+            $this->cityId = $cityId;
+            $this->mapId = $mapId;
+            $this->name = $name;
+            $this->ownerId = $ownerId;
+            $this->isMainCity = $isMainCityInt;
+            $this->isSubBase = $isSubBaseInt;
+            $this->durability = $durability;
+            $this->maxDurability = $maxDurability;
+            $this->lastCircuitProduction = null;
+            $this->isValid = true;
+            
+            return $cityId;
+        }
+        
+        $stmt->close();
+        return false;
+    }
+    
+    /**
+     * 创建玩家初始城池
+     * @param int $userId 用户ID
+     * @return bool|int 成功返回城池ID，失败返回false
+     */
+    public static function createInitialPlayerCity($userId) {
+        $db = Database::getInstance()->getConnection();
+        
+        // 开始事务
+        $db->beginTransaction();
+        
+        try {
+            // 获取随机空白地图格子
+            $query = "SELECT map_id, x, y FROM map WHERE type = 'empty' ORDER BY RAND() LIMIT 1";
+            $result = $db->query($query);
+            
+            if (!$result || $result->num_rows == 0) {
+                throw new Exception('No empty map tile available');
+            }
+            
+            $mapData = $result->fetch_assoc();
+            $mapId = $mapData['map_id'];
+            $x = $mapData['x'];
+            $y = $mapData['y'];
+            
+            // 创建城池
+            $city = new City();
+            $cityId = $city->createCity(
+                $mapId,
+                '玩家城池-' . $userId,
+                $userId,
+                true, // 设为主城
+                false, // 不是分基地
+                3000, // 初始耐久度
+                3000  // 初始最大耐久度
+            );
+            
+            if (!$cityId) {
+                throw new Exception('Failed to create city');
+            }
+            
+            // 创建初始设施
+            // 1. 总督府
+            $governorOffice = new Facility();
+            $governorOfficeId = $governorOffice->createFacility(
+                $cityId,
+                'governor_office',
+                null,
+                1,
+                12, // 中心位置
+                12,
+                null,
+                null
+            );
+            
+            if (!$governorOfficeId) {
+                throw new Exception('Failed to create governor office');
+            }
+            
+            // 2. 资源产出点（6种资源，每种1个）
+            $resourceTypes = [
+                ['resource_production', 'bright'], // 亮晶晶
+                ['resource_production', 'warm'],   // 暖洋洋
+                ['resource_production', 'cold'],   // 冷冰冰
+                ['resource_production', 'green'],  // 郁萌萌
+                ['resource_production', 'day'],    // 昼闪闪
+                ['resource_production', 'night']   // 夜静静
+            ];
+            
+            // 资源产出点位置（四个角落）
+            $positions = [
+                [3, 3],    // 左上
+                [3, 21],   // 左下
+                [21, 3],   // 右上
+                [21, 21],  // 右下
+                [12, 3],   // 上中
+                [12, 21]   // 下中
+            ];
+            
+            for ($i = 0; $i < count($resourceTypes); $i++) {
+                $resourceFacility = new Facility();
+                $resourceFacilityId = $resourceFacility->createFacility(
+                    $cityId,
+                    $resourceTypes[$i][0],
+                    $resourceTypes[$i][1],
+                    1,
+                    $positions[$i][0],
+                    $positions[$i][1],
+                    null,
+                    null
+                );
+                
+                if (!$resourceFacilityId) {
+                    throw new Exception('Failed to create resource facility: ' . $resourceTypes[$i][1]);
+                }
+            }
+            
+            $db->commit();
+            return $cityId;
+        } catch (Exception $e) {
+            $db->rollback();
+            error_log('Initial player city creation failed: ' . $e->getMessage());
+            return false;
+        }
+    }
+    
+    /**
+     * 获取城池中的所有设施
+     * @return array 设施数组
+     */
+    public function getFacilities() {
+        if (!$this->isValid) {
+            return [];
+        }
+        
+        $query = "SELECT * FROM facilities WHERE city_id = ?";
+        $stmt = $this->db->prepare($query);
+        $stmt->bind_param('i', $this->cityId);
+        $stmt->execute();
+        $result = $stmt->get_result();
+        
+        $facilities = [];
+        
+        if ($result) {
+            while ($row = $result->fetch_assoc()) {
+                $facility = new Facility($row['facility_id']);
+                if ($facility->isValid()) {
+                    $facilities[] = $facility;
+                }
+            }
+        }
+        
+        $stmt->close();
+        return $facilities;
+    }
+    
+    /**
+     * 获取城池中的所有士兵
+     * @return array 士兵数组
+     */
+    public function getSoldiers() {
+        if (!$this->isValid) {
+            return [];
+        }
+        
+        $query = "SELECT * FROM soldiers WHERE city_id = ?";
+        $stmt = $this->db->prepare($query);
+        $stmt->bind_param('i', $this->cityId);
+        $stmt->execute();
+        $result = $stmt->get_result();
+        
+        $soldiers = [];
+        
+        if ($result) {
+            while ($row = $result->fetch_assoc()) {
+                $soldier = new Soldier($row['soldier_id']);
+                if ($soldier->isValid()) {
+                    $soldiers[] = $soldier;
+                }
+            }
+        }
+        
+        $stmt->close();
+        return $soldiers;
+    }
+    
+    /**
+     * 获取城池中驻扎的武将
+     * @return array 武将数组
+     */
+    public function getGenerals() {
+        if (!$this->isValid) {
+            return [];
+        }
+        
+        $query = "SELECT * FROM generals WHERE city_id = ?";
+        $stmt = $this->db->prepare($query);
+        $stmt->bind_param('i', $this->cityId);
+        $stmt->execute();
+        $result = $stmt->get_result();
+        
+        $generals = [];
+        
+        if ($result) {
+            while ($row = $result->fetch_assoc()) {
+                $general = new General($row['general_id']);
+                if ($general->isValid()) {
+                    $generals[] = $general;
+                }
+            }
+        }
+        
+        $stmt->close();
+        return $generals;
+    }
+    
+    /**
+     * 获取城池的坐标
+     * @return array 坐标数组 [x, y]
+     */
+    public function getCoordinates() {
+        if (!$this->isValid) {
+            return [0, 0];
+        }
+        
+        $query = "SELECT x, y FROM map WHERE map_id = ?";
+        $stmt = $this->db->prepare($query);
+        $stmt->bind_param('i', $this->mapId);
+        $stmt->execute();
+        $result = $stmt->get_result();
+        
+        if ($result && $result->num_rows > 0) {
+            $mapData = $result->fetch_assoc();
+            $stmt->close();
+            return [$mapData['x'], $mapData['y']];
+        }
+        
+        $stmt->close();
+        return [0, 0];
+    }
+    
+    /**
+     * 获取用户的所有城池
+     * @param int $userId 用户ID
+     * @return array 城池数组
+     */
+    public static function getUserCities($userId) {
+        $db = Database::getInstance()->getConnection();
+        
+        $query = "SELECT city_id FROM cities WHERE owner_id = ?";
+        $stmt = $db->prepare($query);
+        $stmt->bind_param('i', $userId);
+        $stmt->execute();
+        $result = $stmt->get_result();
+        
+        $cities = [];
+        
+        if ($result) {
+            while ($row = $result->fetch_assoc()) {
+                $city = new City($row['city_id']);
+                if ($city->isValid()) {
+                    $cities[] = $city;
+                }
+            }
+        }
+        
+        $stmt->close();
+        return $cities;
+    }
+    
+    /**
+     * 获取用户的主城
+     * @param int $userId 用户ID
+     * @return City|null 主城对象，如果没有则返回null
+     */
+    public static function getUserMainCity($userId) {
+        $db = Database::getInstance()->getConnection();
+        
+        $query = "SELECT city_id FROM cities WHERE owner_id = ? AND is_main_city = 1";
+        $stmt = $db->prepare($query);
+        $stmt->bind_param('i', $userId);
+        $stmt->execute();
+        $result = $stmt->get_result();
+        
+        if ($result && $result->num_rows > 0) {
+            $row = $result->fetch_assoc();
+            $stmt->close();
+            return new City($row['city_id']);
+        }
+        
+        $stmt->close();
+        return null;
+    }
+}
+```

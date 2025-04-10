@@ -1,0 +1,265 @@
+# 种火集结号 - 核心PHP类设计 (步骤3 - 第4部分 - 设施类基础)
+时间戳: 2025-04-09 21:30:00
+
+## 设施类设计 - 基本结构和属性
+
+### Facility.php (设施类) - 第1部分
+```php
+<?php
+// 种火集结号 - 设施类
+
+class Facility {
+    private $db;
+    private $facilityId;
+    private $cityId;
+    private $type;
+    private $subtype;
+    private $level;
+    private $xPos;
+    private $yPos;
+    private $constructionTime;
+    private $upgradeTime;
+    private $isValid = false;
+    
+    /**
+     * 构造函数
+     * @param int $facilityId 设施ID
+     */
+    public function __construct($facilityId = null) {
+        $this->db = Database::getInstance()->getConnection();
+        
+        if ($facilityId !== null) {
+            $this->facilityId = $facilityId;
+            $this->loadFacilityData();
+        }
+    }
+    
+    /**
+     * 加载设施数据
+     */
+    private function loadFacilityData() {
+        $query = "SELECT * FROM facilities WHERE facility_id = ?";
+        $stmt = $this->db->prepare($query);
+        $stmt->bind_param('i', $this->facilityId);
+        $stmt->execute();
+        $result = $stmt->get_result();
+        
+        if ($result && $result->num_rows > 0) {
+            $facilityData = $result->fetch_assoc();
+            $this->cityId = $facilityData['city_id'];
+            $this->type = $facilityData['type'];
+            $this->subtype = $facilityData['subtype'];
+            $this->level = $facilityData['level'];
+            $this->xPos = $facilityData['x_pos'];
+            $this->yPos = $facilityData['y_pos'];
+            $this->constructionTime = $facilityData['construction_time'];
+            $this->upgradeTime = $facilityData['upgrade_time'];
+            $this->isValid = true;
+        }
+        
+        $stmt->close();
+    }
+    
+    /**
+     * 检查设施是否有效
+     * @return bool
+     */
+    public function isValid() {
+        return $this->isValid;
+    }
+    
+    /**
+     * 获取设施ID
+     * @return int
+     */
+    public function getFacilityId() {
+        return $this->facilityId;
+    }
+    
+    /**
+     * 获取城池ID
+     * @return int
+     */
+    public function getCityId() {
+        return $this->cityId;
+    }
+    
+    /**
+     * 获取设施类型
+     * @return string
+     */
+    public function getType() {
+        return $this->type;
+    }
+    
+    /**
+     * 获取设施子类型
+     * @return string|null
+     */
+    public function getSubtype() {
+        return $this->subtype;
+    }
+    
+    /**
+     * 获取设施等级
+     * @return int
+     */
+    public function getLevel() {
+        return $this->level;
+    }
+    
+    /**
+     * 获取设施X坐标
+     * @return int
+     */
+    public function getXPos() {
+        return $this->xPos;
+    }
+    
+    /**
+     * 获取设施Y坐标
+     * @return int
+     */
+    public function getYPos() {
+        return $this->yPos;
+    }
+    
+    /**
+     * 获取设施建造完成时间
+     * @return string|null
+     */
+    public function getConstructionTime() {
+        return $this->constructionTime;
+    }
+    
+    /**
+     * 获取设施升级完成时间
+     * @return string|null
+     */
+    public function getUpgradeTime() {
+        return $this->upgradeTime;
+    }
+    
+    /**
+     * 检查设施是否正在建造
+     * @return bool
+     */
+    public function isUnderConstruction() {
+        if (!$this->isValid || !$this->constructionTime) {
+            return false;
+        }
+        
+        $constructionTime = strtotime($this->constructionTime);
+        $now = time();
+        
+        return $now < $constructionTime;
+    }
+    
+    /**
+     * 检查设施是否正在升级
+     * @return bool
+     */
+    public function isUpgrading() {
+        if (!$this->isValid || !$this->upgradeTime) {
+            return false;
+        }
+        
+        $upgradeTime = strtotime($this->upgradeTime);
+        $now = time();
+        
+        return $now < $upgradeTime;
+    }
+    
+    /**
+     * 获取设施名称
+     * @return string
+     */
+    public function getName() {
+        if (!$this->isValid) {
+            return '';
+        }
+        
+        switch ($this->type) {
+            case 'resource_production':
+                switch ($this->subtype) {
+                    case 'bright':
+                        return '亮晶晶产出点';
+                    case 'warm':
+                        return '暖洋洋产出点';
+                    case 'cold':
+                        return '冷冰冰产出点';
+                    case 'green':
+                        return '郁萌萌产出点';
+                    case 'day':
+                        return '昼闪闪产出点';
+                    case 'night':
+                        return '夜静静产出点';
+                    default:
+                        return '资源产出点';
+                }
+            case 'governor_office':
+                return '总督府';
+            case 'barracks':
+                return '兵营';
+            case 'research_lab':
+                return '研究所';
+            case 'dormitory':
+                return '宿舍';
+            case 'storage':
+                return '贮存所';
+            case 'watchtower':
+                return '瞭望台';
+            case 'workshop':
+                return '工程所';
+            default:
+                return '未知设施';
+        }
+    }
+    
+    /**
+     * 获取设施描述
+     * @return string
+     */
+    public function getDescription() {
+        if (!$this->isValid) {
+            return '';
+        }
+        
+        switch ($this->type) {
+            case 'resource_production':
+                switch ($this->subtype) {
+                    case 'bright':
+                        return '产出亮晶晶资源';
+                    case 'warm':
+                        return '产出暖洋洋资源';
+                    case 'cold':
+                        return '产出冷冰冰资源';
+                    case 'green':
+                        return '产出郁萌萌资源';
+                    case 'day':
+                        return '产出昼闪闪资源';
+                    case 'night':
+                        return '产出夜静静资源';
+                    default:
+                        return '产出资源';
+                }
+            case 'governor_office':
+                return '城池的中心建筑，有耐久值，每48小时产出1点思考回路';
+            case 'barracks':
+                return '训练士兵的设施';
+            case 'research_lab':
+                return '研究科技的设施';
+            case 'dormitory':
+                return '存放士兵的设施';
+            case 'storage':
+                return '存放资源的设施';
+            case 'watchtower':
+                return '提高城池防御力，可以消耗资源产出侦察兵';
+            case 'workshop':
+                return '可以研究科技来提高城池防御力，并可以消耗资源产出锤子兵';
+            default:
+                return '未知设施';
+        }
+    }
+}
+```

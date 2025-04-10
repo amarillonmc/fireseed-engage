@@ -1,0 +1,601 @@
+# 种火集结号 - API接口设计 (步骤5 - 第2部分)
+时间戳: 2025-04-09 21:55:00
+
+## API接口设计 - 功能接口
+
+### 1. api/upgrade_facility.php (升级设施接口)
+```php
+<?php
+// 包含初始化文件
+require_once '../includes/init.php';
+
+// 设置响应头
+header('Content-Type: application/json');
+
+// 检查请求方法
+if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
+    echo json_encode([
+        'success' => false,
+        'message' => '请求方法不正确'
+    ]);
+    exit;
+}
+
+// 检查用户是否已登录
+if (!isset($_SESSION['user_id'])) {
+    echo json_encode([
+        'success' => false,
+        'message' => '未登录'
+    ]);
+    exit;
+}
+
+// 获取POST数据
+$facilityId = isset($_POST['facility_id']) ? intval($_POST['facility_id']) : 0;
+
+// 验证数据
+if ($facilityId <= 0) {
+    echo json_encode([
+        'success' => false,
+        'message' => '设施ID无效'
+    ]);
+    exit;
+}
+
+// 获取设施信息
+$facility = new Facility($facilityId);
+
+// 检查设施是否存在
+if (!$facility->isValid()) {
+    echo json_encode([
+        'success' => false,
+        'message' => '设施不存在'
+    ]);
+    exit;
+}
+
+// 获取设施所在的城池
+$city = new City($facility->getCityId());
+
+// 检查城池是否属于当前用户
+if (!$city->isValid() || $city->getOwnerId() != $_SESSION['user_id']) {
+    echo json_encode([
+        'success' => false,
+        'message' => '设施所在的城池不属于当前用户'
+    ]);
+    exit;
+}
+
+// 检查设施是否正在建造或升级
+if ($facility->isUnderConstruction() || $facility->isUpgrading()) {
+    echo json_encode([
+        'success' => false,
+        'message' => '设施正在建造或升级中'
+    ]);
+    exit;
+}
+
+// 开始升级设施
+if ($facility->startUpgrade($_SESSION['user_id'])) {
+    echo json_encode([
+        'success' => true,
+        'message' => '设施开始升级',
+        'facility' => [
+            'facility_id' => $facility->getFacilityId(),
+            'level' => $facility->getLevel(),
+            'upgrade_time' => $facility->getUpgradeTime()
+        ]
+    ]);
+} else {
+    echo json_encode([
+        'success' => false,
+        'message' => '升级设施失败，可能是资源不足'
+    ]);
+}
+```
+
+### 2. api/train_soldiers.php (训练士兵接口)
+```php
+<?php
+// 包含初始化文件
+require_once '../includes/init.php';
+
+// 设置响应头
+header('Content-Type: application/json');
+
+// 检查请求方法
+if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
+    echo json_encode([
+        'success' => false,
+        'message' => '请求方法不正确'
+    ]);
+    exit;
+}
+
+// 检查用户是否已登录
+if (!isset($_SESSION['user_id'])) {
+    echo json_encode([
+        'success' => false,
+        'message' => '未登录'
+    ]);
+    exit;
+}
+
+// 获取POST数据
+$cityId = isset($_POST['city_id']) ? intval($_POST['city_id']) : 0;
+$soldierType = isset($_POST['soldier_type']) ? $_POST['soldier_type'] : '';
+$quantity = isset($_POST['quantity']) ? intval($_POST['quantity']) : 0;
+
+// 验证数据
+if ($cityId <= 0 || empty($soldierType) || $quantity <= 0) {
+    echo json_encode([
+        'success' => false,
+        'message' => '参数无效'
+    ]);
+    exit;
+}
+
+// 检查城池是否属于当前用户
+$city = new City($cityId);
+if (!$city->isValid() || $city->getOwnerId() != $_SESSION['user_id']) {
+    echo json_encode([
+        'success' => false,
+        'message' => '城池不存在或不属于当前用户'
+    ]);
+    exit;
+}
+
+// 检查士兵类型是否有效
+$validTypes = ['pawn', 'knight', 'rook', 'bishop', 'golem', 'scout'];
+if (!in_array($soldierType, $validTypes)) {
+    echo json_encode([
+        'success' => false,
+        'message' => '士兵类型无效'
+    ]);
+    exit;
+}
+
+// 检查训练设施是否存在
+$facilityType = '';
+switch ($soldierType) {
+    case 'pawn':
+    case 'knight':
+    case 'rook':
+    case 'bishop':
+        $facilityType = 'barracks';
+        break;
+    case 'golem':
+        $facilityType = 'workshop';
+        break;
+    case 'scout':
+        $facilityType = 'watchtower';
+        break;
+}
+
+$facilities = Facility::getCityFacilitiesByType($cityId, $facilityType);
+if (empty($facilities)) {
+    echo json_encode([
+        'success' => false,
+        'message' => '没有可用的训练设施'
+    ]);
+    exit;
+}
+
+// 使用第一个可用的设施
+$facility = $facilities[0];
+
+// 检查设施是否正在建造或升级
+if ($facility->isUnderConstruction() || $facility->isUpgrading()) {
+    echo json_encode([
+        'success' => false,
+        'message' => '训练设施正在建造或升级中'
+    ]);
+    exit;
+}
+
+// 计算训练时间
+$trainingTime = $facility->calculateSoldierTrainingTime($soldierType, $quantity);
+$trainingCompleteTime = date('Y-m-d H:i:s', time() + $trainingTime);
+
+// 计算训练费用
+$trainingCost = [];
+switch ($soldierType) {
+    case 'pawn':
+        $trainingCost = ['day' => 10 * $quantity];
+        break;
+    case 'knight':
+        $trainingCost = ['warm' => 20 * $quantity];
+        break;
+    case 'rook':
+        $trainingCost = ['cold' => 20 * $quantity];
+        break;
+    case 'bishop':
+        $trainingCost = ['green' => 20 * $quantity];
+        break;
+    case 'golem':
+        $trainingCost = [
+            'warm' => 30 * $quantity,
+            'cold' => 30 * $quantity,
+            'green' => 30 * $quantity,
+            'day' => 30 * $quantity
+        ];
+        break;
+    case 'scout':
+        $trainingCost = [
+            'warm' => 15 * $quantity,
+            'cold' => 15 * $quantity,
+            'green' => 15 * $quantity,
+            'day' => 15 * $quantity
+        ];
+        break;
+}
+
+// 检查用户是否有足够的资源
+$resource = new Resource($_SESSION['user_id']);
+if (!$resource->isValid() || !$resource->hasEnoughResources($trainingCost)) {
+    echo json_encode([
+        'success' => false,
+        'message' => '资源不足'
+    ]);
+    exit;
+}
+
+// 检查城池是否有足够的士兵容量
+$soldier = new Soldier();
+$soldier->loadByCityAndType($cityId, $soldierType);
+$currentQuantity = $soldier->isValid() ? $soldier->getQuantity() : 0;
+$currentInTraining = $soldier->isValid() ? $soldier->getInTraining() : 0;
+$totalSoldiers = $currentQuantity + $currentInTraining + $quantity;
+
+$totalCapacity = Facility::getCityTotalSoldierCapacity($cityId);
+if ($totalSoldiers > $totalCapacity) {
+    echo json_encode([
+        'success' => false,
+        'message' => '士兵容量不足'
+    ]);
+    exit;
+}
+
+// 开始事务
+$db = Database::getInstance()->getConnection();
+$db->beginTransaction();
+
+try {
+    // 扣除资源
+    if (!$resource->reduceResources($trainingCost)) {
+        throw new Exception('扣除资源失败');
+    }
+    
+    // 更新士兵训练状态
+    if ($soldier->isValid()) {
+        // 更新现有士兵记录
+        $newInTraining = $currentInTraining + $quantity;
+        if (!$soldier->updateTraining($newInTraining, $trainingCompleteTime)) {
+            throw new Exception('更新士兵训练状态失败');
+        }
+    } else {
+        // 创建新士兵记录
+        $soldierId = $soldier->createSoldier(
+            $cityId,
+            $soldierType,
+            $facility->getMaxSoldierLevel(),
+            0, // 初始数量为0
+            $quantity, // 训练中的数量
+            $trainingCompleteTime
+        );
+        
+        if (!$soldierId) {
+            throw new Exception('创建士兵记录失败');
+        }
+    }
+    
+    $db->commit();
+    
+    // 返回成功信息
+    echo json_encode([
+        'success' => true,
+        'message' => '士兵开始训练',
+        'training' => [
+            'soldier_type' => $soldierType,
+            'quantity' => $quantity,
+            'training_complete_time' => $trainingCompleteTime,
+            'training_time_seconds' => $trainingTime
+        ]
+    ]);
+} catch (Exception $e) {
+    $db->rollback();
+    
+    echo json_encode([
+        'success' => false,
+        'message' => $e->getMessage()
+    ]);
+}
+```
+
+### 3. api/get_generals.php (获取武将列表接口)
+```php
+<?php
+// 包含初始化文件
+require_once '../includes/init.php';
+
+// 设置响应头
+header('Content-Type: application/json');
+
+// 检查用户是否已登录
+if (!isset($_SESSION['user_id'])) {
+    echo json_encode([
+        'success' => false,
+        'message' => '未登录'
+    ]);
+    exit;
+}
+
+// 获取用户的所有武将
+$generals = General::getUserGenerals($_SESSION['user_id']);
+$generalsData = [];
+
+foreach ($generals as $general) {
+    // 获取武将的技能
+    $skills = $general->getSkills();
+    $skillsData = [];
+    
+    foreach ($skills as $skill) {
+        $skillsData[] = [
+            'skill_id' => $skill->getSkillId(),
+            'name' => $skill->getName(),
+            'description' => $skill->getDescription(),
+            'type' => $skill->getType(),
+            'category' => $skill->getCategory(),
+            'level' => $skill->getLevel(),
+            'slot' => $skill->getSlot(),
+            'last_used' => $skill->getLastUsed()
+        ];
+    }
+    
+    $generalsData[] = [
+        'general_id' => $general->getGeneralId(),
+        'name' => $general->getName(),
+        'source' => $general->getSource(),
+        'rarity' => $general->getRarity(),
+        'cost' => $general->getCost(),
+        'element' => $general->getElement(),
+        'level' => $general->getLevel(),
+        'hp' => $general->getHp(),
+        'max_hp' => $general->getMaxHp(),
+        'attack' => $general->getAttack(),
+        'defense' => $general->getDefense(),
+        'intelligence' => $general->getIntelligence(),
+        'speed' => $general->getSpeed(),
+        'city_id' => $general->getCityId(),
+        'skills' => $skillsData
+    ];
+}
+
+// 返回武将数据
+echo json_encode([
+    'success' => true,
+    'generals' => $generalsData
+]);
+```
+
+### 4. api/assign_general.php (分配武将接口)
+```php
+<?php
+// 包含初始化文件
+require_once '../includes/init.php';
+
+// 设置响应头
+header('Content-Type: application/json');
+
+// 检查请求方法
+if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
+    echo json_encode([
+        'success' => false,
+        'message' => '请求方法不正确'
+    ]);
+    exit;
+}
+
+// 检查用户是否已登录
+if (!isset($_SESSION['user_id'])) {
+    echo json_encode([
+        'success' => false,
+        'message' => '未登录'
+    ]);
+    exit;
+}
+
+// 获取POST数据
+$generalId = isset($_POST['general_id']) ? intval($_POST['general_id']) : 0;
+$cityId = isset($_POST['city_id']) ? intval($_POST['city_id']) : 0;
+
+// 验证数据
+if ($generalId <= 0) {
+    echo json_encode([
+        'success' => false,
+        'message' => '武将ID无效'
+    ]);
+    exit;
+}
+
+// 获取武将信息
+$general = new General($generalId);
+
+// 检查武将是否存在且属于当前用户
+if (!$general->isValid() || $general->getUserId() != $_SESSION['user_id']) {
+    echo json_encode([
+        'success' => false,
+        'message' => '武将不存在或不属于当前用户'
+    ]);
+    exit;
+}
+
+// 检查武将HP是否为0
+if ($general->getHp() <= 0) {
+    echo json_encode([
+        'success' => false,
+        'message' => '武将HP为0，无法分配'
+    ]);
+    exit;
+}
+
+// 如果cityId为0，表示取消分配
+if ($cityId == 0) {
+    if ($general->assignToCity(null)) {
+        echo json_encode([
+            'success' => true,
+            'message' => '武将已取消分配',
+            'general' => [
+                'general_id' => $general->getGeneralId(),
+                'name' => $general->getName(),
+                'city_id' => null
+            ]
+        ]);
+    } else {
+        echo json_encode([
+            'success' => false,
+            'message' => '取消分配武将失败'
+        ]);
+    }
+    exit;
+}
+
+// 检查城池是否存在且属于当前用户
+$city = new City($cityId);
+if (!$city->isValid() || $city->getOwnerId() != $_SESSION['user_id']) {
+    echo json_encode([
+        'success' => false,
+        'message' => '城池不存在或不属于当前用户'
+    ]);
+    exit;
+}
+
+// 分配武将到城池
+if ($general->assignToCity($cityId)) {
+    echo json_encode([
+        'success' => true,
+        'message' => '武将已分配到城池',
+        'general' => [
+            'general_id' => $general->getGeneralId(),
+            'name' => $general->getName(),
+            'city_id' => $cityId
+        ]
+    ]);
+} else {
+    echo json_encode([
+        'success' => false,
+        'message' => '分配武将失败'
+    ]);
+}
+```
+
+### 5. api/use_skill.php (使用技能接口)
+```php
+<?php
+// 包含初始化文件
+require_once '../includes/init.php';
+
+// 设置响应头
+header('Content-Type: application/json');
+
+// 检查请求方法
+if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
+    echo json_encode([
+        'success' => false,
+        'message' => '请求方法不正确'
+    ]);
+    exit;
+}
+
+// 检查用户是否已登录
+if (!isset($_SESSION['user_id'])) {
+    echo json_encode([
+        'success' => false,
+        'message' => '未登录'
+    ]);
+    exit;
+}
+
+// 获取POST数据
+$generalId = isset($_POST['general_id']) ? intval($_POST['general_id']) : 0;
+$skillId = isset($_POST['skill_id']) ? intval($_POST['skill_id']) : 0;
+$targetId = isset($_POST['target_id']) ? intval($_POST['target_id']) : 0; // 可以是城池ID或其他目标ID
+
+// 验证数据
+if ($generalId <= 0 || $skillId <= 0) {
+    echo json_encode([
+        'success' => false,
+        'message' => '参数无效'
+    ]);
+    exit;
+}
+
+// 获取武将信息
+$general = new General($generalId);
+
+// 检查武将是否存在且属于当前用户
+if (!$general->isValid() || $general->getUserId() != $_SESSION['user_id']) {
+    echo json_encode([
+        'success' => false,
+        'message' => '武将不存在或不属于当前用户'
+    ]);
+    exit;
+}
+
+// 检查武将HP是否为0
+if ($general->getHp() <= 0) {
+    echo json_encode([
+        'success' => false,
+        'message' => '武将HP为0，无法使用技能'
+    ]);
+    exit;
+}
+
+// 检查武将是否拥有该技能
+$skill = new Skill();
+$skill->loadByGeneralAndSkill($generalId, $skillId);
+
+if (!$skill->isValid()) {
+    echo json_encode([
+        'success' => false,
+        'message' => '武将不拥有该技能'
+    ]);
+    exit;
+}
+
+// 检查技能是否在冷却中
+if ($skill->isInCooldown()) {
+    echo json_encode([
+        'success' => false,
+        'message' => '技能正在冷却中',
+        'cooldown_remaining' => $skill->getCooldownRemaining()
+    ]);
+    exit;
+}
+
+// 检查技能类型
+if ($skill->getType() != 'active') {
+    echo json_encode([
+        'success' => false,
+        'message' => '该技能不是主动技能'
+    ]);
+    exit;
+}
+
+// 使用技能
+$result = $skill->useSkill($targetId);
+
+if ($result['success']) {
+    echo json_encode([
+        'success' => true,
+        'message' => '技能使用成功',
+        'effect' => $result['effect'],
+        'cooldown' => $skill->getBaseCooldown()
+    ]);
+} else {
+    echo json_encode([
+        'success' => false,
+        'message' => $result['message']
+    ]);
+}
+```

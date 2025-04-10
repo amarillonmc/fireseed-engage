@@ -1,0 +1,343 @@
+# 种火集结号 - 数据库设计 (步骤1)
+时间戳: 2025-04-09 20:45:00
+
+## 数据库表结构设计
+
+### 1. users (用户表)
+```sql
+CREATE TABLE `users` (
+  `user_id` int(11) NOT NULL AUTO_INCREMENT,
+  `username` varchar(50) NOT NULL,
+  `password` varchar(255) NOT NULL,
+  `email` varchar(100) NOT NULL,
+  `registration_date` datetime NOT NULL,
+  `last_login` datetime DEFAULT NULL,
+  `credits` int(11) DEFAULT 0,
+  `level` int(11) DEFAULT 1,
+  `circuit_points` int(11) DEFAULT 1,
+  `max_circuit_points` int(11) DEFAULT 10,
+  `max_general_cost` float DEFAULT 10.0,
+  PRIMARY KEY (`user_id`),
+  UNIQUE KEY `username` (`username`),
+  UNIQUE KEY `email` (`email`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+```
+
+### 2. resources (资源表)
+```sql
+CREATE TABLE `resources` (
+  `resource_id` int(11) NOT NULL AUTO_INCREMENT,
+  `user_id` int(11) NOT NULL,
+  `bright_crystal` int(11) DEFAULT 1000, -- 亮晶晶
+  `warm_crystal` int(11) DEFAULT 1000, -- 暖洋洋
+  `cold_crystal` int(11) DEFAULT 1000, -- 冷冰冰
+  `green_crystal` int(11) DEFAULT 1000, -- 郁萌萌
+  `day_crystal` int(11) DEFAULT 1000, -- 昼闪闪
+  `night_crystal` int(11) DEFAULT 1000, -- 夜静静
+  `last_update` datetime NOT NULL,
+  PRIMARY KEY (`resource_id`),
+  KEY `user_id` (`user_id`),
+  CONSTRAINT `resources_ibfk_1` FOREIGN KEY (`user_id`) REFERENCES `users` (`user_id`) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+```
+
+### 3. map (地图表)
+```sql
+CREATE TABLE `map` (
+  `map_id` int(11) NOT NULL AUTO_INCREMENT,
+  `x` int(11) NOT NULL,
+  `y` int(11) NOT NULL,
+  `type` enum('empty','resource_point','npc_fort','npc_gateway','silver_hole','player_fort') NOT NULL,
+  `owner_id` int(11) DEFAULT NULL, -- NULL表示NPC或无主
+  `name` varchar(100) DEFAULT NULL,
+  `level` int(11) DEFAULT 1,
+  `durability` int(11) DEFAULT NULL,
+  `max_durability` int(11) DEFAULT NULL,
+  PRIMARY KEY (`map_id`),
+  UNIQUE KEY `coordinates` (`x`,`y`),
+  KEY `owner_id` (`owner_id`),
+  CONSTRAINT `map_ibfk_1` FOREIGN KEY (`owner_id`) REFERENCES `users` (`user_id`) ON DELETE SET NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+```
+
+### 4. resource_points (资源点表)
+```sql
+CREATE TABLE `resource_points` (
+  `point_id` int(11) NOT NULL AUTO_INCREMENT,
+  `map_id` int(11) NOT NULL,
+  `bright_crystal_facility` int(11) DEFAULT 0,
+  `warm_crystal_facility` int(11) DEFAULT 0,
+  `cold_crystal_facility` int(11) DEFAULT 0,
+  `green_crystal_facility` int(11) DEFAULT 0,
+  `day_crystal_facility` int(11) DEFAULT 0,
+  `night_crystal_facility` int(11) DEFAULT 0,
+  PRIMARY KEY (`point_id`),
+  KEY `map_id` (`map_id`),
+  CONSTRAINT `resource_points_ibfk_1` FOREIGN KEY (`map_id`) REFERENCES `map` (`map_id`) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+```
+
+### 5. cities (城池表)
+```sql
+CREATE TABLE `cities` (
+  `city_id` int(11) NOT NULL AUTO_INCREMENT,
+  `map_id` int(11) NOT NULL,
+  `name` varchar(100) NOT NULL,
+  `owner_id` int(11) DEFAULT NULL,
+  `is_main_city` tinyint(1) DEFAULT 0,
+  `is_sub_base` tinyint(1) DEFAULT 0,
+  `durability` int(11) DEFAULT 3000,
+  `max_durability` int(11) DEFAULT 3000,
+  `last_circuit_production` datetime DEFAULT NULL,
+  PRIMARY KEY (`city_id`),
+  KEY `map_id` (`map_id`),
+  KEY `owner_id` (`owner_id`),
+  CONSTRAINT `cities_ibfk_1` FOREIGN KEY (`map_id`) REFERENCES `map` (`map_id`) ON DELETE CASCADE,
+  CONSTRAINT `cities_ibfk_2` FOREIGN KEY (`owner_id`) REFERENCES `users` (`user_id`) ON DELETE SET NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+```
+
+### 6. facilities (设施表)
+```sql
+CREATE TABLE `facilities` (
+  `facility_id` int(11) NOT NULL AUTO_INCREMENT,
+  `city_id` int(11) NOT NULL,
+  `type` enum('resource_production','governor_office','barracks','research_lab','dormitory','storage','watchtower','workshop') NOT NULL,
+  `subtype` varchar(50) DEFAULT NULL, -- 用于区分资源产出点的类型
+  `level` int(11) DEFAULT 1,
+  `x_pos` int(11) NOT NULL, -- 在城池内的位置
+  `y_pos` int(11) NOT NULL, -- 在城池内的位置
+  `construction_time` datetime DEFAULT NULL, -- 建造完成时间
+  `upgrade_time` datetime DEFAULT NULL, -- 升级完成时间
+  PRIMARY KEY (`facility_id`),
+  KEY `city_id` (`city_id`),
+  CONSTRAINT `facilities_ibfk_1` FOREIGN KEY (`city_id`) REFERENCES `cities` (`city_id`) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+```
+
+### 7. soldiers (士兵表)
+```sql
+CREATE TABLE `soldiers` (
+  `soldier_id` int(11) NOT NULL AUTO_INCREMENT,
+  `city_id` int(11) NOT NULL,
+  `type` enum('pawn','knight','rook','bishop','golem','scout') NOT NULL,
+  `level` int(11) DEFAULT 1,
+  `quantity` int(11) DEFAULT 0,
+  `in_training` int(11) DEFAULT 0,
+  `training_complete_time` datetime DEFAULT NULL,
+  PRIMARY KEY (`soldier_id`),
+  UNIQUE KEY `city_soldier_type` (`city_id`,`type`),
+  CONSTRAINT `soldiers_ibfk_1` FOREIGN KEY (`city_id`) REFERENCES `cities` (`city_id`) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+```
+
+### 8. generals (武将表)
+```sql
+CREATE TABLE `generals` (
+  `general_id` int(11) NOT NULL AUTO_INCREMENT,
+  `user_id` int(11) NOT NULL,
+  `name` varchar(100) NOT NULL,
+  `source` varchar(255) DEFAULT NULL,
+  `rarity` enum('B','A','S','SS','P') NOT NULL,
+  `cost` float NOT NULL,
+  `element` enum('bright','warm','cold','green','day','night') NOT NULL,
+  `level` int(11) DEFAULT 1,
+  `hp` int(11) DEFAULT 100,
+  `max_hp` int(11) DEFAULT 100,
+  `attack` int(11) NOT NULL,
+  `defense` int(11) NOT NULL,
+  `intelligence` int(11) NOT NULL,
+  `speed` int(11) NOT NULL,
+  `city_id` int(11) DEFAULT NULL, -- 驻扎的城池，NULL表示未分配
+  `last_hp_recovery` datetime DEFAULT NULL,
+  PRIMARY KEY (`general_id`),
+  KEY `user_id` (`user_id`),
+  KEY `city_id` (`city_id`),
+  CONSTRAINT `generals_ibfk_1` FOREIGN KEY (`user_id`) REFERENCES `users` (`user_id`) ON DELETE CASCADE,
+  CONSTRAINT `generals_ibfk_2` FOREIGN KEY (`city_id`) REFERENCES `cities` (`city_id`) ON DELETE SET NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+```
+
+### 9. skills (技能表)
+```sql
+CREATE TABLE `skills` (
+  `skill_id` int(11) NOT NULL AUTO_INCREMENT,
+  `name` varchar(100) NOT NULL,
+  `description` text NOT NULL,
+  `type` enum('active','passive') NOT NULL,
+  `category` enum('internal','march','attack','other') NOT NULL,
+  `base_cooldown` int(11) DEFAULT NULL, -- 基础冷却时间（秒）
+  `base_effect` float NOT NULL, -- 基础效果值
+  `level_coefficient` float NOT NULL, -- 等级系数
+  PRIMARY KEY (`skill_id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+```
+
+### 10. general_skills (武将技能表)
+```sql
+CREATE TABLE `general_skills` (
+  `general_skill_id` int(11) NOT NULL AUTO_INCREMENT,
+  `general_id` int(11) NOT NULL,
+  `skill_id` int(11) NOT NULL,
+  `slot` int(11) NOT NULL, -- 0表示自带技能，1-2表示额外技能槽
+  `level` int(11) DEFAULT 1,
+  `last_used` datetime DEFAULT NULL,
+  PRIMARY KEY (`general_skill_id`),
+  UNIQUE KEY `general_skill_slot` (`general_id`,`slot`),
+  KEY `skill_id` (`skill_id`),
+  CONSTRAINT `general_skills_ibfk_1` FOREIGN KEY (`general_id`) REFERENCES `generals` (`general_id`) ON DELETE CASCADE,
+  CONSTRAINT `general_skills_ibfk_2` FOREIGN KEY (`skill_id`) REFERENCES `skills` (`skill_id`) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+```
+
+### 11. technologies (科技表)
+```sql
+CREATE TABLE `technologies` (
+  `tech_id` int(11) NOT NULL AUTO_INCREMENT,
+  `name` varchar(100) NOT NULL,
+  `description` text NOT NULL,
+  `category` enum('resource','soldier','city','governor') NOT NULL,
+  `base_effect` float NOT NULL, -- 基础效果值
+  `base_cost` text NOT NULL, -- JSON格式存储各种资源的基础消耗
+  `level_coefficient` float NOT NULL, -- 等级系数
+  `max_level` int(11) NOT NULL,
+  PRIMARY KEY (`tech_id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+```
+
+### 12. user_technologies (用户科技表)
+```sql
+CREATE TABLE `user_technologies` (
+  `user_tech_id` int(11) NOT NULL AUTO_INCREMENT,
+  `user_id` int(11) NOT NULL,
+  `tech_id` int(11) NOT NULL,
+  `level` int(11) DEFAULT 0,
+  `research_complete_time` datetime DEFAULT NULL,
+  PRIMARY KEY (`user_tech_id`),
+  UNIQUE KEY `user_tech` (`user_id`,`tech_id`),
+  KEY `tech_id` (`tech_id`),
+  CONSTRAINT `user_technologies_ibfk_1` FOREIGN KEY (`user_id`) REFERENCES `users` (`user_id`) ON DELETE CASCADE,
+  CONSTRAINT `user_technologies_ibfk_2` FOREIGN KEY (`tech_id`) REFERENCES `technologies` (`tech_id`) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+```
+
+### 13. armies (军队表)
+```sql
+CREATE TABLE `armies` (
+  `army_id` int(11) NOT NULL AUTO_INCREMENT,
+  `user_id` int(11) NOT NULL,
+  `general_id` int(11) DEFAULT NULL,
+  `source_city_id` int(11) NOT NULL,
+  `target_x` int(11) NOT NULL,
+  `target_y` int(11) NOT NULL,
+  `departure_time` datetime NOT NULL,
+  `arrival_time` datetime NOT NULL,
+  `status` enum('marching','fighting','returning','completed') NOT NULL,
+  `is_attack` tinyint(1) DEFAULT 1, -- 1表示攻击，0表示调动
+  PRIMARY KEY (`army_id`),
+  KEY `user_id` (`user_id`),
+  KEY `general_id` (`general_id`),
+  KEY `source_city_id` (`source_city_id`),
+  CONSTRAINT `armies_ibfk_1` FOREIGN KEY (`user_id`) REFERENCES `users` (`user_id`) ON DELETE CASCADE,
+  CONSTRAINT `armies_ibfk_2` FOREIGN KEY (`general_id`) REFERENCES `generals` (`general_id`) ON DELETE SET NULL,
+  CONSTRAINT `armies_ibfk_3` FOREIGN KEY (`source_city_id`) REFERENCES `cities` (`city_id`) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+```
+
+### 14. army_soldiers (军队士兵表)
+```sql
+CREATE TABLE `army_soldiers` (
+  `army_soldier_id` int(11) NOT NULL AUTO_INCREMENT,
+  `army_id` int(11) NOT NULL,
+  `type` enum('pawn','knight','rook','bishop','golem','scout') NOT NULL,
+  `level` int(11) DEFAULT 1,
+  `quantity` int(11) DEFAULT 0,
+  PRIMARY KEY (`army_soldier_id`),
+  UNIQUE KEY `army_soldier_type` (`army_id`,`type`),
+  CONSTRAINT `army_soldiers_ibfk_1` FOREIGN KEY (`army_id`) REFERENCES `armies` (`army_id`) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+```
+
+### 15. alliances (联盟表)
+```sql
+CREATE TABLE `alliances` (
+  `alliance_id` int(11) NOT NULL AUTO_INCREMENT,
+  `name` varchar(100) NOT NULL,
+  `description` text DEFAULT NULL,
+  `leader_id` int(11) NOT NULL,
+  `created_at` datetime NOT NULL,
+  PRIMARY KEY (`alliance_id`),
+  KEY `leader_id` (`leader_id`),
+  CONSTRAINT `alliances_ibfk_1` FOREIGN KEY (`leader_id`) REFERENCES `users` (`user_id`) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+```
+
+### 16. alliance_members (联盟成员表)
+```sql
+CREATE TABLE `alliance_members` (
+  `member_id` int(11) NOT NULL AUTO_INCREMENT,
+  `alliance_id` int(11) NOT NULL,
+  `user_id` int(11) NOT NULL,
+  `role` enum('leader','officer','member') NOT NULL,
+  `joined_at` datetime NOT NULL,
+  PRIMARY KEY (`member_id`),
+  UNIQUE KEY `alliance_user` (`alliance_id`,`user_id`),
+  KEY `user_id` (`user_id`),
+  CONSTRAINT `alliance_members_ibfk_1` FOREIGN KEY (`alliance_id`) REFERENCES `alliances` (`alliance_id`) ON DELETE CASCADE,
+  CONSTRAINT `alliance_members_ibfk_2` FOREIGN KEY (`user_id`) REFERENCES `users` (`user_id`) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+```
+
+### 17. game_config (游戏配置表)
+```sql
+CREATE TABLE `game_config` (
+  `config_id` int(11) NOT NULL AUTO_INCREMENT,
+  `key` varchar(100) NOT NULL,
+  `value` text NOT NULL,
+  `description` text DEFAULT NULL,
+  `is_constant` tinyint(1) DEFAULT 0, -- 0表示变量，1表示常量
+  PRIMARY KEY (`config_id`),
+  UNIQUE KEY `key` (`key`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+```
+
+### 18. battle_logs (战斗日志表)
+```sql
+CREATE TABLE `battle_logs` (
+  `log_id` int(11) NOT NULL AUTO_INCREMENT,
+  `attacker_id` int(11) NOT NULL,
+  `defender_id` int(11) DEFAULT NULL, -- NULL表示NPC
+  `attacker_army_id` int(11) NOT NULL,
+  `target_x` int(11) NOT NULL,
+  `target_y` int(11) NOT NULL,
+  `battle_time` datetime NOT NULL,
+  `result` enum('attacker_win','defender_win') NOT NULL,
+  `attacker_power` int(11) NOT NULL,
+  `defender_power` int(11) NOT NULL,
+  `attacker_losses` text NOT NULL, -- JSON格式存储各种士兵的损失
+  `defender_losses` text NOT NULL, -- JSON格式存储各种士兵的损失
+  `details` text DEFAULT NULL, -- 战斗详情
+  PRIMARY KEY (`log_id`),
+  KEY `attacker_id` (`attacker_id`),
+  KEY `defender_id` (`defender_id`),
+  KEY `attacker_army_id` (`attacker_army_id`),
+  CONSTRAINT `battle_logs_ibfk_1` FOREIGN KEY (`attacker_id`) REFERENCES `users` (`user_id`) ON DELETE CASCADE,
+  CONSTRAINT `battle_logs_ibfk_2` FOREIGN KEY (`defender_id`) REFERENCES `users` (`user_id`) ON DELETE SET NULL,
+  CONSTRAINT `battle_logs_ibfk_3` FOREIGN KEY (`attacker_army_id`) REFERENCES `armies` (`army_id`) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+```
+
+## 数据库关系说明
+
+1. 用户(users)与资源(resources)是一对一关系
+2. 用户(users)与武将(generals)是一对多关系
+3. 用户(users)与城池(cities)是一对多关系
+4. 地图(map)与资源点(resource_points)是一对一关系
+5. 地图(map)与城池(cities)是一对一关系
+6. 城池(cities)与设施(facilities)是一对多关系
+7. 城池(cities)与士兵(soldiers)是一对多关系
+8. 武将(generals)与技能(skills)是多对多关系，通过武将技能表(general_skills)关联
+9. 用户(users)与科技(technologies)是多对多关系，通过用户科技表(user_technologies)关联
+10. 用户(users)与军队(armies)是一对多关系
+11. 军队(armies)与军队士兵(army_soldiers)是一对多关系
+12. 联盟(alliances)与用户(users)是多对多关系，通过联盟成员表(alliance_members)关联
