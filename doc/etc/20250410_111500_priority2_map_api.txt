@@ -1,0 +1,384 @@
+# 种火集结号 - 优先级2：地图API接口
+时间戳: 2025-04-10 11:15:00
+
+## 地图API接口设计
+
+### api/get_map.php (获取地图数据API)
+```php
+<?php
+// 包含初始化文件
+require_once '../includes/init.php';
+
+// 设置响应头
+header('Content-Type: application/json');
+
+// 检查用户是否已登录
+if (!isset($_SESSION['user_id'])) {
+    echo json_encode([
+        'success' => false,
+        'message' => '未登录'
+    ]);
+    exit;
+}
+
+// 获取请求参数
+$startX = isset($_GET['start_x']) ? intval($_GET['start_x']) : 0;
+$startY = isset($_GET['start_y']) ? intval($_GET['start_y']) : 0;
+$endX = isset($_GET['end_x']) ? intval($_GET['end_x']) : 0;
+$endY = isset($_GET['end_y']) ? intval($_GET['end_y']) : 0;
+
+// 验证参数
+if ($startX < 0 || $startX >= MAP_WIDTH || $startY < 0 || $startY >= MAP_HEIGHT ||
+    $endX < 0 || $endX >= MAP_WIDTH || $endY < 0 || $endY >= MAP_HEIGHT ||
+    $startX > $endX || $startY > $endY) {
+    echo json_encode([
+        'success' => false,
+        'message' => '参数无效'
+    ]);
+    exit;
+}
+
+// 限制查询范围，避免一次查询过多数据
+$maxRange = 20;
+if ($endX - $startX > $maxRange || $endY - $startY > $maxRange) {
+    echo json_encode([
+        'success' => false,
+        'message' => '查询范围过大'
+    ]);
+    exit;
+}
+
+// 获取指定范围内的地图格子
+$tiles = Map::getTilesInRange($startX, $startY, $endX, $endY);
+
+// 准备返回数据
+$tileData = [];
+
+foreach ($tiles as $tile) {
+    $data = [
+        'tile_id' => $tile->getTileId(),
+        'x' => $tile->getX(),
+        'y' => $tile->getY(),
+        'type' => $tile->getType(),
+        'subtype' => $tile->getSubtype(),
+        'is_visible' => $tile->isVisible()
+    ];
+    
+    // 如果地图格子可见，添加更多信息
+    if ($tile->isVisible()) {
+        $data['name'] = $tile->getName();
+        $data['description'] = $tile->getDescription();
+        
+        // 根据地图格子类型添加额外信息
+        switch ($tile->getType()) {
+            case 'resource':
+                $data['resource_amount'] = $tile->getResourceAmount();
+                break;
+            case 'npc_fort':
+                $data['npc_level'] = $tile->getNpcLevel();
+                break;
+        }
+        
+        // 如果有拥有者，添加拥有者信息
+        $ownerId = $tile->getOwnerId();
+        if ($ownerId) {
+            $data['owner_id'] = $ownerId;
+            
+            // 获取拥有者名称
+            $owner = new User($ownerId);
+            if ($owner->isValid()) {
+                $data['owner_name'] = $owner->getUsername();
+            }
+            
+            // 如果是玩家城池，添加城池ID
+            if ($tile->getType() == 'player_city') {
+                // 获取该坐标的城池ID
+                $query = "SELECT city_id FROM cities WHERE x = ? AND y = ?";
+                $stmt = $db->prepare($query);
+                $x = $tile->getX();
+                $y = $tile->getY();
+                $stmt->bind_param('ii', $x, $y);
+                $stmt->execute();
+                $result = $stmt->get_result();
+                
+                if ($result && $result->num_rows > 0) {
+                    $row = $result->fetch_assoc();
+                    $data['city_id'] = $row['city_id'];
+                }
+                
+                $stmt->close();
+            }
+        }
+    }
+    
+    $tileData[] = $data;
+}
+
+// 返回地图数据
+echo json_encode([
+    'success' => true,
+    'tiles' => $tileData
+]);
+```
+
+### api/explore_map.php (探索地图API)
+```php
+<?php
+// 包含初始化文件
+require_once '../includes/init.php';
+
+// 设置响应头
+header('Content-Type: application/json');
+
+// 检查用户是否已登录
+if (!isset($_SESSION['user_id'])) {
+    echo json_encode([
+        'success' => false,
+        'message' => '未登录'
+    ]);
+    exit;
+}
+
+// 获取请求参数
+$x = isset($_GET['x']) ? intval($_GET['x']) : 0;
+$y = isset($_GET['y']) ? intval($_GET['y']) : 0;
+$radius = isset($_GET['radius']) ? intval($_GET['radius']) : 3;
+
+// 验证参数
+if ($x < 0 || $x >= MAP_WIDTH || $y < 0 || $y >= MAP_HEIGHT) {
+    echo json_encode([
+        'success' => false,
+        'message' => '坐标无效'
+    ]);
+    exit;
+}
+
+// 限制探索半径
+$maxRadius = 5;
+if ($radius <= 0 || $radius > $maxRadius) {
+    $radius = $maxRadius;
+}
+
+// 获取用户信息
+$user = new User($_SESSION['user_id']);
+if (!$user->isValid()) {
+    echo json_encode([
+        'success' => false,
+        'message' => '用户信息无效'
+    ]);
+    exit;
+}
+
+// 检查用户是否有足够的思考回路
+$requiredCircuitPoints = 1; // 探索需要消耗的思考回路点数
+if ($user->getCircuitPoints() < $requiredCircuitPoints) {
+    echo json_encode([
+        'success' => false,
+        'message' => '思考回路不足'
+    ]);
+    exit;
+}
+
+// 探索地图
+$discoveredTiles = Map::exploreTiles($_SESSION['user_id'], $x, $y, $radius);
+
+// 如果有新发现的地图格子，扣除思考回路
+if (!empty($discoveredTiles)) {
+    $user->reduceCircuitPoints($requiredCircuitPoints);
+}
+
+// 准备返回数据
+$tileData = [];
+
+foreach ($discoveredTiles as $tile) {
+    $tileData[] = [
+        'tile_id' => $tile->getTileId(),
+        'x' => $tile->getX(),
+        'y' => $tile->getY(),
+        'type' => $tile->getType(),
+        'subtype' => $tile->getSubtype(),
+        'name' => $tile->getName()
+    ];
+}
+
+// 返回探索结果
+echo json_encode([
+    'success' => true,
+    'message' => '探索成功',
+    'discovered_tiles' => $tileData,
+    'circuit_points' => $user->getCircuitPoints(),
+    'max_circuit_points' => $user->getMaxCircuitPoints()
+]);
+```
+
+### api/occupy_tile.php (占领地图格子API)
+```php
+<?php
+// 包含初始化文件
+require_once '../includes/init.php';
+
+// 设置响应头
+header('Content-Type: application/json');
+
+// 检查用户是否已登录
+if (!isset($_SESSION['user_id'])) {
+    echo json_encode([
+        'success' => false,
+        'message' => '未登录'
+    ]);
+    exit;
+}
+
+// 获取请求参数
+$x = isset($_GET['x']) ? intval($_GET['x']) : 0;
+$y = isset($_GET['y']) ? intval($_GET['y']) : 0;
+
+// 验证参数
+if ($x < 0 || $x >= MAP_WIDTH || $y < 0 || $y >= MAP_HEIGHT) {
+    echo json_encode([
+        'success' => false,
+        'message' => '坐标无效'
+    ]);
+    exit;
+}
+
+// 获取用户信息
+$user = new User($_SESSION['user_id']);
+if (!$user->isValid()) {
+    echo json_encode([
+        'success' => false,
+        'message' => '用户信息无效'
+    ]);
+    exit;
+}
+
+// 检查用户是否有足够的思考回路
+$requiredCircuitPoints = 2; // 占领需要消耗的思考回路点数
+if ($user->getCircuitPoints() < $requiredCircuitPoints) {
+    echo json_encode([
+        'success' => false,
+        'message' => '思考回路不足'
+    ]);
+    exit;
+}
+
+// 占领地图格子
+$result = Map::occupyTile($_SESSION['user_id'], $x, $y);
+
+// 如果占领成功，扣除思考回路
+if ($result === true) {
+    $user->reduceCircuitPoints($requiredCircuitPoints);
+    
+    echo json_encode([
+        'success' => true,
+        'message' => '占领成功',
+        'circuit_points' => $user->getCircuitPoints(),
+        'max_circuit_points' => $user->getMaxCircuitPoints()
+    ]);
+} else {
+    echo json_encode([
+        'success' => false,
+        'message' => $result
+    ]);
+}
+```
+
+### api/abandon_tile.php (放弃地图格子API)
+```php
+<?php
+// 包含初始化文件
+require_once '../includes/init.php';
+
+// 设置响应头
+header('Content-Type: application/json');
+
+// 检查用户是否已登录
+if (!isset($_SESSION['user_id'])) {
+    echo json_encode([
+        'success' => false,
+        'message' => '未登录'
+    ]);
+    exit;
+}
+
+// 获取请求参数
+$x = isset($_GET['x']) ? intval($_GET['x']) : 0;
+$y = isset($_GET['y']) ? intval($_GET['y']) : 0;
+
+// 验证参数
+if ($x < 0 || $x >= MAP_WIDTH || $y < 0 || $y >= MAP_HEIGHT) {
+    echo json_encode([
+        'success' => false,
+        'message' => '坐标无效'
+    ]);
+    exit;
+}
+
+// 获取用户信息
+$user = new User($_SESSION['user_id']);
+if (!$user->isValid()) {
+    echo json_encode([
+        'success' => false,
+        'message' => '用户信息无效'
+    ]);
+    exit;
+}
+
+// 放弃地图格子
+$result = Map::abandonTile($_SESSION['user_id'], $x, $y);
+
+// 返回结果
+if ($result === true) {
+    echo json_encode([
+        'success' => true,
+        'message' => '放弃成功'
+    ]);
+} else {
+    echo json_encode([
+        'success' => false,
+        'message' => $result
+    ]);
+}
+```
+
+### api/get_main_city.php (获取主城坐标API)
+```php
+<?php
+// 包含初始化文件
+require_once '../includes/init.php';
+
+// 设置响应头
+header('Content-Type: application/json');
+
+// 检查用户是否已登录
+if (!isset($_SESSION['user_id'])) {
+    echo json_encode([
+        'success' => false,
+        'message' => '未登录'
+    ]);
+    exit;
+}
+
+// 获取用户主城
+$mainCity = City::getUserMainCity($_SESSION['user_id']);
+
+if (!$mainCity) {
+    echo json_encode([
+        'success' => false,
+        'message' => '未找到主城'
+    ]);
+    exit;
+}
+
+// 获取主城坐标
+$coordinates = $mainCity->getCoordinates();
+
+// 返回主城坐标
+echo json_encode([
+    'success' => true,
+    'x' => $coordinates[0],
+    'y' => $coordinates[1],
+    'city_id' => $mainCity->getCityId(),
+    'city_name' => $mainCity->getName()
+]);
+```

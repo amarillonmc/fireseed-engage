@@ -1,0 +1,94 @@
+# 种火集结号 - 优先级2：地图和探索系统实装
+时间戳: 2025-04-10 12:00:00
+
+## 实装内容总结
+
+我们已经完成了优先级2的第一部分：地图和探索系统的实装。以下是已实装的内容：
+
+### 1. 地图类 (Map.php)
+- 实现了地图格子的基本属性和方法
+- 支持地图格子的查询和修改
+- 实现了地图格子的类型和属性
+- 提供了获取地图格子名称和描述的方法
+- 实现了地图格子的探索和占领功能
+
+### 2. 地图生成器类 (MapGenerator.php)
+- 实现了随机地图生成
+- 支持生成不同类型的地图格子（空地、资源点、NPC城池、特殊地点）
+- 实现了地图统计信息的获取
+- 提供了地图重置功能
+
+### 3. 地图管理页面 (admin/generate_map.php)
+- 实现了地图生成和重置功能
+- 提供了地图统计信息的显示
+- 支持管理员控制地图生成参数
+
+### 4. 地图页面 (map.php)
+- 实现了地图的可视化显示
+- 支持地图的导航和搜索
+- 提供了地图格子的详细信息显示
+- 实现了地图格子的探索和占领功能
+
+### 5. 地图API接口
+- get_map.php: 获取地图数据
+- explore_map.php: 探索地图
+- occupy_tile.php: 占领地图格子
+- abandon_tile.php: 放弃地图格子
+- get_main_city.php: 获取主城坐标
+
+### 6. 地图JavaScript (map.js)
+- 实现了地图的动态加载和渲染
+- 支持地图格子的点击和交互
+- 提供了地图格子的操作功能（探索、占领、放弃）
+
+## 数据库表结构
+
+### map_tiles 表
+```sql
+CREATE TABLE `map_tiles` (
+  `tile_id` int(11) NOT NULL AUTO_INCREMENT,
+  `x` int(11) NOT NULL,
+  `y` int(11) NOT NULL,
+  `type` varchar(20) NOT NULL,
+  `subtype` varchar(20) DEFAULT NULL,
+  `owner_id` int(11) DEFAULT NULL,
+  `resource_amount` int(11) DEFAULT NULL,
+  `npc_level` int(11) DEFAULT NULL,
+  `is_visible` tinyint(1) NOT NULL DEFAULT 0,
+  PRIMARY KEY (`tile_id`),
+  UNIQUE KEY `x_y` (`x`, `y`),
+  KEY `owner_id` (`owner_id`),
+  CONSTRAINT `map_tiles_ibfk_1` FOREIGN KEY (`owner_id`) REFERENCES `users` (`user_id`) ON DELETE SET NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+```
+
+## 下一步计划
+
+接下来，我们将继续实现优先级2的剩余部分：
+
+1. **地图占领功能的完善**
+   - 实现资源点的自动收集
+   - 添加占领地块的管理功能
+   - 实现占领地块的防御和升级
+
+2. **军队系统**
+   - 实现军队的组建和管理
+   - 添加军队的移动和攻击功能
+   - 实现战斗系统
+
+3. **NPC城池攻占**
+   - 实现NPC城池的攻占机制
+   - 添加NPC城池的奖励系统
+   - 实现NPC城池的重生机制
+
+4. **玩家之间的战斗**
+   - 实现玩家城池的攻防系统
+   - 添加战斗报告功能
+   - 实现战斗奖励和惩罚机制
+
+## 实装注意事项
+
+1. 需要在User类中添加reduceCircuitPoints方法，用于扣除思考回路点数
+2. 需要在City类中添加getCoordinates方法，用于获取城池坐标
+3. 需要修改城池创建逻辑，将城池信息同步到地图系统中
+4. 需要实现资源点的自动收集功能，定期将资源点的资源添加到玩家资源中

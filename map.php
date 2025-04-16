@@ -1,0 +1,439 @@
+<?php
+// 包含初始化文件
+require_once 'includes/init.php';
+
+// 检查用户是否已登录
+if (!isset($_SESSION['user_id'])) {
+    header('Location: login.php');
+    exit;
+}
+
+// 获取用户信息
+$user = new User($_SESSION['user_id']);
+if (!$user->isValid()) {
+    session_unset();
+    session_destroy();
+    header('Location: login.php');
+    exit;
+}
+
+// 获取用户资源
+$resource = new Resource($user->getUserId());
+
+// 获取地图中心坐标
+$centerX = isset($_GET['x']) ? intval($_GET['x']) : MAP_WIDTH / 2;
+$centerY = isset($_GET['y']) ? intval($_GET['y']) : MAP_HEIGHT / 2;
+
+// 确保坐标在地图范围内
+$centerX = max(0, min(MAP_WIDTH - 1, $centerX));
+$centerY = max(0, min(MAP_HEIGHT - 1, $centerY));
+
+// 获取地图视图范围
+$viewRadius = 5; // 视图半径
+$startX = max(0, $centerX - $viewRadius);
+$startY = max(0, $centerY - $viewRadius);
+$endX = min(MAP_WIDTH - 1, $centerX + $viewRadius);
+$endY = min(MAP_HEIGHT - 1, $centerY + $viewRadius);
+
+// 页面标题
+$pageTitle = '地图';
+?>
+
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="user-id" content="<?php echo $user->getUserId(); ?>">
+    <title><?php echo SITE_NAME; ?> - <?php echo $pageTitle; ?></title>
+    <link rel="stylesheet" href="assets/css/style.css">
+    <style>
+        .map-container {
+            background-color: #fff;
+            padding: 20px;
+            margin-bottom: 20px;
+            border-radius: 5px;
+            box-shadow: 0 2px 5px rgba(0, 0, 0, 0.1);
+        }
+        
+        .map-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 20px;
+        }
+        
+        .map-title {
+            margin: 0;
+        }
+        
+        .map-controls {
+            display: flex;
+            gap: 10px;
+        }
+        
+        .map-controls button {
+            padding: 5px 10px;
+            background-color: #333;
+            color: #fff;
+            border: none;
+            border-radius: 3px;
+            cursor: pointer;
+        }
+        
+        .map-controls button:hover {
+            background-color: #555;
+        }
+        
+        .map-grid {
+            display: grid;
+            grid-template-columns: repeat(<?php echo $endX - $startX + 1; ?>, 60px);
+            grid-template-rows: repeat(<?php echo $endY - $startY + 1; ?>, 60px);
+            gap: 2px;
+            margin-bottom: 20px;
+        }
+        
+        .map-cell {
+            width: 60px;
+            height: 60px;
+            border: 1px solid #ccc;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            font-size: 12px;
+            position: relative;
+            cursor: pointer;
+            background-color: #f9f9f9;
+        }
+        
+        .map-cell.current {
+            border: 2px solid #ff0000;
+        }
+        
+        .map-cell.not-visible {
+            background-color: #333;
+            color: #fff;
+        }
+        
+        .map-cell.empty {
+            background-color: #f0f0f0;
+        }
+        
+        .map-cell.resource {
+            background-color: #eeffee;
+        }
+        
+        .map-cell.resource.bright {
+            background-color: #f0f0f0;
+        }
+        
+        .map-cell.resource.warm {
+            background-color: #ffeeee;
+        }
+        
+        .map-cell.resource.cold {
+            background-color: #eeeeff;
+        }
+        
+        .map-cell.resource.green {
+            background-color: #eeffee;
+        }
+        
+        .map-cell.resource.day {
+            background-color: #ffffee;
+        }
+        
+        .map-cell.resource.night {
+            background-color: #eeeeff;
+        }
+        
+        .map-cell.npc_fort {
+            background-color: #ffdddd;
+        }
+        
+        .map-cell.player_city {
+            background-color: #ddffdd;
+        }
+        
+        .map-cell.special {
+            background-color: #ffddff;
+        }
+        
+        .map-cell.special.silver_hole {
+            background-color: #ffffff;
+            border: 2px solid #ffcc00;
+        }
+        
+        .map-cell-icon {
+            font-size: 24px;
+            margin-bottom: 5px;
+        }
+        
+        .map-cell-coords {
+            font-size: 10px;
+            color: #666;
+        }
+        
+        .map-navigation {
+            display: flex;
+            justify-content: center;
+            gap: 10px;
+            margin-bottom: 20px;
+        }
+        
+        .map-navigation button {
+            padding: 5px 10px;
+            background-color: #333;
+            color: #fff;
+            border: none;
+            border-radius: 3px;
+            cursor: pointer;
+        }
+        
+        .map-navigation button:hover {
+            background-color: #555;
+        }
+        
+        .map-search {
+            display: flex;
+            justify-content: center;
+            gap: 10px;
+            margin-bottom: 20px;
+        }
+        
+        .map-search input {
+            padding: 5px 10px;
+            border: 1px solid #ccc;
+            border-radius: 3px;
+            width: 60px;
+        }
+        
+        .map-search button {
+            padding: 5px 10px;
+            background-color: #333;
+            color: #fff;
+            border: none;
+            border-radius: 3px;
+            cursor: pointer;
+        }
+        
+        .map-search button:hover {
+            background-color: #555;
+        }
+        
+        .map-legend {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 10px;
+            margin-top: 20px;
+            padding: 10px;
+            background-color: #f5f5f5;
+            border-radius: 5px;
+        }
+        
+        .map-legend-item {
+            display: flex;
+            align-items: center;
+            gap: 5px;
+            font-size: 12px;
+        }
+        
+        .map-legend-color {
+            width: 20px;
+            height: 20px;
+            border: 1px solid #ccc;
+        }
+        
+        .map-info {
+            margin-top: 20px;
+            padding: 15px;
+            background-color: #f5f5f5;
+            border-radius: 5px;
+        }
+        
+        .map-info h3 {
+            margin-top: 0;
+            margin-bottom: 10px;
+        }
+        
+        .map-info p {
+            margin: 5px 0;
+        }
+        
+        .map-actions {
+            margin-top: 15px;
+        }
+        
+        .map-actions button {
+            padding: 5px 10px;
+            background-color: #333;
+            color: #fff;
+            border: none;
+            border-radius: 3px;
+            cursor: pointer;
+            margin-right: 10px;
+        }
+        
+        .map-actions button:hover {
+            background-color: #555;
+        }
+        
+        .map-actions button.disabled {
+            background-color: #ccc;
+            cursor: not-allowed;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <!-- 页首 -->
+        <header>
+            <h1 class="site-title"><?php echo SITE_NAME; ?></h1>
+            <h2 class="page-title"><?php echo $pageTitle; ?></h2>
+            <nav class="main-nav">
+                <ul>
+                    <li><a href="index.php">主基地</a></li>
+                    <li><a href="profile.php">档案</a></li>
+                    <li><a href="generals.php">武将</a></li>
+                    <li><a href="map.php">地图</a></li>
+                    <li><a href="internal.php">内政</a></li>
+                    <li><a href="ranking.php">排名</a></li>
+                    <li class="circuit-points">思考回路: <?php echo $user->getCircuitPoints(); ?> / <?php echo $user->getMaxCircuitPoints(); ?></li>
+                </ul>
+            </nav>
+        </header>
+        
+        <!-- 主内容 -->
+        <main>
+            <!-- 资源显示 -->
+            <div class="resource-bar">
+                <div class="resource bright-crystal">
+                    <span class="resource-name">亮晶晶</span>
+                    <span class="resource-value"><?php echo number_format($resource->getBrightCrystal()); ?></span>
+                </div>
+                <div class="resource warm-crystal">
+                    <span class="resource-name">暖洋洋</span>
+                    <span class="resource-value"><?php echo number_format($resource->getWarmCrystal()); ?></span>
+                </div>
+                <div class="resource cold-crystal">
+                    <span class="resource-name">冷冰冰</span>
+                    <span class="resource-value"><?php echo number_format($resource->getColdCrystal()); ?></span>
+                </div>
+                <div class="resource green-crystal">
+                    <span class="resource-name">郁萌萌</span>
+                    <span class="resource-value"><?php echo number_format($resource->getGreenCrystal()); ?></span>
+                </div>
+                <div class="resource day-crystal">
+                    <span class="resource-name">昼闪闪</span>
+                    <span class="resource-value"><?php echo number_format($resource->getDayCrystal()); ?></span>
+                </div>
+                <div class="resource night-crystal">
+                    <span class="resource-name">夜静静</span>
+                    <span class="resource-value"><?php echo number_format($resource->getNightCrystal()); ?></span>
+                </div>
+            </div>
+            
+            <!-- 地图容器 -->
+            <div class="map-container">
+                <div class="map-header">
+                    <h3 class="map-title">地图视图 (<?php echo $centerX; ?>, <?php echo $centerY; ?>)</h3>
+                    <div class="map-controls">
+                        <button id="explore-btn">探索</button>
+                        <button id="refresh-btn">刷新</button>
+                    </div>
+                </div>
+                
+                <!-- 地图导航 -->
+                <div class="map-navigation">
+                    <button id="nav-nw" data-dx="-5" data-dy="-5">↖</button>
+                    <button id="nav-n" data-dx="0" data-dy="-5">↑</button>
+                    <button id="nav-ne" data-dx="5" data-dy="-5">↗</button>
+                    <button id="nav-w" data-dx="-5" data-dy="0">←</button>
+                    <button id="nav-center">⊙</button>
+                    <button id="nav-e" data-dx="5" data-dy="0">→</button>
+                    <button id="nav-sw" data-dx="-5" data-dy="5">↙</button>
+                    <button id="nav-s" data-dx="0" data-dy="5">↓</button>
+                    <button id="nav-se" data-dx="5" data-dy="5">↘</button>
+                </div>
+                
+                <!-- 地图搜索 -->
+                <div class="map-search">
+                    <label for="search-x">X:</label>
+                    <input type="number" id="search-x" min="0" max="<?php echo MAP_WIDTH - 1; ?>" value="<?php echo $centerX; ?>">
+                    <label for="search-y">Y:</label>
+                    <input type="number" id="search-y" min="0" max="<?php echo MAP_HEIGHT - 1; ?>" value="<?php echo $centerY; ?>">
+                    <button id="search-btn">前往</button>
+                </div>
+                
+                <!-- 地图网格 -->
+                <div class="map-grid" id="map-grid">
+                    <!-- 地图格子将通过JavaScript动态加载 -->
+                </div>
+                
+                <!-- 地图图例 -->
+                <div class="map-legend">
+                    <div class="map-legend-item">
+                        <div class="map-legend-color not-visible"></div>
+                        <span>未探索</span>
+                    </div>
+                    <div class="map-legend-item">
+                        <div class="map-legend-color empty"></div>
+                        <span>空地</span>
+                    </div>
+                    <div class="map-legend-item">
+                        <div class="map-legend-color resource bright"></div>
+                        <span>亮晶晶</span>
+                    </div>
+                    <div class="map-legend-item">
+                        <div class="map-legend-color resource warm"></div>
+                        <span>暖洋洋</span>
+                    </div>
+                    <div class="map-legend-item">
+                        <div class="map-legend-color resource cold"></div>
+                        <span>冷冰冰</span>
+                    </div>
+                    <div class="map-legend-item">
+                        <div class="map-legend-color resource green"></div>
+                        <span>郁萌萌</span>
+                    </div>
+                    <div class="map-legend-item">
+                        <div class="map-legend-color resource day"></div>
+                        <span>昼闪闪</span>
+                    </div>
+                    <div class="map-legend-item">
+                        <div class="map-legend-color resource night"></div>
+                        <span>夜静静</span>
+                    </div>
+                    <div class="map-legend-item">
+                        <div class="map-legend-color npc_fort"></div>
+                        <span>NPC城池</span>
+                    </div>
+                    <div class="map-legend-item">
+                        <div class="map-legend-color player_city"></div>
+                        <span>玩家城池</span>
+                    </div>
+                    <div class="map-legend-item">
+                        <div class="map-legend-color special silver_hole"></div>
+                        <span>银白之孔</span>
+                    </div>
+                </div>
+                
+                <!-- 地图信息 -->
+                <div class="map-info" id="map-info">
+                    <h3>地图信息</h3>
+                    <p>点击地图格子查看详细信息</p>
+                </div>
+            </div>
+        </main>
+        
+        <!-- 页脚 -->
+        <footer>
+            <p>&copy; <?php echo date('Y'); ?> <?php echo SITE_NAME; ?> - 版本 <?php echo GAME_VERSION; ?></p>
+        </footer>
+    </div>
+    
+    <script src="assets/js/script.js"></script>
+    <script src="assets/js/map.js"></script>
+</body>
+</html>

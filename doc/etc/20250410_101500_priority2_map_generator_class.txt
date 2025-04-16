@@ -1,0 +1,337 @@
+# 种火集结号 - 优先级2：地图生成器类实现
+时间戳: 2025-04-10 10:15:00
+
+## 地图生成器类设计
+
+### MapGenerator.php (地图生成器类)
+```php
+<?php
+// 种火集结号 - 地图生成器类
+
+class MapGenerator {
+    private $db;
+    
+    /**
+     * 构造函数
+     */
+    public function __construct() {
+        $this->db = Database::getInstance()->getConnection();
+    }
+    
+    /**
+     * 生成新地图
+     * @param bool $clearExisting 是否清除现有地图
+     * @return bool|string 成功返回true，失败返回错误信息
+     */
+    public function generateMap($clearExisting = false) {
+        // 检查是否已有地图
+        $query = "SELECT COUNT(*) as count FROM map_tiles";
+        $result = $this->db->query($query);
+        $row = $result->fetch_assoc();
+        
+        if ($row['count'] > 0) {
+            if (!$clearExisting) {
+                return '地图已存在，请先清除现有地图或设置clearExisting参数为true';
+            }
+            
+            // 清除现有地图
+            $clearQuery = "TRUNCATE TABLE map_tiles";
+            if (!$this->db->query($clearQuery)) {
+                return '清除现有地图失败';
+            }
+        }
+        
+        // 开始事务
+        $this->db->beginTransaction();
+        
+        try {
+            // 生成空地
+            $this->generateEmptyTiles();
+            
+            // 生成资源点
+            $this->generateResourcePoints();
+            
+            // 生成NPC城池
+            $this->generateNpcForts();
+            
+            // 生成特殊地点
+            $this->generateSpecialPoints();
+            
+            $this->db->commit();
+            return true;
+        } catch (Exception $e) {
+            $this->db->rollback();
+            return '生成地图失败: ' . $e->getMessage();
+        }
+    }
+    
+    /**
+     * 生成空地
+     */
+    private function generateEmptyTiles() {
+        // 创建批量插入语句
+        $query = "INSERT INTO map_tiles (x, y, type, is_visible) VALUES ";
+        $values = [];
+        
+        for ($x = 0; $x < MAP_WIDTH; $x++) {
+            for ($y = 0; $y < MAP_HEIGHT; $y++) {
+                $values[] = "($x, $y, 'empty', 0)";
+                
+                // 每1000个格子执行一次插入，避免插入语句过长
+                if (count($values) >= 1000) {
+                    $insertQuery = $query . implode(',', $values);
+                    $this->db->query($insertQuery);
+                    $values = [];
+                }
+            }
+        }
+        
+        // 插入剩余的格子
+        if (!empty($values)) {
+            $insertQuery = $query . implode(',', $values);
+            $this->db->query($insertQuery);
+        }
+    }
+    
+    /**
+     * 生成资源点
+     */
+    private function generateResourcePoints() {
+        // 资源点类型
+        $resourceTypes = ['bright', 'warm', 'cold', 'green', 'day', 'night'];
+        
+        // 每种资源点的数量
+        $resourcePointsPerType = floor((MAP_WIDTH * MAP_HEIGHT) * 0.02); // 2%的地图格子为资源点
+        
+        foreach ($resourceTypes as $type) {
+            $count = 0;
+            
+            while ($count < $resourcePointsPerType) {
+                // 随机选择坐标
+                $x = rand(0, MAP_WIDTH - 1);
+                $y = rand(0, MAP_HEIGHT - 1);
+                
+                // 检查该位置是否为空地
+                $tile = new Map();
+                if ($tile->loadByCoordinates($x, $y) && $tile->getType() == 'empty') {
+                    // 更新为资源点
+                    $query = "UPDATE map_tiles SET type = 'resource', subtype = ?, resource_amount = ? WHERE x = ? AND y = ?";
+                    $stmt = $this->db->prepare($query);
+                    $resourceAmount = rand(5000, 10000); // 初始资源量
+                    $stmt->bind_param('siii', $type, $resourceAmount, $x, $y);
+                    $stmt->execute();
+                    $stmt->close();
+                    
+                    $count++;
+                }
+            }
+        }
+    }
+    
+    /**
+     * 生成NPC城池
+     */
+    private function generateNpcForts() {
+        // NPC城池数量
+        $npcFortCount = floor((MAP_WIDTH * MAP_HEIGHT) * 0.01); // 1%的地图格子为NPC城池
+        
+        // 生成不同等级的NPC城池
+        $levelDistribution = [
+            1 => 0.4, // 40%为1级
+            2 => 0.3, // 30%为2级
+            3 => 0.2, // 20%为3级
+            4 => 0.08, // 8%为4级
+            5 => 0.02  // 2%为5级
+        ];
+        
+        $count = 0;
+        
+        while ($count < $npcFortCount) {
+            // 随机选择坐标
+            $x = rand(0, MAP_WIDTH - 1);
+            $y = rand(0, MAP_HEIGHT - 1);
+            
+            // 检查该位置是否为空地
+            $tile = new Map();
+            if ($tile->loadByCoordinates($x, $y) && $tile->getType() == 'empty') {
+                // 确定NPC城池等级
+                $level = $this->getRandomLevelByDistribution($levelDistribution);
+                
+                // 更新为NPC城池
+                $query = "UPDATE map_tiles SET type = 'npc_fort', npc_level = ? WHERE x = ? AND y = ?";
+                $stmt = $this->db->prepare($query);
+                $stmt->bind_param('iii', $level, $x, $y);
+                $stmt->execute();
+                $stmt->close();
+                
+                $count++;
+            }
+        }
+    }
+    
+    /**
+     * 生成特殊地点
+     */
+    private function generateSpecialPoints() {
+        // 生成银白之孔（游戏胜利目标）
+        $silverHoleGenerated = false;
+        
+        while (!$silverHoleGenerated) {
+            // 银白之孔位于地图中心区域
+            $centerX = floor(MAP_WIDTH / 2);
+            $centerY = floor(MAP_HEIGHT / 2);
+            $radius = floor(min(MAP_WIDTH, MAP_HEIGHT) * 0.1); // 中心区域半径为地图较小边长的10%
+            
+            $x = rand($centerX - $radius, $centerX + $radius);
+            $y = rand($centerY - $radius, $centerY + $radius);
+            
+            // 检查该位置是否为空地
+            $tile = new Map();
+            if ($tile->loadByCoordinates($x, $y) && $tile->getType() == 'empty') {
+                // 更新为银白之孔
+                $query = "UPDATE map_tiles SET type = 'special', subtype = 'silver_hole' WHERE x = ? AND y = ?";
+                $stmt = $this->db->prepare($query);
+                $stmt->bind_param('ii', $x, $y);
+                $stmt->execute();
+                $stmt->close();
+                
+                $silverHoleGenerated = true;
+            }
+        }
+        
+        // 可以在这里添加其他特殊地点的生成
+    }
+    
+    /**
+     * 根据分布概率获取随机等级
+     * @param array $distribution 分布概率数组，格式为 [level => probability]
+     * @return int 随机等级
+     */
+    private function getRandomLevelByDistribution($distribution) {
+        $rand = mt_rand() / mt_getrandmax(); // 0-1之间的随机数
+        $cumulativeProbability = 0;
+        
+        foreach ($distribution as $level => $probability) {
+            $cumulativeProbability += $probability;
+            
+            if ($rand <= $cumulativeProbability) {
+                return $level;
+            }
+        }
+        
+        // 默认返回最低等级
+        return min(array_keys($distribution));
+    }
+    
+    /**
+     * 重置地图
+     * @return bool 是否成功
+     */
+    public function resetMap() {
+        $query = "TRUNCATE TABLE map_tiles";
+        return $this->db->query($query);
+    }
+    
+    /**
+     * 获取地图统计信息
+     * @return array 统计信息
+     */
+    public function getMapStatistics() {
+        $statistics = [
+            'total_tiles' => 0,
+            'empty_tiles' => 0,
+            'resource_points' => [
+                'total' => 0,
+                'bright' => 0,
+                'warm' => 0,
+                'cold' => 0,
+                'green' => 0,
+                'day' => 0,
+                'night' => 0
+            ],
+            'npc_forts' => [
+                'total' => 0,
+                'level_1' => 0,
+                'level_2' => 0,
+                'level_3' => 0,
+                'level_4' => 0,
+                'level_5' => 0
+            ],
+            'player_cities' => 0,
+            'special_points' => [
+                'total' => 0,
+                'silver_hole' => 0
+            ]
+        ];
+        
+        // 获取总格子数
+        $query = "SELECT COUNT(*) as count FROM map_tiles";
+        $result = $this->db->query($query);
+        $row = $result->fetch_assoc();
+        $statistics['total_tiles'] = $row['count'];
+        
+        // 获取空地数量
+        $query = "SELECT COUNT(*) as count FROM map_tiles WHERE type = 'empty'";
+        $result = $this->db->query($query);
+        $row = $result->fetch_assoc();
+        $statistics['empty_tiles'] = $row['count'];
+        
+        // 获取资源点数量
+        $query = "SELECT COUNT(*) as count FROM map_tiles WHERE type = 'resource'";
+        $result = $this->db->query($query);
+        $row = $result->fetch_assoc();
+        $statistics['resource_points']['total'] = $row['count'];
+        
+        // 获取各类型资源点数量
+        $resourceTypes = ['bright', 'warm', 'cold', 'green', 'day', 'night'];
+        foreach ($resourceTypes as $type) {
+            $query = "SELECT COUNT(*) as count FROM map_tiles WHERE type = 'resource' AND subtype = ?";
+            $stmt = $this->db->prepare($query);
+            $stmt->bind_param('s', $type);
+            $stmt->execute();
+            $result = $stmt->get_result();
+            $row = $result->fetch_assoc();
+            $statistics['resource_points'][$type] = $row['count'];
+            $stmt->close();
+        }
+        
+        // 获取NPC城池数量
+        $query = "SELECT COUNT(*) as count FROM map_tiles WHERE type = 'npc_fort'";
+        $result = $this->db->query($query);
+        $row = $result->fetch_assoc();
+        $statistics['npc_forts']['total'] = $row['count'];
+        
+        // 获取各等级NPC城池数量
+        for ($level = 1; $level <= 5; $level++) {
+            $query = "SELECT COUNT(*) as count FROM map_tiles WHERE type = 'npc_fort' AND npc_level = ?";
+            $stmt = $this->db->prepare($query);
+            $stmt->bind_param('i', $level);
+            $stmt->execute();
+            $result = $stmt->get_result();
+            $row = $result->fetch_assoc();
+            $statistics['npc_forts']['level_' . $level] = $row['count'];
+            $stmt->close();
+        }
+        
+        // 获取玩家城池数量
+        $query = "SELECT COUNT(*) as count FROM map_tiles WHERE type = 'player_city'";
+        $result = $this->db->query($query);
+        $row = $result->fetch_assoc();
+        $statistics['player_cities'] = $row['count'];
+        
+        // 获取特殊地点数量
+        $query = "SELECT COUNT(*) as count FROM map_tiles WHERE type = 'special'";
+        $result = $this->db->query($query);
+        $row = $result->fetch_assoc();
+        $statistics['special_points']['total'] = $row['count'];
+        
+        // 获取银白之孔数量
+        $query = "SELECT COUNT(*) as count FROM map_tiles WHERE type = 'special' AND subtype = 'silver_hole'";
+        $result = $this->db->query($query);
+        $row = $result->fetch_assoc();
+        $statistics['special_points']['silver_hole'] = $row['count'];
+        
+        return $statistics;
+    }
+}
+```

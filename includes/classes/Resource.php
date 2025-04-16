@@ -13,7 +13,7 @@ class Resource {
     private $nightCrystal;  // 夜静静
     private $lastUpdate;
     private $isValid = false;
-    
+
     /**
      * 构造函数
      * @param int $userId 用户ID
@@ -23,7 +23,7 @@ class Resource {
         $this->userId = $userId;
         $this->loadResourceData();
     }
-    
+
     /**
      * 加载资源数据
      */
@@ -33,7 +33,7 @@ class Resource {
         $stmt->bind_param('i', $this->userId);
         $stmt->execute();
         $result = $stmt->get_result();
-        
+
         if ($result && $result->num_rows > 0) {
             $resourceData = $result->fetch_assoc();
             $this->resourceId = $resourceData['resource_id'];
@@ -46,10 +46,10 @@ class Resource {
             $this->lastUpdate = $resourceData['last_update'];
             $this->isValid = true;
         }
-        
+
         $stmt->close();
     }
-    
+
     /**
      * 检查资源是否有效
      * @return bool
@@ -57,7 +57,7 @@ class Resource {
     public function isValid() {
         return $this->isValid;
     }
-    
+
     /**
      * 获取亮晶晶资源数量
      * @return int
@@ -65,7 +65,7 @@ class Resource {
     public function getBrightCrystal() {
         return $this->brightCrystal;
     }
-    
+
     /**
      * 获取暖洋洋资源数量
      * @return int
@@ -73,7 +73,7 @@ class Resource {
     public function getWarmCrystal() {
         return $this->warmCrystal;
     }
-    
+
     /**
      * 获取冷冰冰资源数量
      * @return int
@@ -81,7 +81,7 @@ class Resource {
     public function getColdCrystal() {
         return $this->coldCrystal;
     }
-    
+
     /**
      * 获取郁萌萌资源数量
      * @return int
@@ -89,7 +89,7 @@ class Resource {
     public function getGreenCrystal() {
         return $this->greenCrystal;
     }
-    
+
     /**
      * 获取昼闪闪资源数量
      * @return int
@@ -97,7 +97,7 @@ class Resource {
     public function getDayCrystal() {
         return $this->dayCrystal;
     }
-    
+
     /**
      * 获取夜静静资源数量
      * @return int
@@ -105,7 +105,7 @@ class Resource {
     public function getNightCrystal() {
         return $this->nightCrystal;
     }
-    
+
     /**
      * 获取最后更新时间
      * @return string
@@ -113,7 +113,7 @@ class Resource {
     public function getLastUpdate() {
         return $this->lastUpdate;
     }
-    
+
     /**
      * 增加资源
      * @param string $type 资源类型 (bright, warm, cold, green, day, night)
@@ -124,10 +124,10 @@ class Resource {
         if ($amount <= 0) {
             return false;
         }
-        
+
         $column = '';
         $currentAmount = 0;
-        
+
         switch ($type) {
             case 'bright':
                 $column = 'bright_crystal';
@@ -156,16 +156,16 @@ class Resource {
             default:
                 return false;
         }
-        
+
         $newAmount = $currentAmount + $amount;
         $now = date('Y-m-d H:i:s');
-        
+
         $query = "UPDATE resources SET $column = ?, last_update = ? WHERE user_id = ?";
         $stmt = $this->db->prepare($query);
         $stmt->bind_param('isi', $newAmount, $now, $this->userId);
         $result = $stmt->execute();
         $stmt->close();
-        
+
         if ($result) {
             switch ($type) {
                 case 'bright':
@@ -187,14 +187,14 @@ class Resource {
                     $this->nightCrystal = $newAmount;
                     break;
             }
-            
+
             $this->lastUpdate = $now;
             return true;
         }
-        
+
         return false;
     }
-    
+
     /**
      * 减少资源
      * @param string $type 资源类型 (bright, warm, cold, green, day, night)
@@ -205,10 +205,10 @@ class Resource {
         if ($amount <= 0) {
             return false;
         }
-        
+
         $column = '';
         $currentAmount = 0;
-        
+
         switch ($type) {
             case 'bright':
                 $column = 'bright_crystal';
@@ -237,20 +237,20 @@ class Resource {
             default:
                 return false;
         }
-        
+
         if ($currentAmount < $amount) {
             return false; // 资源不足
         }
-        
+
         $newAmount = $currentAmount - $amount;
         $now = date('Y-m-d H:i:s');
-        
+
         $query = "UPDATE resources SET $column = ?, last_update = ? WHERE user_id = ?";
         $stmt = $this->db->prepare($query);
         $stmt->bind_param('isi', $newAmount, $now, $this->userId);
         $result = $stmt->execute();
         $stmt->close();
-        
+
         if ($result) {
             switch ($type) {
                 case 'bright':
@@ -272,14 +272,14 @@ class Resource {
                     $this->nightCrystal = $newAmount;
                     break;
             }
-            
+
             $this->lastUpdate = $now;
             return true;
         }
-        
+
         return false;
     }
-    
+
     /**
      * 检查资源是否足够
      * @param string $type 资源类型 (bright, warm, cold, green, day, night)
@@ -290,7 +290,7 @@ class Resource {
         if ($amount <= 0) {
             return true;
         }
-        
+
         switch ($type) {
             case 'bright':
                 return $this->brightCrystal >= $amount;
@@ -308,7 +308,7 @@ class Resource {
                 return false;
         }
     }
-    
+
     /**
      * 批量检查资源是否足够
      * @param array $resources 资源数组，格式为 ['type' => amount]
@@ -320,10 +320,10 @@ class Resource {
                 return false;
             }
         }
-        
+
         return true;
     }
-    
+
     /**
      * 批量减少资源
      * @param array $resources 资源数组，格式为 ['type' => amount]
@@ -334,19 +334,19 @@ class Resource {
         if (!$this->hasEnoughResources($resources)) {
             return false;
         }
-        
+
         // 开始事务
         $this->db->beginTransaction();
-        
+
         $success = true;
-        
+
         foreach ($resources as $type => $amount) {
             if (!$this->reduceResource($type, $amount)) {
                 $success = false;
                 break;
             }
         }
-        
+
         if ($success) {
             $this->db->commit();
             return true;
@@ -355,7 +355,7 @@ class Resource {
             return false;
         }
     }
-    
+
     /**
      * 更新资源产出
      * @param int $userId 用户ID
@@ -363,25 +363,25 @@ class Resource {
      */
     public static function updateResourceProduction($userId) {
         $db = Database::getInstance()->getConnection();
-        
+
         // 获取用户资源
         $resource = new Resource($userId);
         if (!$resource->isValid()) {
             return false;
         }
-        
+
         // 获取上次更新时间
         $lastUpdate = strtotime($resource->getLastUpdate());
         $now = time();
-        
+
         // 如果时间差小于1秒，不进行更新
         if ($now - $lastUpdate < 1) {
             return false;
         }
-        
+
         // 获取用户的所有城池
         $cities = City::getUserCities($userId);
-        
+
         // 计算资源产出
         $brightCrystalProduction = 0;
         $warmCrystalProduction = 0;
@@ -389,20 +389,20 @@ class Resource {
         $greenCrystalProduction = 0;
         $dayCrystalProduction = 0;
         $nightCrystalProduction = 0;
-        
+
         foreach ($cities as $city) {
             // 获取城池中的资源产出设施
             $resourceFacilities = Facility::getCityFacilitiesByType($city->getCityId(), 'resource_production');
-            
+
             foreach ($resourceFacilities as $facility) {
                 // 跳过正在建造或升级的设施
                 if ($facility->isUnderConstruction() || $facility->isUpgrading()) {
                     continue;
                 }
-                
+
                 // 计算设施产出的资源
                 $production = $facility->calculateResourceProduction($now - $lastUpdate);
-                
+
                 // 根据设施子类型增加对应资源
                 switch ($facility->getSubtype()) {
                     case 'bright':
@@ -426,45 +426,45 @@ class Resource {
                 }
             }
         }
-        
+
         // 获取用户的资源存储上限
         $storageCapacity = self::getUserResourceStorageCapacity($userId);
-        
+
         // 开始事务
         $db->beginTransaction();
-        
+
         try {
             // 更新资源
             if ($brightCrystalProduction > 0) {
                 $newBrightCrystal = min($resource->getBrightCrystal() + $brightCrystalProduction, $storageCapacity);
                 $resource->addResource('bright', $newBrightCrystal - $resource->getBrightCrystal());
             }
-            
+
             if ($warmCrystalProduction > 0) {
                 $newWarmCrystal = min($resource->getWarmCrystal() + $warmCrystalProduction, $storageCapacity);
                 $resource->addResource('warm', $newWarmCrystal - $resource->getWarmCrystal());
             }
-            
+
             if ($coldCrystalProduction > 0) {
                 $newColdCrystal = min($resource->getColdCrystal() + $coldCrystalProduction, $storageCapacity);
                 $resource->addResource('cold', $newColdCrystal - $resource->getColdCrystal());
             }
-            
+
             if ($greenCrystalProduction > 0) {
                 $newGreenCrystal = min($resource->getGreenCrystal() + $greenCrystalProduction, $storageCapacity);
                 $resource->addResource('green', $newGreenCrystal - $resource->getGreenCrystal());
             }
-            
+
             if ($dayCrystalProduction > 0) {
                 $newDayCrystal = min($resource->getDayCrystal() + $dayCrystalProduction, $storageCapacity);
                 $resource->addResource('day', $newDayCrystal - $resource->getDayCrystal());
             }
-            
+
             if ($nightCrystalProduction > 0) {
                 $newNightCrystal = min($resource->getNightCrystal() + $nightCrystalProduction, $storageCapacity);
                 $resource->addResource('night', $newNightCrystal - $resource->getNightCrystal());
             }
-            
+
             // 更新最后更新时间
             $query = "UPDATE resources SET last_update = ? WHERE user_id = ?";
             $stmt = $db->prepare($query);
@@ -472,7 +472,7 @@ class Resource {
             $stmt->bind_param('si', $nowDate, $userId);
             $stmt->execute();
             $stmt->close();
-            
+
             $db->commit();
             return true;
         } catch (Exception $e) {
@@ -481,7 +481,7 @@ class Resource {
             return false;
         }
     }
-    
+
     /**
      * 获取用户的资源存储上限
      * @param int $userId 用户ID
@@ -490,28 +490,73 @@ class Resource {
     public static function getUserResourceStorageCapacity($userId) {
         // 获取用户的所有城池
         $cities = City::getUserCities($userId);
-        
+
         // 初始资源存储上限
         $totalCapacity = INITIAL_RESOURCE_STORAGE;
-        
+
         foreach ($cities as $city) {
             // 获取城池中的贮存所
             $storages = Facility::getCityFacilitiesByType($city->getCityId(), 'storage');
-            
+
             foreach ($storages as $storage) {
                 // 跳过正在建造或升级的设施
                 if ($storage->isUnderConstruction() || $storage->isUpgrading()) {
                     continue;
                 }
-                
+
                 // 增加贮存所提供的存储上限
                 $totalCapacity += $storage->getResourceStorageCapacity();
             }
         }
-        
+
         return $totalCapacity;
     }
-    
+
+    /**
+     * 获取指定类型的资源数量
+     * @param string $type 资源类型 (bright, warm, cold, green, day, night)
+     * @return int
+     */
+    public function getResourceByType($type) {
+        switch ($type) {
+            case 'bright':
+                return $this->brightCrystal;
+            case 'warm':
+                return $this->warmCrystal;
+            case 'cold':
+                return $this->coldCrystal;
+            case 'green':
+                return $this->greenCrystal;
+            case 'day':
+                return $this->dayCrystal;
+            case 'night':
+                return $this->nightCrystal;
+            default:
+                return 0;
+        }
+    }
+
+    /**
+     * 添加指定类型的资源
+     * @param string $type 资源类型 (bright, warm, cold, green, day, night)
+     * @param int $amount 添加的数量
+     * @return bool
+     */
+    public function addResourceByType($type, $amount) {
+        return $this->addResource($type, $amount);
+    }
+
+    /**
+     * 获取资源存储上限
+     * @param string $type 资源类型 (bright, warm, cold, green, day, night)
+     * @return int
+     */
+    public function getStorageLimit($type = null) {
+        // 获取用户的资源存储上限
+        $capacity = self::getUserResourceStorageCapacity($this->userId);
+        return $capacity;
+    }
+
     /**
      * 更新思考回路产出
      * @param int $userId 用户ID
@@ -523,12 +568,12 @@ class Resource {
         if (!$user->isValid()) {
             return [];
         }
-        
+
         // 获取用户的所有城池
         $cities = City::getUserCities($userId);
-        
+
         $producedCities = [];
-        
+
         foreach ($cities as $city) {
             // 检查城池是否可以产出思考回路
             if ($city->canProduceCircuit()) {
@@ -541,7 +586,7 @@ class Resource {
                 }
             }
         }
-        
+
         return $producedCities;
     }
 }

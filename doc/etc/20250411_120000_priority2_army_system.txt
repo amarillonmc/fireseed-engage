@@ -1,0 +1,439 @@
+# 种火集结号 - 优先级2：军队系统设计
+时间戳: 2025-04-11 12:00:00
+
+## 军队系统设计
+
+### 功能概述
+军队系统将允许玩家组建军队，进行移动和攻击操作。系统需要考虑以下因素：
+1. 军队的组成（不同类型的士兵）
+2. 军队的移动（移动速度、路径规划）
+3. 军队的战斗（攻击力、防御力、战斗算法）
+4. 军队的状态（待命、行军、战斗、返回）
+
+### 数据库设计
+
+#### 1. armies表
+```sql
+CREATE TABLE `armies` (
+  `army_id` int(11) NOT NULL AUTO_INCREMENT,
+  `owner_id` int(11) NOT NULL,
+  `name` varchar(50) NOT NULL,
+  `status` enum('idle', 'marching', 'fighting', 'returning') NOT NULL DEFAULT 'idle',
+  `current_x` int(11) NOT NULL,
+  `current_y` int(11) NOT NULL,
+  `target_x` int(11) DEFAULT NULL,
+  `target_y` int(11) DEFAULT NULL,
+  `departure_time` datetime DEFAULT NULL,
+  `arrival_time` datetime DEFAULT NULL,
+  `return_time` datetime DEFAULT NULL,
+  `city_id` int(11) DEFAULT NULL,
+  PRIMARY KEY (`army_id`),
+  KEY `owner_id` (`owner_id`),
+  KEY `city_id` (`city_id`),
+  CONSTRAINT `armies_ibfk_1` FOREIGN KEY (`owner_id`) REFERENCES `users` (`user_id`) ON DELETE CASCADE,
+  CONSTRAINT `armies_ibfk_2` FOREIGN KEY (`city_id`) REFERENCES `cities` (`city_id`) ON DELETE SET NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+```
+
+#### 2. army_units表
+```sql
+CREATE TABLE `army_units` (
+  `army_unit_id` int(11) NOT NULL AUTO_INCREMENT,
+  `army_id` int(11) NOT NULL,
+  `soldier_type` varchar(20) NOT NULL,
+  `level` int(11) NOT NULL DEFAULT 1,
+  `quantity` int(11) NOT NULL,
+  PRIMARY KEY (`army_unit_id`),
+  KEY `army_id` (`army_id`),
+  CONSTRAINT `army_units_ibfk_1` FOREIGN KEY (`army_id`) REFERENCES `armies` (`army_id`) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+```
+
+#### 3. battles表
+```sql
+CREATE TABLE `battles` (
+  `battle_id` int(11) NOT NULL AUTO_INCREMENT,
+  `attacker_army_id` int(11) NOT NULL,
+  `defender_army_id` int(11) DEFAULT NULL,
+  `defender_city_id` int(11) DEFAULT NULL,
+  `defender_tile_id` int(11) DEFAULT NULL,
+  `battle_time` datetime NOT NULL,
+  `result` enum('attacker_win', 'defender_win', 'draw') NOT NULL,
+  `attacker_losses` text DEFAULT NULL,
+  `defender_losses` text DEFAULT NULL,
+  `rewards` text DEFAULT NULL,
+  PRIMARY KEY (`battle_id`),
+  KEY `attacker_army_id` (`attacker_army_id`),
+  KEY `defender_army_id` (`defender_army_id`),
+  KEY `defender_city_id` (`defender_city_id`),
+  KEY `defender_tile_id` (`defender_tile_id`),
+  CONSTRAINT `battles_ibfk_1` FOREIGN KEY (`attacker_army_id`) REFERENCES `armies` (`army_id`) ON DELETE CASCADE,
+  CONSTRAINT `battles_ibfk_2` FOREIGN KEY (`defender_army_id`) REFERENCES `armies` (`army_id`) ON DELETE SET NULL,
+  CONSTRAINT `battles_ibfk_3` FOREIGN KEY (`defender_city_id`) REFERENCES `cities` (`city_id`) ON DELETE SET NULL,
+  CONSTRAINT `battles_ibfk_4` FOREIGN KEY (`defender_tile_id`) REFERENCES `map_tiles` (`tile_id`) ON DELETE SET NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+```
+
+### 类设计
+
+#### 1. Army类
+```php
+class Army {
+    private $db;
+    private $armyId;
+    private $ownerId;
+    private $name;
+    private $status;
+    private $currentX;
+    private $currentY;
+    private $targetX;
+    private $targetY;
+    private $departureTime;
+    private $arrivalTime;
+    private $returnTime;
+    private $cityId;
+    private $units = [];
+    private $isValid = false;
+    
+    // 构造函数
+    public function __construct($armyId = null) {
+        $this->db = Database::getInstance()->getConnection();
+        
+        if ($armyId !== null) {
+            $this->armyId = $armyId;
+            $this->loadArmyData();
+        }
+    }
+    
+    // 加载军队数据
+    private function loadArmyData() {
+        // 加载军队基本信息
+        // 加载军队单位信息
+    }
+    
+    // 创建新军队
+    public function createArmy($ownerId, $name, $cityId, $units) {
+        // 创建军队记录
+        // 添加军队单位
+    }
+    
+    // 移动军队
+    public function moveArmy($targetX, $targetY) {
+        // 计算移动时间
+        // 更新军队状态和目标位置
+    }
+    
+    // 攻击目标
+    public function attackTarget($targetType, $targetId) {
+        // 执行战斗
+        // 记录战斗结果
+    }
+    
+    // 返回城池
+    public function returnToCity() {
+        // 计算返回时间
+        // 更新军队状态
+    }
+    
+    // 获取军队战斗力
+    public function getCombatPower() {
+        // 计算军队总战斗力
+    }
+    
+    // 获取军队移动速度
+    public function getMovementSpeed() {
+        // 计算军队移动速度（基于最慢的单位）
+    }
+    
+    // 检查军队是否已到达目标
+    public function checkArrival() {
+        // 检查当前时间是否超过到达时间
+    }
+    
+    // 检查军队是否已返回城池
+    public function checkReturn() {
+        // 检查当前时间是否超过返回时间
+    }
+    
+    // 获取军队状态
+    public function getStatus() {
+        return $this->status;
+    }
+    
+    // 获取军队单位
+    public function getUnits() {
+        return $this->units;
+    }
+    
+    // 获取军队拥有者ID
+    public function getOwnerId() {
+        return $this->ownerId;
+    }
+    
+    // 获取军队所属城池ID
+    public function getCityId() {
+        return $this->cityId;
+    }
+    
+    // 获取军队当前位置
+    public function getCurrentPosition() {
+        return [$this->currentX, $this->currentY];
+    }
+    
+    // 获取军队目标位置
+    public function getTargetPosition() {
+        return [$this->targetX, $this->targetY];
+    }
+    
+    // 获取军队到达时间
+    public function getArrivalTime() {
+        return $this->arrivalTime;
+    }
+    
+    // 获取军队返回时间
+    public function getReturnTime() {
+        return $this->returnTime;
+    }
+    
+    // 检查军队是否有效
+    public function isValid() {
+        return $this->isValid;
+    }
+}
+```
+
+#### 2. Battle类
+```php
+class Battle {
+    private $db;
+    private $battleId;
+    private $attackerArmyId;
+    private $defenderArmyId;
+    private $defenderCityId;
+    private $defenderTileId;
+    private $battleTime;
+    private $result;
+    private $attackerLosses;
+    private $defenderLosses;
+    private $rewards;
+    private $isValid = false;
+    
+    // 构造函数
+    public function __construct($battleId = null) {
+        $this->db = Database::getInstance()->getConnection();
+        
+        if ($battleId !== null) {
+            $this->battleId = $battleId;
+            $this->loadBattleData();
+        }
+    }
+    
+    // 加载战斗数据
+    private function loadBattleData() {
+        // 加载战斗记录
+    }
+    
+    // 创建新战斗
+    public function createBattle($attackerArmyId, $defenderType, $defenderId) {
+        // 创建战斗记录
+        // 执行战斗
+        // 记录战斗结果
+    }
+    
+    // 执行战斗
+    private function executeBattle($attackerArmy, $defenderType, $defender) {
+        // 计算战斗结果
+        // 计算损失
+        // 计算奖励
+    }
+    
+    // 计算战斗结果
+    private function calculateBattleResult($attackerPower, $defenderPower) {
+        // 根据双方战斗力计算战斗结果
+    }
+    
+    // 计算损失
+    private function calculateLosses($army, $lossPercentage) {
+        // 计算军队损失
+    }
+    
+    // 计算奖励
+    private function calculateRewards($defenderType, $defender) {
+        // 根据防守方类型计算奖励
+    }
+    
+    // 获取战斗ID
+    public function getBattleId() {
+        return $this->battleId;
+    }
+    
+    // 获取攻击方军队ID
+    public function getAttackerArmyId() {
+        return $this->attackerArmyId;
+    }
+    
+    // 获取防守方军队ID
+    public function getDefenderArmyId() {
+        return $this->defenderArmyId;
+    }
+    
+    // 获取防守方城池ID
+    public function getDefenderCityId() {
+        return $this->defenderCityId;
+    }
+    
+    // 获取防守方地图格子ID
+    public function getDefenderTileId() {
+        return $this->defenderTileId;
+    }
+    
+    // 获取战斗时间
+    public function getBattleTime() {
+        return $this->battleTime;
+    }
+    
+    // 获取战斗结果
+    public function getResult() {
+        return $this->result;
+    }
+    
+    // 获取攻击方损失
+    public function getAttackerLosses() {
+        return $this->attackerLosses;
+    }
+    
+    // 获取防守方损失
+    public function getDefenderLosses() {
+        return $this->defenderLosses;
+    }
+    
+    // 获取奖励
+    public function getRewards() {
+        return $this->rewards;
+    }
+    
+    // 检查战斗是否有效
+    public function isValid() {
+        return $this->isValid;
+    }
+}
+```
+
+### 战斗系统设计
+
+#### 1. 战斗力计算
+- 每种士兵类型有不同的攻击力和防御力
+- 士兵等级会影响攻击力和防御力
+- 军队总战斗力 = 所有士兵的战斗力总和
+
+#### 2. 战斗结果计算
+- 攻击方战斗力 > 防守方战斗力 * 1.5：攻击方大胜
+- 攻击方战斗力 > 防守方战斗力：攻击方小胜
+- 攻击方战斗力 * 1.5 < 防守方战斗力：防守方大胜
+- 攻击方战斗力 < 防守方战斗力：防守方小胜
+- 攻击方战斗力 ≈ 防守方战斗力：平局
+
+#### 3. 损失计算
+- 战败方损失：20% - 50%的士兵
+- 战胜方损失：5% - 20%的士兵
+- 平局双方损失：10% - 30%的士兵
+
+#### 4. 奖励计算
+- 攻占NPC城池：获得资源、思考回路点数
+- 攻占资源点：获得该资源点的控制权
+- 攻占玩家城池：获得部分资源、降低对方城池耐久度
+
+### 军队移动系统设计
+
+#### 1. 移动速度计算
+- 军队移动速度取决于最慢的单位
+- 移动速度单位：格/小时
+
+#### 2. 移动时间计算
+- 移动时间 = 距离 / 移动速度
+- 距离使用曼哈顿距离：|x2 - x1| + |y2 - y1|
+
+#### 3. 移动状态
+- idle：待命状态，军队在城池中
+- marching：行军状态，军队正在前往目标
+- fighting：战斗状态，军队正在战斗
+- returning：返回状态，军队正在返回城池
+
+### 前端界面设计
+
+#### 1. 军队管理页面
+- 显示玩家的所有军队
+- 支持创建新军队
+- 支持查看军队详情
+- 支持解散军队
+
+#### 2. 军队详情页面
+- 显示军队组成
+- 显示军队状态
+- 支持军队移动
+- 支持军队攻击
+- 支持军队返回
+
+#### 3. 战斗报告页面
+- 显示战斗双方信息
+- 显示战斗结果
+- 显示战斗损失
+- 显示战斗奖励
+
+### API接口设计
+
+#### 1. 军队管理API
+- create_army.php：创建新军队
+- disband_army.php：解散军队
+- get_army_info.php：获取军队信息
+- get_user_armies.php：获取用户的所有军队
+
+#### 2. 军队操作API
+- move_army.php：移动军队
+- attack_target.php：攻击目标
+- return_army.php：军队返回城池
+
+#### 3. 战斗API
+- get_battle_report.php：获取战斗报告
+- get_user_battles.php：获取用户的所有战斗记录
+
+### 定时任务
+
+#### 1. 检查军队到达
+- 检查所有行军状态的军队是否已到达目标
+- 如果到达目标，执行相应操作（攻击、占领等）
+
+#### 2. 检查军队返回
+- 检查所有返回状态的军队是否已返回城池
+- 如果已返回城池，更新军队状态为待命
+
+### 实现步骤
+
+#### 1. 创建数据库表
+- 创建armies表
+- 创建army_units表
+- 创建battles表
+
+#### 2. 实现Army类
+- 实现基本属性和方法
+- 实现军队创建和管理功能
+- 实现军队移动和攻击功能
+
+#### 3. 实现Battle类
+- 实现基本属性和方法
+- 实现战斗系统
+- 实现战斗结果计算
+
+#### 4. 实现前端界面
+- 实现军队管理页面
+- 实现军队详情页面
+- 实现战斗报告页面
+
+#### 5. 实现API接口
+- 实现军队管理API
+- 实现军队操作API
+- 实现战斗API
+
+#### 6. 实现定时任务
+- 实现检查军队到达的定时任务
+- 实现检查军队返回的定时任务

@@ -1,0 +1,147 @@
+# 种火集结号 - 优先级2：资源点自动收集系统
+时间戳: 2025-04-11 09:00:00
+
+## 资源点自动收集系统设计
+
+### 功能概述
+资源点自动收集系统将定期从玩家占领的资源点收集资源，并将其添加到玩家的资源库中。系统需要考虑以下因素：
+1. 资源点的类型（亮晶晶、暖洋洋、冷冰冰、郁萌萌、昼闪闪、夜静静）
+2. 资源点的剩余资源量
+3. 资源点的收集效率
+4. 玩家的资源存储上限
+
+### 实现方案
+
+#### 1. 资源点收集效率
+- 每个资源点有一个基础收集效率，默认为每小时100单位资源
+- 玩家可以通过建造采集设施来提高收集效率
+- 收集效率受玩家等级和研究技术的影响
+
+#### 2. 资源收集计算
+- 每次收集时，计算上次收集到现在的时间间隔
+- 根据时间间隔和收集效率计算应收集的资源量
+- 如果资源点剩余资源量不足，则只收集剩余的资源
+- 如果玩家资源存储已满，则停止收集
+
+#### 3. 资源收集触发
+- 系统定时任务：每小时执行一次，收集所有玩家的资源点资源
+- 玩家登录时：检查并收集玩家离线期间的资源
+- 玩家手动触发：玩家可以手动触发资源收集
+
+### 数据库设计
+
+#### 1. 修改map_tiles表
+添加以下字段：
+- `last_collection_time`: 上次收集时间
+- `collection_efficiency`: 收集效率（每小时收集的资源量）
+
+```sql
+ALTER TABLE map_tiles
+ADD COLUMN last_collection_time DATETIME DEFAULT NULL,
+ADD COLUMN collection_efficiency INT DEFAULT 100;
+```
+
+### 实现步骤
+
+#### 1. 修改Map类
+- 添加getLastCollectionTime()和getCollectionEfficiency()方法
+- 添加setLastCollectionTime()和setCollectionEfficiency()方法
+- 添加collectResource()方法，用于收集资源
+
+#### 2. 创建ResourceCollector类
+- 实现collectResourcesForUser()方法，收集指定用户的所有资源点资源
+- 实现collectResourcesForAll()方法，收集所有用户的资源点资源
+
+#### 3. 修改定时任务脚本
+- 添加资源收集功能，定期执行ResourceCollector::collectResourcesForAll()
+
+#### 4. 添加API接口
+- 创建collect_resources.php，用于手动触发资源收集
+
+#### 5. 修改登录逻辑
+- 在用户登录时调用ResourceCollector::collectResourcesForUser()
+
+### 资源收集算法
+
+```php
+function collectResource($tileId, $userId) {
+    // 获取资源点信息
+    $tile = new Map($tileId);
+    if (!$tile->isValid() || $tile->getType() != 'resource' || $tile->getOwnerId() != $userId) {
+        return false;
+    }
+    
+    // 获取上次收集时间
+    $lastCollectionTime = $tile->getLastCollectionTime();
+    if (!$lastCollectionTime) {
+        // 如果是首次收集，设置当前时间为上次收集时间
+        $tile->setLastCollectionTime(date('Y-m-d H:i:s'));
+        return true;
+    }
+    
+    // 计算时间间隔（小时）
+    $now = time();
+    $lastCollection = strtotime($lastCollectionTime);
+    $hoursPassed = ($now - $lastCollection) / 3600;
+    
+    // 如果时间间隔太短，不进行收集
+    if ($hoursPassed < 0.1) { // 至少6分钟
+        return false;
+    }
+    
+    // 计算应收集的资源量
+    $efficiency = $tile->getCollectionEfficiency();
+    $resourceToCollect = floor($hoursPassed * $efficiency);
+    
+    // 检查资源点剩余资源量
+    $remainingResource = $tile->getResourceAmount();
+    if ($resourceToCollect > $remainingResource) {
+        $resourceToCollect = $remainingResource;
+    }
+    
+    // 如果没有资源可收集，返回
+    if ($resourceToCollect <= 0) {
+        return false;
+    }
+    
+    // 获取资源类型
+    $resourceType = $tile->getSubtype();
+    
+    // 获取用户资源
+    $resource = new Resource($userId);
+    if (!$resource->isValid()) {
+        return false;
+    }
+    
+    // 检查资源存储上限
+    $storageLimit = $resource->getStorageLimit($resourceType);
+    $currentResource = $resource->getResourceByType($resourceType);
+    
+    if ($currentResource >= $storageLimit) {
+        return false; // 资源已满
+    }
+    
+    // 计算实际可添加的资源量
+    $canAdd = $storageLimit - $currentResource;
+    if ($resourceToCollect > $canAdd) {
+        $resourceToCollect = $canAdd;
+    }
+    
+    // 添加资源
+    $resource->addResourceByType($resourceType, $resourceToCollect);
+    
+    // 减少资源点的资源量
+    $tile->setResourceAmount($remainingResource - $resourceToCollect);
+    
+    // 更新上次收集时间
+    $tile->setLastCollectionTime(date('Y-m-d H:i:s'));
+    
+    return $resourceToCollect;
+}
+```
+
+### 注意事项
+1. 资源收集应考虑性能，避免频繁的数据库操作
+2. 资源点耗尽后应该如何处理（可以设置为自动恢复或需要玩家手动重置）
+3. 需要考虑多玩家同时收集同一资源点的情况
+4. 资源收集应该有上限，避免玩家长时间不登录后获得大量资源

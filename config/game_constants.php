@@ -8,6 +8,13 @@ define('MAP_HEIGHT', 512);
 define('MAP_CENTER_X', 256);
 define('MAP_CENTER_Y', 256);
 
+// 地图格子类型
+define('TILE_TYPE_EMPTY', 'empty');
+define('TILE_TYPE_RESOURCE', 'resource');
+define('TILE_TYPE_NPC_FORT', 'npc_fort');
+define('TILE_TYPE_PLAYER_CITY', 'player_city');
+define('TILE_TYPE_SPECIAL', 'special');
+
 // 资源设置
 define('RESOURCE_PRODUCTION_INTERVAL', 3); // 每3秒产出1点资源
 define('INITIAL_RESOURCE_STORAGE', 100000); // 初始资源存储上限
