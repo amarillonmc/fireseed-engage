@@ -1,0 +1,178 @@
+# 种火集结号 - 优先级2：功能实装总结
+时间戳: 2025-04-12 18:00:00
+
+## 实装内容总结
+
+我们已经完成了优先级2的所有功能实装，包括资源点自动收集系统、军队系统、NPC城池攻占和玩家之间的战斗功能。以下是已实装的内容：
+
+### 1. 资源点自动收集系统
+
+#### 数据库修改
+- 修改map_tiles表，添加last_collection_time和collection_efficiency字段
+- last_collection_time记录上次收集时间
+- collection_efficiency记录收集效率（每小时收集的资源量）
+
+#### Map类修改
+- 添加getLastCollectionTime()和setLastCollectionTime()方法
+- 添加getCollectionEfficiency()和setCollectionEfficiency()方法
+- 添加collectResource()方法，用于收集资源
+
+#### Resource类修改
+- 添加getResourceByType()方法，用于获取指定类型的资源数量
+- 添加addResourceByType()方法，用于添加指定类型的资源
+- 添加getStorageLimit()方法，用于获取资源存储上限
+
+#### ResourceCollector类
+- 实现collectResourcesForUser()方法，收集指定用户的所有资源点资源
+- 实现collectResourcesForAll()方法，收集所有用户的资源点资源
+- 实现collectResourceFromTile()方法，收集指定资源点的资源
+
+#### API接口
+- 创建collect_resources.php，用于手动触发资源收集
+- 支持收集单个资源点或所有资源点
+
+#### 前端界面
+- 创建territory.php页面，用于显示和管理资源点
+- 支持查看资源点信息、收集资源、放弃资源点等操作
+
+#### 定时任务
+- 修改cron_tasks.php，添加资源收集功能
+- 定期执行ResourceCollector::collectResourcesForAll()
+
+### 2. 军队系统
+
+#### 数据库表
+- armies表：存储军队基本信息
+- army_units表：存储军队单位信息
+- battles表：存储战斗记录
+
+#### Army类
+- 实现了军队的基本属性和方法
+- 支持创建、移动、攻击和解散军队
+- 实现了军队战斗力和移动速度的计算
+- 提供了检查军队到达和返回的方法
+
+#### Battle类
+- 实现了战斗的基本属性和方法
+- 支持创建和执行战斗
+- 实现了战斗结果、损失和奖励的计算
+- 提供了应用战斗结果的方法
+
+#### 前端界面
+- armies.php：军队管理页面，显示军队列表和创建新军队
+- move_army.php：军队移动页面，支持设置目标坐标
+- battle_report.php：战斗报告页面，显示战斗详情
+- battles.php：战斗列表页面，显示所有战斗记录
+
+#### API接口
+- create_army.php：创建新军队
+- disband_army.php：解散军队
+- return_army.php：军队返回城池
+- get_city_soldiers.php：获取城池中的士兵
+- attack_target.php：攻击目标
+- get_battle_report.php：获取战斗报告
+
+#### 定时任务
+- 检查行军中的军队是否已到达目标
+- 检查返回中的军队是否已返回城池
+- 检查待处理的战斗并执行
+
+### 3. NPC城池攻占功能
+
+#### 数据库修改
+- 修改map_tiles表，添加npc_level、npc_garrison和npc_respawn_time字段
+- npc_level记录NPC城池等级
+- npc_garrison记录NPC城池驻军数量
+- npc_respawn_time记录NPC城池重生时间
+
+#### Map类修改
+- 添加getNpcGarrison()和setNpcGarrison()方法
+- 添加getNpcRespawnTime()和setNpcRespawnTime()方法
+- 添加respawnNpcFort()方法，用于重生NPC城池
+- 添加calculateNewNpcLevel()方法，用于计算新的NPC等级
+- 添加calculateNpcGarrison()方法，用于计算NPC驻军数量
+- 添加respawnAllNpcForts()方法，用于重生所有NPC城池
+
+#### Battle类修改
+- 修改getDefenderPower()方法，增强对NPC城池防御力的计算
+- 修改applyBattleResults()方法，增强对NPC城池战斗结果的处理
+- 设置NPC城池重生时间和拥有者
+
+#### 定时任务修改
+- 修改cron_tasks.php，添加检查并重生NPC城池的功能
+
+### 4. 玩家之间的战斗功能
+
+#### 数据库修改
+- 修改cities表，添加defense_strategy字段
+- defense_strategy记录城池防御策略，可选值为defense（优先防御）、balanced（平衡）和production（优先产出）
+
+#### City类修改
+- 添加getDefensePower()方法，用于计算城池防御力
+- 添加getResource()方法，用于获取城池资源
+- 添加setDefenseStrategy()和getDefenseStrategy()方法，用于设置和获取城池防御策略
+- 添加getDefenseStrategyBonus()方法，用于获取城池防御策略加成
+
+#### Battle类修改
+- 修改getDefenderPower()方法，增强对玩家城池防御力的计算
+- 修改calculateRewards()方法，增强对玩家城池奖励的计算
+- 修改applyBattleResults()方法，增强对玩家城池战斗结果的处理
+- 添加城池占领功能
+
+#### 前端界面
+- 创建defense.php页面，用于设置城池防御策略
+- 支持选择不同的防御策略，查看防御策略加成
+
+#### API接口
+- 创建set_defense_strategy.php，用于设置城池防御策略
+- 创建get_defense_status.php，用于获取城池防御状态
+
+## 功能特点
+
+### 1. 资源点自动收集系统
+- 资源点可以自动收集资源，无需玩家手动操作
+- 资源点有收集效率，影响每小时收集的资源量
+- 资源点有上次收集时间，用于计算应收集的资源量
+- 资源点收集的资源会自动添加到玩家的资源中
+- 玩家可以手动触发资源收集，也可以等待系统自动收集
+
+### 2. 军队系统
+- 玩家可以创建军队，从城池中选择士兵组建军队
+- 军队可以移动，设置目标坐标，军队开始行军
+- 军队可以攻击其他军队、城池或地图格子
+- 军队有战斗力，影响战斗结果
+- 军队有移动速度，影响行军时间
+- 军队有状态，包括待命、行军、战斗和返回
+
+### 3. NPC城池攻占功能
+- NPC城池有等级，影响防御力和奖励
+- NPC城池有驻军，影响防御力
+- 攻占NPC城池可以获得资源和思考回路点数
+- NPC城池会在一定时间后重生，重生后等级可能会变化
+- NPC城池重生时间根据等级计算，等级越高，重生时间越长
+
+### 4. 玩家之间的战斗功能
+- 玩家可以攻击其他玩家的城池和军队
+- 城池有防御力，影响战斗结果
+- 城池有防御策略，影响防御力和资源产出
+- 攻占玩家城池可以获得资源和降低对方城池耐久度
+- 攻击方大胜可以占领非主城的城池
+
+## 下一步计划
+
+至此，我们已经完成了优先级2的所有功能实装。接下来，我们将进入优先级3的功能实装：
+
+1. **武将系统**
+   - 实现武将的招募和培养
+   - 添加武将技能和特性
+   - 实现武将对军队和城池的加成
+
+2. **联盟系统**
+   - 实现联盟的创建和管理
+   - 添加联盟任务和活动
+   - 实现联盟之间的战争
+
+3. **任务系统**
+   - 实现主线任务和支线任务
+   - 添加日常任务和周常任务
+   - 实现任务奖励和进度追踪

@@ -202,21 +202,19 @@ class Battle {
             case 'army':
                 return $defender->getCombatPower();
             case 'city':
-                // 城池防御力 = 城池等级 * 100 + 城池中的士兵战斗力
-                $cityPower = $defender->getLevel() * 100;
-                $soldiers = $defender->getSoldiers();
+                // 使用城池的getDefensePower方法获取防御力
+                $cityPower = $defender->getDefensePower();
 
-                foreach ($soldiers as $soldier) {
-                    $soldierPower = $soldier->getDefensePower();
-                    $cityPower += $soldierPower;
-                }
+                // 应用防御策略加成
+                $defenseBonus = $defender->getDefenseStrategyBonus()[0];
+                $cityPower = $cityPower * $defenseBonus;
 
                 return $cityPower;
             case 'tile':
                 // 地图格子防御力
                 if ($defender->getType() == 'npc_fort') {
-                    // NPC城池防御力 = NPC等级 * 200
-                    return $defender->getNpcLevel() * 200;
+                    // NPC城池防御力 = NPC等级 * 200 + NPC驻军数量 * 10
+                    return $defender->getNpcLevel() * 200 + $defender->getNpcGarrison() * 10;
                 } elseif ($defender->getType() == 'resource') {
                     // 资源点防御力 = 50
                     return 50;
@@ -370,6 +368,14 @@ class Battle {
                         'night' => ceil($defender->getResource()->getNightCrystal() * 0.3)
                     ];
                     $rewards['circuit_points'] = 10; // 获得10点思考回路
+
+                    // 大胜可以降低城池耐久度30%
+                    $rewards['durability_reduction'] = ceil($defender->getMaxDurability() * 0.3);
+
+                    // 如果城池不是主城，大胜可以占领城池
+                    if (!$defender->isMainCity()) {
+                        $rewards['capture_city'] = true;
+                    }
                 } else {
                     // 小胜可以获得城池资源的10%
                     $rewards['resources'] = [
@@ -381,6 +387,9 @@ class Battle {
                         'night' => ceil($defender->getResource()->getNightCrystal() * 0.1)
                     ];
                     $rewards['circuit_points'] = 5; // 获得5点思考回路
+
+                    // 小胜可以降低城池耐久度10%
+                    $rewards['durability_reduction'] = ceil($defender->getMaxDurability() * 0.1);
                 }
                 break;
             case 'tile':
@@ -434,11 +443,42 @@ class Battle {
                 if (isset($defenderLosses['durability_loss'])) {
                     $defender->reduceDurability($defenderLosses['durability_loss']);
                 }
+
+                // 如果有耐久度减少奖励，应用到城池
+                if (isset($rewards['durability_reduction'])) {
+                    $defender->reduceDurability($rewards['durability_reduction']);
+                }
+
+                // 如果可以占领城池，则将城池转给攻击方
+                if (isset($rewards['capture_city']) && $rewards['capture_city'] && !$defender->isMainCity()) {
+                    // 更新城池拥有者
+                    $query = "UPDATE cities SET owner_id = ? WHERE city_id = ?";
+                    $stmt = $this->db->prepare($query);
+                    $stmt->bind_param('ii', $attackerArmy->getOwnerId(), $defender->getCityId());
+                    $stmt->execute();
+                    $stmt->close();
+
+                    // 更新地图格子拥有者
+                    $coordinates = $defender->getCoordinates();
+                    $tile = new Map();
+                    if ($tile->loadByCoordinates($coordinates[0], $coordinates[1])) {
+                        $tile->setOwner($attackerArmy->getOwnerId());
+                    }
+                }
                 break;
             case 'tile':
                 if ($defender->getType() == 'resource' && isset($defenderLosses['resource_loss'])) {
                     $newResourceAmount = $defender->getResourceAmount() - $defenderLosses['resource_loss'];
                     $defender->setResourceAmount(max(0, $newResourceAmount));
+                } elseif ($defender->getType() == 'npc_fort' && ($battleResult == 'attacker_win' || $battleResult == 'attacker_win_big')) {
+                    // 设置NPC城池重生时间
+                    $npcLevel = $defender->getNpcLevel();
+                    $respawnHours = 6 * pow(2, $npcLevel - 1); // 1级:6小时, 2级:12小时, 3级:24小时, 4级:48小时, 5级:96小时
+                    $respawnTime = date('Y-m-d H:i:s', time() + $respawnHours * 3600);
+                    $defender->setNpcRespawnTime($respawnTime);
+
+                    // 设置NPC城池拥有者为攻击方
+                    $defender->setOwner($attackerArmy->getOwnerId());
                 }
                 break;
         }

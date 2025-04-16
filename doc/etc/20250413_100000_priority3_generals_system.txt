@@ -1,0 +1,388 @@
+# 种火集结号 - 优先级3：武将系统设计
+时间戳: 2025-04-13 10:00:00
+
+## 功能概述
+
+武将系统是游戏的核心系统之一，玩家可以招募、培养和分配武将，提升军队和城池的能力。武将拥有不同的属性、技能和特性，可以为玩家提供各种加成和特殊能力。
+
+### 武将系统特点
+1. 武将有不同的稀有度和品质，影响基础属性和成长潜力
+2. 武将有多种属性，包括统帅、武力、智力、政治和魅力
+3. 武将可以学习和升级技能，提供各种战斗和非战斗加成
+4. 武将可以分配到城池或军队，提供相应的加成
+5. 武将可以通过招募、任务和事件获得
+6. 武将可以通过经验值升级，提升属性和解锁技能
+
+## 数据库设计
+
+### 1. generals表
+```sql
+CREATE TABLE `generals` (
+  `general_id` int(11) NOT NULL AUTO_INCREMENT,
+  `owner_id` int(11) NOT NULL,
+  `name` varchar(50) NOT NULL,
+  `rarity` enum('common', 'uncommon', 'rare', 'epic', 'legendary') NOT NULL,
+  `level` int(11) NOT NULL DEFAULT 1,
+  `experience` int(11) NOT NULL DEFAULT 0,
+  `leadership` int(11) NOT NULL,
+  `strength` int(11) NOT NULL,
+  `intelligence` int(11) NOT NULL,
+  `politics` int(11) NOT NULL,
+  `charm` int(11) NOT NULL,
+  `leadership_growth` float NOT NULL,
+  `strength_growth` float NOT NULL,
+  `intelligence_growth` float NOT NULL,
+  `politics_growth` float NOT NULL,
+  `charm_growth` float NOT NULL,
+  `skill_points` int(11) NOT NULL DEFAULT 0,
+  `is_active` tinyint(1) NOT NULL DEFAULT 1,
+  `created_at` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (`general_id`),
+  KEY `owner_id` (`owner_id`),
+  CONSTRAINT `generals_ibfk_1` FOREIGN KEY (`owner_id`) REFERENCES `users` (`user_id`) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+```
+
+### 2. general_skills表
+```sql
+CREATE TABLE `general_skills` (
+  `skill_id` int(11) NOT NULL AUTO_INCREMENT,
+  `general_id` int(11) NOT NULL,
+  `skill_type` varchar(20) NOT NULL,
+  `skill_name` varchar(50) NOT NULL,
+  `skill_level` int(11) NOT NULL DEFAULT 1,
+  `skill_effect` text NOT NULL,
+  PRIMARY KEY (`skill_id`),
+  KEY `general_id` (`general_id`),
+  CONSTRAINT `general_skills_ibfk_1` FOREIGN KEY (`general_id`) REFERENCES `generals` (`general_id`) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+```
+
+### 3. general_assignments表
+```sql
+CREATE TABLE `general_assignments` (
+  `assignment_id` int(11) NOT NULL AUTO_INCREMENT,
+  `general_id` int(11) NOT NULL,
+  `assignment_type` enum('city', 'army') NOT NULL,
+  `target_id` int(11) NOT NULL,
+  `assigned_at` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (`assignment_id`),
+  UNIQUE KEY `general_id` (`general_id`),
+  KEY `target_id` (`target_id`),
+  CONSTRAINT `general_assignments_ibfk_1` FOREIGN KEY (`general_id`) REFERENCES `generals` (`general_id`) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+```
+
+## 类设计
+
+### 1. General类
+```php
+class General {
+    private $db;
+    private $generalId;
+    private $ownerId;
+    private $name;
+    private $rarity;
+    private $level;
+    private $experience;
+    private $leadership;
+    private $strength;
+    private $intelligence;
+    private $politics;
+    private $charm;
+    private $leadershipGrowth;
+    private $strengthGrowth;
+    private $intelligenceGrowth;
+    private $politicsGrowth;
+    private $charmGrowth;
+    private $skillPoints;
+    private $isActive;
+    private $createdAt;
+    private $skills = [];
+    private $assignment = null;
+    private $isValid = false;
+    
+    // 构造函数
+    public function __construct($generalId = null) {
+        $this->db = Database::getInstance()->getConnection();
+        
+        if ($generalId !== null) {
+            $this->generalId = $generalId;
+            $this->loadGeneralData();
+        }
+    }
+    
+    // 加载武将数据
+    private function loadGeneralData() {
+        // 加载武将基本信息
+        // 加载武将技能
+        // 加载武将分配信息
+    }
+    
+    // 创建新武将
+    public function createGeneral($ownerId, $name, $rarity, $attributes) {
+        // 创建武将记录
+        // 设置武将属性
+    }
+    
+    // 升级武将
+    public function levelUp() {
+        // 增加武将等级
+        // 增加武将属性
+    }
+    
+    // 添加经验值
+    public function addExperience($amount) {
+        // 增加经验值
+        // 检查是否可以升级
+    }
+    
+    // 学习技能
+    public function learnSkill($skillType, $skillName) {
+        // 学习新技能
+        // 消耗技能点
+    }
+    
+    // 升级技能
+    public function upgradeSkill($skillId) {
+        // 升级已有技能
+        // 消耗技能点
+    }
+    
+    // 分配武将
+    public function assignGeneral($assignmentType, $targetId) {
+        // 分配武将到城池或军队
+    }
+    
+    // 取消分配
+    public function unassignGeneral() {
+        // 取消武将分配
+    }
+    
+    // 获取武将加成
+    public function getBonus($type) {
+        // 计算武将提供的加成
+    }
+    
+    // 获取武将属性
+    // 各种getter方法
+}
+```
+
+### 2. GeneralSkill类
+```php
+class GeneralSkill {
+    private $db;
+    private $skillId;
+    private $generalId;
+    private $skillType;
+    private $skillName;
+    private $skillLevel;
+    private $skillEffect;
+    private $isValid = false;
+    
+    // 构造函数
+    public function __construct($skillId = null) {
+        $this->db = Database::getInstance()->getConnection();
+        
+        if ($skillId !== null) {
+            $this->skillId = $skillId;
+            $this->loadSkillData();
+        }
+    }
+    
+    // 加载技能数据
+    private function loadSkillData() {
+        // 加载技能信息
+    }
+    
+    // 创建新技能
+    public function createSkill($generalId, $skillType, $skillName, $skillEffect) {
+        // 创建技能记录
+    }
+    
+    // 升级技能
+    public function upgradeSkill() {
+        // 增加技能等级
+        // 更新技能效果
+    }
+    
+    // 获取技能效果
+    public function getEffect() {
+        // 返回技能效果
+    }
+    
+    // 获取技能属性
+    // 各种getter方法
+}
+```
+
+### 3. GeneralAssignment类
+```php
+class GeneralAssignment {
+    private $db;
+    private $assignmentId;
+    private $generalId;
+    private $assignmentType;
+    private $targetId;
+    private $assignedAt;
+    private $isValid = false;
+    
+    // 构造函数
+    public function __construct($assignmentId = null) {
+        $this->db = Database::getInstance()->getConnection();
+        
+        if ($assignmentId !== null) {
+            $this->assignmentId = $assignmentId;
+            $this->loadAssignmentData();
+        }
+    }
+    
+    // 加载分配数据
+    private function loadAssignmentData() {
+        // 加载分配信息
+    }
+    
+    // 创建新分配
+    public function createAssignment($generalId, $assignmentType, $targetId) {
+        // 创建分配记录
+    }
+    
+    // 取消分配
+    public function cancelAssignment() {
+        // 删除分配记录
+    }
+    
+    // 获取分配属性
+    // 各种getter方法
+}
+```
+
+## 武将招募系统
+
+### 1. 招募方式
+- 普通招募：消耗少量资源，获得普通或稀有武将
+- 高级招募：消耗大量资源，获得稀有或史诗武将
+- 传奇招募：消耗思考回路点数，获得史诗或传奇武将
+- 活动招募：通过特殊活动获得限定武将
+
+### 2. 招募概率
+- 普通招募：普通(70%)，稀有(25%)，史诗(5%)，传奇(0%)
+- 高级招募：普通(0%)，稀有(70%)，史诗(25%)，传奇(5%)
+- 传奇招募：普通(0%)，稀有(0%)，史诗(70%)，传奇(30%)
+
+### 3. 武将稀有度
+- 普通(common)：基础属性较低，成长潜力较低
+- 稀有(uncommon)：基础属性中等，成长潜力中等
+- 史诗(epic)：基础属性较高，成长潜力较高
+- 传奇(legendary)：基础属性极高，成长潜力极高
+
+## 武将技能系统
+
+### 1. 技能类型
+- 战斗技能：提升军队战斗力、攻击力、防御力等
+- 城池技能：提升城池防御力、资源产出、建造速度等
+- 特殊技能：提供特殊效果，如侦察、伏击、外交等
+
+### 2. 技能等级
+- 技能可以升级，提升效果
+- 每个技能最高等级为5级
+- 升级技能需要消耗技能点
+
+### 3. 技能点获取
+- 武将升级时获得技能点
+- 完成特定任务获得技能点
+- 使用特殊道具获得技能点
+
+## 武将分配系统
+
+### 1. 分配类型
+- 城池分配：武将分配到城池，提升城池属性
+- 军队分配：武将分配到军队，提升军队属性
+
+### 2. 分配限制
+- 每个武将只能分配到一个城池或军队
+- 每个城池或军队可以分配多个武将，但有上限
+- 城池分配上限 = 城池等级
+- 军队分配上限 = 1（主将）+ 军队等级（副将）
+
+### 3. 分配效果
+- 城池分配：提升城池防御力、资源产出、建造速度等
+- 军队分配：提升军队战斗力、移动速度、士气等
+
+## 武将升级系统
+
+### 1. 经验获取
+- 参与战斗获得经验
+- 完成任务获得经验
+- 使用经验道具获得经验
+
+### 2. 升级效果
+- 提升武将属性
+- 获得技能点
+- 解锁新技能
+
+### 3. 升级公式
+- 升级所需经验 = 100 * 当前等级 * (1 + 当前等级 * 0.1)
+- 属性提升 = 基础成长 + 随机成长
+
+## 前端界面设计
+
+### 1. 武将列表页面
+- 显示玩家拥有的所有武将
+- 支持按属性、等级、稀有度等排序
+- 支持搜索武将
+
+### 2. 武将详情页面
+- 显示武将基本信息
+- 显示武将属性和技能
+- 支持升级武将和技能
+- 支持分配武将
+
+### 3. 武将招募页面
+- 显示不同招募方式
+- 显示招募概率
+- 支持单次招募和十连招募
+
+## API接口设计
+
+### 1. 武将管理API
+- recruit_general.php：招募新武将
+- level_up_general.php：升级武将
+- learn_skill.php：学习技能
+- upgrade_skill.php：升级技能
+
+### 2. 武将分配API
+- assign_general.php：分配武将
+- unassign_general.php：取消分配
+
+### 3. 武将信息API
+- get_general_info.php：获取武将信息
+- get_user_generals.php：获取用户的所有武将
+
+## 实现步骤
+
+### 1. 创建数据库表
+- 创建generals表
+- 创建general_skills表
+- 创建general_assignments表
+
+### 2. 实现核心类
+- 实现General类
+- 实现GeneralSkill类
+- 实现GeneralAssignment类
+
+### 3. 实现前端界面
+- 实现武将列表页面
+- 实现武将详情页面
+- 实现武将招募页面
+
+### 4. 实现API接口
+- 实现武将管理API
+- 实现武将分配API
+- 实现武将信息API
+
+### 5. 集成到现有系统
+- 修改City类，支持武将加成
+- 修改Army类，支持武将加成
+- 修改Battle类，支持武将技能

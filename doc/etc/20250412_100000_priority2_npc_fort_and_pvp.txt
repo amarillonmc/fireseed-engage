@@ -1,0 +1,234 @@
+# 种火集结号 - 优先级2：NPC城池攻占和玩家之间的战斗功能设计
+时间戳: 2025-04-12 10:00:00
+
+## 功能概述
+
+本文档描述了NPC城池攻占和玩家之间的战斗功能的设计和实现方案。
+
+### NPC城池攻占
+
+NPC城池是地图上的特殊格子，玩家可以通过攻占NPC城池获得资源和思考回路点数。NPC城池有不同的等级，等级越高，防御力越强，奖励也越丰厚。
+
+#### 功能特点
+1. NPC城池有等级属性，等级越高，防御力越强
+2. NPC城池有驻军，玩家需要击败驻军才能占领
+3. 攻占NPC城池可以获得资源和思考回路点数
+4. NPC城池会在一定时间后重生，重生后等级可能会变化
+5. 玩家可以在地图上查看NPC城池的信息
+
+#### 数据库设计
+
+修改map_tiles表，添加以下字段：
+- npc_level：NPC城池等级
+- npc_garrison：NPC城池驻军数量
+- npc_respawn_time：NPC城池重生时间
+
+#### 类设计
+
+修改Map类，添加以下方法：
+- getNpcLevel()：获取NPC城池等级
+- setNpcLevel()：设置NPC城池等级
+- getNpcGarrison()：获取NPC城池驻军数量
+- setNpcGarrison()：设置NPC城池驻军数量
+- getNpcRespawnTime()：获取NPC城池重生时间
+- setNpcRespawnTime()：设置NPC城池重生时间
+- respawnNpcFort()：重生NPC城池
+
+修改Battle类，添加以下方法：
+- calculateNpcFortDefensePower()：计算NPC城池防御力
+- calculateNpcFortRewards()：计算攻占NPC城池的奖励
+
+#### 前端界面
+
+修改map.php，添加以下功能：
+- 显示NPC城池信息
+- 支持攻击NPC城池
+
+#### 定时任务
+
+修改cron_tasks.php，添加以下功能：
+- 检查并重生已被攻占的NPC城池
+
+### 玩家之间的战斗
+
+玩家之间的战斗是游戏的核心玩法之一，玩家可以攻击其他玩家的城池和军队，获取资源和领地。
+
+#### 功能特点
+1. 玩家可以攻击其他玩家的城池和军队
+2. 城池有防御力，玩家需要击败防御才能占领
+3. 攻占玩家城池可以获得资源和降低对方城池耐久度
+4. 玩家可以查看战斗报告，了解战斗详情
+5. 玩家可以设置城池防御策略
+
+#### 类设计
+
+修改Battle类，添加以下方法：
+- calculatePlayerCityDefensePower()：计算玩家城池防御力
+- calculatePlayerCityRewards()：计算攻占玩家城池的奖励
+- applyPlayerCityBattleResults()：应用玩家城池战斗结果
+
+修改City类，添加以下方法：
+- getDefensePower()：获取城池防御力
+- reduceDurability()：减少城池耐久度
+- setDefenseStrategy()：设置城池防御策略
+
+#### 前端界面
+
+修改map.php，添加以下功能：
+- 显示玩家城池信息
+- 支持攻击玩家城池
+
+创建defense.php，添加以下功能：
+- 设置城池防御策略
+- 查看城池防御状态
+
+#### API接口
+
+创建以下API接口：
+- set_defense_strategy.php：设置城池防御策略
+- get_defense_status.php：获取城池防御状态
+
+## 实现步骤
+
+### 1. NPC城池攻占
+
+#### 1.1 修改map_tiles表
+```sql
+ALTER TABLE map_tiles
+ADD COLUMN npc_level INT DEFAULT 1,
+ADD COLUMN npc_garrison INT DEFAULT 0,
+ADD COLUMN npc_respawn_time DATETIME DEFAULT NULL;
+```
+
+#### 1.2 修改Map类
+- 添加getNpcLevel()和setNpcLevel()方法
+- 添加getNpcGarrison()和setNpcGarrison()方法
+- 添加getNpcRespawnTime()和setNpcRespawnTime()方法
+- 添加respawnNpcFort()方法
+
+#### 1.3 修改Battle类
+- 修改getDefenderPower()方法，支持NPC城池防御力计算
+- 修改calculateRewards()方法，支持NPC城池奖励计算
+- 修改applyBattleResults()方法，支持NPC城池战斗结果应用
+
+#### 1.4 修改map.php
+- 添加NPC城池信息显示
+- 添加攻击NPC城池功能
+
+#### 1.5 修改cron_tasks.php
+- 添加检查并重生NPC城池的功能
+
+### 2. 玩家之间的战斗
+
+#### 2.1 修改Battle类
+- 修改getDefenderPower()方法，支持玩家城池防御力计算
+- 修改calculateRewards()方法，支持玩家城池奖励计算
+- 修改applyBattleResults()方法，支持玩家城池战斗结果应用
+
+#### 2.2 修改City类
+- 添加getDefensePower()方法
+- 添加reduceDurability()方法
+- 添加setDefenseStrategy()方法
+
+#### 2.3 修改map.php
+- 添加玩家城池信息显示
+- 添加攻击玩家城池功能
+
+#### 2.4 创建defense.php
+- 添加设置城池防御策略功能
+- 添加查看城池防御状态功能
+
+#### 2.5 创建API接口
+- 创建set_defense_strategy.php
+- 创建get_defense_status.php
+
+## 战斗系统详细设计
+
+### 1. 战斗力计算
+
+#### 1.1 攻击方战斗力
+攻击方战斗力 = 军队战斗力 + 武将战斗力 + 技能加成
+
+军队战斗力 = 所有士兵的战斗力总和
+士兵战斗力 = 士兵基础攻击力 * 士兵等级 * 士兵数量
+
+#### 1.2 防守方战斗力
+防守方战斗力根据防守方类型不同而不同：
+
+##### 1.2.1 NPC城池
+NPC城池战斗力 = NPC基础防御力 * NPC等级 * NPC驻军数量
+
+##### 1.2.2 玩家城池
+玩家城池战斗力 = 城池基础防御力 * 城池等级 + 城池中的士兵战斗力 + 武将防御力 + 技能加成
+
+##### 1.2.3 玩家军队
+玩家军队战斗力 = 军队战斗力 + 武将战斗力 + 技能加成
+
+### 2. 战斗结果计算
+
+#### 2.1 战斗结果
+- 攻击方战斗力 > 防守方战斗力 * 1.5：攻击方大胜
+- 攻击方战斗力 > 防守方战斗力：攻击方小胜
+- 攻击方战斗力 * 1.5 < 防守方战斗力：防守方大胜
+- 攻击方战斗力 < 防守方战斗力：防守方小胜
+- 攻击方战斗力 ≈ 防守方战斗力：平局
+
+#### 2.2 损失计算
+- 战败方损失：20% - 50%的士兵
+- 战胜方损失：5% - 20%的士兵
+- 平局双方损失：10% - 30%的士兵
+
+#### 2.3 奖励计算
+- 攻占NPC城池：获得资源、思考回路点数
+- 攻占玩家城池：获得部分资源、降低对方城池耐久度
+- 击败玩家军队：获得少量资源
+
+### 3. 战斗报告
+
+战斗报告包含以下信息：
+- 战斗时间
+- 攻击方信息
+- 防守方信息
+- 战斗结果
+- 双方损失
+- 获得的奖励
+
+## 城池防御系统
+
+### 1. 城池防御力计算
+
+城池防御力 = 城池基础防御力 * 城池等级 + 城池中的士兵防御力 + 武将防御力 + 技能加成
+
+### 2. 城池防御策略
+
+玩家可以设置城池的防御策略，包括：
+- 优先防御：增加城池防御力，但减少资源产出
+- 平衡：城池防御力和资源产出保持平衡
+- 优先产出：增加资源产出，但减少城池防御力
+
+### 3. 城池耐久度
+
+城池有耐久度属性，当城池被攻击时，耐久度会减少。当耐久度降为0时，城池被摧毁，玩家失去对该城池的控制。
+
+## NPC城池重生机制
+
+### 1. 重生时间
+
+NPC城池被攻占后，会在一定时间后重生。重生时间根据NPC城池等级而定：
+- 1级NPC城池：6小时
+- 2级NPC城池：12小时
+- 3级NPC城池：24小时
+- 4级NPC城池：48小时
+- 5级NPC城池：72小时
+
+### 2. 重生等级
+
+NPC城池重生后，等级可能会变化：
+- 80%的概率保持原等级
+- 10%的概率升级
+- 10%的概率降级
+
+### 3. 重生驻军
+
+NPC城池重生后，驻军数量根据等级重新计算：
+驻军数量 = NPC_FORT_BASE_GARRISON * (NPC等级 ^ NPC_FORT_GARRISON_COEFFICIENT)

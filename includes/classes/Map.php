@@ -11,6 +11,8 @@ class Map {
     private $ownerId;
     private $resourceAmount;
     private $npcLevel;
+    private $npcGarrison;
+    private $npcRespawnTime;
     private $isVisible;
     private $lastCollectionTime;
     private $collectionEfficiency;
@@ -48,6 +50,8 @@ class Map {
             $this->ownerId = $tileData['owner_id'];
             $this->resourceAmount = $tileData['resource_amount'];
             $this->npcLevel = $tileData['npc_level'];
+            $this->npcGarrison = $tileData['npc_garrison'];
+            $this->npcRespawnTime = $tileData['npc_respawn_time'];
             $this->isVisible = $tileData['is_visible'];
             $this->lastCollectionTime = $tileData['last_collection_time'];
             $this->collectionEfficiency = $tileData['collection_efficiency'] ?? 100;
@@ -80,6 +84,8 @@ class Map {
             $this->ownerId = $tileData['owner_id'];
             $this->resourceAmount = $tileData['resource_amount'];
             $this->npcLevel = $tileData['npc_level'];
+            $this->npcGarrison = $tileData['npc_garrison'];
+            $this->npcRespawnTime = $tileData['npc_respawn_time'];
             $this->isVisible = $tileData['is_visible'];
             $this->lastCollectionTime = $tileData['last_collection_time'];
             $this->collectionEfficiency = $tileData['collection_efficiency'] ?? 100;
@@ -158,10 +164,10 @@ class Map {
 
     /**
      * 获取NPC等级
-     * @return int|null
+     * @return int
      */
     public function getNpcLevel() {
-        return $this->npcLevel;
+        return $this->npcLevel ?? 1;
     }
 
     /**
@@ -776,5 +782,186 @@ class Map {
         $this->setLastCollectionTime(date('Y-m-d H:i:s'));
 
         return $resourceToCollect;
+    }
+
+
+
+    /**
+     * 设置NPC城池等级
+     * @param int $level 等级
+     * @return bool
+     */
+    public function setNpcLevel($level) {
+        if (!$this->isValid) {
+            return false;
+        }
+
+        $query = "UPDATE map_tiles SET npc_level = ? WHERE tile_id = ?";
+        $stmt = $this->db->prepare($query);
+        $stmt->bind_param('ii', $level, $this->tileId);
+        $result = $stmt->execute();
+        $stmt->close();
+
+        if ($result) {
+            $this->npcLevel = $level;
+            return true;
+        }
+
+        return false;
+    }
+
+    /**
+     * 获取NPC城池驻军数量
+     * @return int
+     */
+    public function getNpcGarrison() {
+        return $this->npcGarrison ?? 0;
+    }
+
+    /**
+     * 设置NPC城池驻军数量
+     * @param int $garrison 驻军数量
+     * @return bool
+     */
+    public function setNpcGarrison($garrison) {
+        if (!$this->isValid) {
+            return false;
+        }
+
+        $query = "UPDATE map_tiles SET npc_garrison = ? WHERE tile_id = ?";
+        $stmt = $this->db->prepare($query);
+        $stmt->bind_param('ii', $garrison, $this->tileId);
+        $result = $stmt->execute();
+        $stmt->close();
+
+        if ($result) {
+            $this->npcGarrison = $garrison;
+            return true;
+        }
+
+        return false;
+    }
+
+    /**
+     * 获取NPC城池重生时间
+     * @return string|null
+     */
+    public function getNpcRespawnTime() {
+        return $this->npcRespawnTime;
+    }
+
+    /**
+     * 设置NPC城池重生时间
+     * @param string $time 时间字符串
+     * @return bool
+     */
+    public function setNpcRespawnTime($time) {
+        if (!$this->isValid) {
+            return false;
+        }
+
+        $query = "UPDATE map_tiles SET npc_respawn_time = ? WHERE tile_id = ?";
+        $stmt = $this->db->prepare($query);
+        $stmt->bind_param('si', $time, $this->tileId);
+        $result = $stmt->execute();
+        $stmt->close();
+
+        if ($result) {
+            $this->npcRespawnTime = $time;
+            return true;
+        }
+
+        return false;
+    }
+
+    /**
+     * 重生NPC城池
+     * @return bool
+     */
+    public function respawnNpcFort() {
+        if (!$this->isValid || $this->type != 'npc_fort') {
+            return false;
+        }
+
+        // 检查是否到达重生时间
+        if ($this->npcRespawnTime && strtotime($this->npcRespawnTime) > time()) {
+            return false;
+        }
+
+        // 计算新的NPC等级
+        $newLevel = $this->calculateNewNpcLevel();
+
+        // 计算新的驻军数量
+        $newGarrison = $this->calculateNpcGarrison($newLevel);
+
+        // 更新NPC城池信息
+        $query = "UPDATE map_tiles SET npc_level = ?, npc_garrison = ?, npc_respawn_time = NULL, owner_id = NULL WHERE tile_id = ?";
+        $stmt = $this->db->prepare($query);
+        $stmt->bind_param('iii', $newLevel, $newGarrison, $this->tileId);
+        $result = $stmt->execute();
+        $stmt->close();
+
+        if ($result) {
+            $this->npcLevel = $newLevel;
+            $this->npcGarrison = $newGarrison;
+            $this->npcRespawnTime = null;
+            $this->ownerId = null;
+            return true;
+        }
+
+        return false;
+    }
+
+    /**
+     * 计算新的NPC等级
+     * @return int
+     */
+    private function calculateNewNpcLevel() {
+        $currentLevel = $this->getNpcLevel();
+        $rand = mt_rand(1, 100);
+
+        if ($rand <= 80) {
+            // 80%的概率保持原等级
+            return $currentLevel;
+        } elseif ($rand <= 90) {
+            // 10%的概率升级
+            return min(5, $currentLevel + 1);
+        } else {
+            // 10%的概率降级
+            return max(1, $currentLevel - 1);
+        }
+    }
+
+    /**
+     * 计算NPC城池驻军数量
+     * @param int $level NPC等级
+     * @return int
+     */
+    private function calculateNpcGarrison($level) {
+        return NPC_FORT_BASE_GARRISON * pow($level, NPC_FORT_GARRISON_COEFFICIENT);
+    }
+
+    /**
+     * 检查并重生所有NPC城池
+     * @return int 重生的NPC城池数量
+     */
+    public static function respawnAllNpcForts() {
+        $db = Database::getInstance()->getConnection();
+
+        $query = "SELECT tile_id FROM map_tiles WHERE type = 'npc_fort' AND npc_respawn_time IS NOT NULL AND npc_respawn_time <= NOW()";
+        $result = $db->query($query);
+
+        $respawnedCount = 0;
+
+        if ($result) {
+            while ($row = $result->fetch_assoc()) {
+                $fort = new Map($row['tile_id']);
+                if ($fort->isValid() && $fort->respawnNpcFort()) {
+                    $respawnedCount++;
+                }
+            }
+        }
+
+        return $respawnedCount;
     }
 }

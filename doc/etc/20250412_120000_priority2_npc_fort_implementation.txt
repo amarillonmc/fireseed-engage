@@ -1,0 +1,62 @@
+# 种火集结号 - 优先级2：NPC城池攻占功能实装
+时间戳: 2025-04-12 12:00:00
+
+## 实装内容总结
+
+我们已经完成了优先级2的第四部分：NPC城池攻占功能的实装。以下是已实装的内容：
+
+### 1. 数据库修改
+- 修改map_tiles表，添加npc_level、npc_garrison和npc_respawn_time字段
+- npc_level记录NPC城池等级
+- npc_garrison记录NPC城池驻军数量
+- npc_respawn_time记录NPC城池重生时间
+
+### 2. Map类修改
+- 添加getNpcGarrison()和setNpcGarrison()方法
+- 添加getNpcRespawnTime()和setNpcRespawnTime()方法
+- 添加respawnNpcFort()方法，用于重生NPC城池
+- 添加calculateNewNpcLevel()方法，用于计算新的NPC等级
+- 添加calculateNpcGarrison()方法，用于计算NPC驻军数量
+- 添加respawnAllNpcForts()方法，用于重生所有NPC城池
+
+### 3. Battle类修改
+- 修改getDefenderPower()方法，增强对NPC城池防御力的计算
+- 修改applyBattleResults()方法，增强对NPC城池战斗结果的处理
+- 设置NPC城池重生时间和拥有者
+
+### 4. 定时任务修改
+- 修改cron_tasks.php，添加检查并重生NPC城池的功能
+
+## NPC城池攻占功能
+
+### 1. NPC城池防御力计算
+NPC城池防御力 = NPC等级 * 200 + NPC驻军数量 * 10
+
+### 2. NPC城池战斗结果处理
+- 攻击方胜利：设置NPC城池重生时间，设置NPC城池拥有者为攻击方
+- 防守方胜利：不做任何处理
+
+### 3. NPC城池重生机制
+- 重生时间根据NPC等级计算：1级:6小时, 2级:12小时, 3级:24小时, 4级:48小时, 5级:96小时
+- 重生时计算新的NPC等级：80%概率保持原等级，10%概率升级，10%概率降级
+- 重生时计算新的NPC驻军数量：NPC_FORT_BASE_GARRISON * (NPC等级 ^ NPC_FORT_GARRISON_COEFFICIENT)
+
+### 4. NPC城池奖励
+- 攻占NPC城池可以获得资源和思考回路点数
+- 资源奖励：亮晶晶、暖洋洋、冷冰冰、郁萌萌各NPC等级*100，昼闪闪、夜静静各NPC等级*50
+- 思考回路奖励：NPC等级*2点
+
+## 下一步计划
+
+接下来，我们将继续实现优先级2的最后一部分：
+
+1. **玩家之间的战斗**
+   - 实现玩家城池的攻防系统
+   - 添加战斗报告功能
+   - 实现战斗奖励和惩罚机制
+
+## 实装注意事项
+
+1. 需要修改地图页面，支持显示NPC城池信息和攻击NPC城池
+2. 需要修改战斗报告页面，支持显示NPC城池战斗详情
+3. 需要添加NPC城池重生通知功能

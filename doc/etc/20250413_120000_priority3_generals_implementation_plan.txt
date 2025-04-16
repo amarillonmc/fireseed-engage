@@ -1,0 +1,86 @@
+# 种火集结号 - 优先级3：武将系统实装计划
+时间戳: 2025-04-13 12:00:00
+
+## 已完成的部分
+
+1. 数据库设计
+   - 创建generals表，存储武将基本信息
+   - 创建general_skills表，存储武将技能信息
+   - 创建general_assignments表，存储武将分配信息
+
+2. 核心类实现
+   - 实现General类，管理武将基本属性和方法
+   - 实现GeneralSkill类，管理武将技能
+   - 实现GeneralAssignment类，管理武将分配
+
+3. 前端界面（部分）
+   - 创建recruit.php页面，招募新武将
+   - 创建generals.php页面，显示武将列表
+
+## 剩余需要实现的部分
+
+1. 前端界面
+   - 创建general_detail.php页面，显示武将详情
+   - 创建assign_general.php页面，分配武将
+   - 修改城池和军队页面，显示分配的武将
+
+2. API接口
+   - 创建level_up_general.php，升级武将
+   - 创建learn_skill.php，学习技能
+   - 创建upgrade_skill.php，升级技能
+   - 创建assign_general.php，分配武将
+   - 创建unassign_general.php，取消分配
+
+3. 系统集成
+   - 修改City类，支持武将加成
+   - 修改Army类，支持武将加成
+   - 修改Battle类，支持武将技能
+
+## 实现步骤
+
+### 1. 创建武将详情页面（general_detail.php）
+- 显示武将基本信息
+- 显示武将属性和技能
+- 支持升级武将和技能
+- 支持分配武将
+
+### 2. 创建武将分配页面（assign_general.php）
+- 显示可分配的城池和军队
+- 支持选择分配目标
+- 支持取消分配
+
+### 3. 创建API接口
+- level_up_general.php：升级武将
+- learn_skill.php：学习技能
+- upgrade_skill.php：升级技能
+- assign_general.php：分配武将
+- unassign_general.php：取消分配
+
+### 4. 修改City类
+- 添加getGenerals()方法，获取城池的武将
+- 添加getGeneralBonus()方法，计算武将加成
+- 修改getDefensePower()方法，考虑武将加成
+- 修改getResourceProduction()方法，考虑武将加成
+
+### 5. 修改Army类
+- 添加getGenerals()方法，获取军队的武将
+- 添加getGeneralBonus()方法，计算武将加成
+- 修改getCombatPower()方法，考虑武将加成
+- 修改getMovementSpeed()方法，考虑武将加成
+
+### 6. 修改Battle类
+- 修改calculateAttackerPower()方法，考虑武将加成
+- 修改calculateDefenderPower()方法，考虑武将加成
+- 添加applyGeneralSkills()方法，应用武将技能效果
+
+### 7. 测试和调试
+- 测试武将招募功能
+- 测试武将升级和技能学习功能
+- 测试武将分配功能
+- 测试武将对城池和军队的加成效果
+- 测试武将在战斗中的效果
+
+### 8. 文档和总结
+- 编写武将系统实装文档
+- 总结武将系统功能和特点
+- 规划下一步开发计划

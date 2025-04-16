@@ -71,6 +71,10 @@ $logMessages[] = "返回城池的军队数量: " . count($returnedArmies);
 $processedBattles = Battle::checkPendingBattles();
 $logMessages[] = "处理的战斗数量: " . count($processedBattles);
 
+// 9. 检查并重生NPC城池
+$respawnedForts = Map::respawnAllNpcForts();
+$logMessages[] = "重生的NPC城池数量: " . $respawnedForts;
+
 // 记录结束时间和执行时间
 $endTime = microtime(true);
 $executionTime = $endTime - $startTime;

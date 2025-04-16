@@ -580,4 +580,110 @@ class City {
         $researchLab = new Facility();
         $researchLab->createFacility($cityId, 'research_lab', null, 16, 12);
     }
+
+    /**
+     * 获取城池防御力
+     * @return int 防御力
+     */
+    public function getDefensePower() {
+        if (!$this->isValid) {
+            return 0;
+        }
+
+        // 城池基础防御力 = 城池等级 * 100
+        $defensePower = $this->level * 100;
+
+        // 城池中的士兵防御力
+        $soldiers = $this->getSoldiers();
+        foreach ($soldiers as $soldier) {
+            $defensePower += $soldier->getDefensePower();
+        }
+
+        // 城池耐久度影响
+        $durabilityPercentage = $this->durability / $this->maxDurability;
+        $defensePower = $defensePower * $durabilityPercentage;
+
+        return floor($defensePower);
+    }
+
+    /**
+     * 获取城池资源
+     * @return Resource 资源对象
+     */
+    public function getResource() {
+        if (!$this->isValid) {
+            return null;
+        }
+
+        return new Resource($this->ownerId);
+    }
+
+    /**
+     * 设置城池防御策略
+     * @param string $strategy 防御策略（defense, balanced, production）
+     * @return bool 是否成功
+     */
+    public function setDefenseStrategy($strategy) {
+        if (!$this->isValid) {
+            return false;
+        }
+
+        // 检查策略是否有效
+        $validStrategies = ['defense', 'balanced', 'production'];
+        if (!in_array($strategy, $validStrategies)) {
+            return false;
+        }
+
+        // 更新城池防御策略
+        $query = "UPDATE cities SET defense_strategy = ? WHERE city_id = ?";
+        $stmt = $this->db->prepare($query);
+        $stmt->bind_param('si', $strategy, $this->cityId);
+        $result = $stmt->execute();
+        $stmt->close();
+
+        return $result;
+    }
+
+    /**
+     * 获取城池防御策略
+     * @return string 防御策略
+     */
+    public function getDefenseStrategy() {
+        if (!$this->isValid) {
+            return 'balanced';
+        }
+
+        $query = "SELECT defense_strategy FROM cities WHERE city_id = ?";
+        $stmt = $this->db->prepare($query);
+        $stmt->bind_param('i', $this->cityId);
+        $stmt->execute();
+        $result = $stmt->get_result();
+
+        if ($result && $result->num_rows > 0) {
+            $row = $result->fetch_assoc();
+            $stmt->close();
+            return $row['defense_strategy'] ?: 'balanced';
+        }
+
+        $stmt->close();
+        return 'balanced';
+    }
+
+    /**
+     * 获取城池防御策略加成
+     * @return array [防御力加成, 资源产出加成]
+     */
+    public function getDefenseStrategyBonus() {
+        $strategy = $this->getDefenseStrategy();
+
+        switch ($strategy) {
+            case 'defense':
+                return [1.5, 0.8]; // 防御力+50%, 资源产出-20%
+            case 'production':
+                return [0.8, 1.5]; // 防御力-20%, 资源产出+50%
+            case 'balanced':
+            default:
+                return [1.0, 1.0]; // 防御力和资源产出不变
+        }
+    }
 }
