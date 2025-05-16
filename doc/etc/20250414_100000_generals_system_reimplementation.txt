@@ -1,0 +1,112 @@
+# 种火集结号 - 武将系统重新实装
+时间戳: 2025-04-14 10:00:00
+
+## 概述
+
+根据example-general-design.txt中的设计文档，重新实装了武将系统。主要变更包括：
+
+1. 更新了武将属性系统，从原来的五维属性（统帅、武力、智力、政治、魅力）改为新的四维属性（攻击力、守备力、速度、智力）
+2. 引入了元素系统，每个武将都有一个元素属性（亮晶晶、暖洋洋、冷冰冰、郁萌萌、昼闪闪、夜静静）
+3. 更新了稀有度系统，从原来的common/uncommon/rare/epic/legendary改为B/A/S/SS/P
+4. 引入了COST系统，每个武将都有一个COST值，影响属性计算
+5. 更新了技能系统，引入了技能卡牌概念，每个武将有一个自带技能和两个可装备技能槽位
+
+## 数据库变更
+
+### 1. generals表
+
+```sql
+CREATE TABLE `generals` (
+  `general_id` int(11) NOT NULL AUTO_INCREMENT,
+  `owner_id` int(11) NOT NULL,
+  `name` varchar(100) NOT NULL,
+  `source` varchar(255) DEFAULT '原创角色',
+  `rarity` enum('B','A','S','SS','P') NOT NULL,
+  `cost` float NOT NULL,
+  `element` enum('亮晶晶','暖洋洋','冷冰冰','郁萌萌','昼闪闪','夜静静') NOT NULL,
+  `level` int(11) NOT NULL DEFAULT 1,
+  `hp` int(11) NOT NULL DEFAULT 100,
+  `max_hp` int(11) NOT NULL DEFAULT 100,
+  `attack` int(11) NOT NULL,
+  `defense` int(11) NOT NULL,
+  `speed` int(11) NOT NULL,
+  `intelligence` int(11) NOT NULL,
+  `is_active` tinyint(1) NOT NULL DEFAULT 1,
+  `created_at` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (`general_id`),
+  KEY `owner_id` (`owner_id`),
+  CONSTRAINT `generals_ibfk_1` FOREIGN KEY (`owner_id`) REFERENCES `users` (`user_id`) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+```
+
+### 2. general_skills表
+
+```sql
+CREATE TABLE `general_skills` (
+  `skill_id` int(11) NOT NULL AUTO_INCREMENT,
+  `general_id` int(11) NOT NULL,
+  `skill_name` varchar(50) NOT NULL,
+  `skill_type` enum('自带','装备') NOT NULL DEFAULT '自带',
+  `slot` int(11) NOT NULL DEFAULT 0, -- 0表示自带技能，1-2表示额外技能槽
+  `skill_level` int(11) NOT NULL DEFAULT 1,
+  `skill_effect` text NOT NULL,
+  PRIMARY KEY (`skill_id`),
+  KEY `general_id` (`general_id`),
+  CONSTRAINT `general_skills_ibfk_1` FOREIGN KEY (`general_id`) REFERENCES `generals` (`general_id`) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+```
+
+## 类变更
+
+### 1. General类
+
+主要变更：
+- 更新了属性系统
+- 添加了元素系统
+- 更新了属性计算公式
+- 添加了技能卡牌系统
+- 更新了随机武将生成逻辑，根据元素设置属性倾向
+
+### 2. GeneralSkill类
+
+主要变更：
+- 添加了技能槽位概念
+- 更新了技能类型
+- 添加了移除技能方法
+- 更新了技能效果增强逻辑
+
+## 元素与属性关系
+
+1. 亮晶晶（内政型）：智力高，速度中，攻击力低，守备力高
+2. 暖洋洋（速攻型）：攻击力高，速度高，智力中，守备力低
+3. 冷冰冰（防御型）：守备力高，速度低，智力中，攻击力中
+4. 郁萌萌（强攻型）：智力中，速度高，攻击力高，守备力低
+5. 昼闪闪（辅助型）：攻击力低，速度高，智力高，守备力中
+6. 夜静静（特殊型）：智力高，速度中，攻击力低，守备力高
+
+## 属性计算公式
+
+- 攻击力 = 基础攻击力 * (1 + 武将等级 * 0.1) * (1 + COST * 0.2)
+- 守备力 = 基础守备力 * (1 + 武将等级 * 0.1) * (1 + COST * 0.2)
+- 速度 = 基础速度 * (1 + 武将等级 * 0.05) * (1 + COST * 0.1)
+- 智力 = 基础智力 * (1 + 武将等级 * 0.1) * (1 + COST * 0.2)
+
+## 升级费用计算公式
+
+- 升级费用 = 基础费用(100) * (1 + 武将等级 * 0.5) * (1 + COST * 0.5)
+
+## 后续工作
+
+1. 更新前端页面以适应新的武将系统
+   - 更新generals.php页面
+   - 更新recruit.php页面
+   - 创建general_detail.php页面
+   - 创建assign_general.php页面
+
+2. 更新API接口
+   - 更新武将相关API
+   - 添加技能卡牌相关API
+
+3. 系统集成
+   - 更新City类和Army类以适应新的武将加成系统
+   - 更新Battle类以支持新的武将技能系统

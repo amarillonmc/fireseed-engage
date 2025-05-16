@@ -31,7 +31,7 @@ $sortOrder = isset($_GET['order']) ? $_GET['order'] : 'desc';
 usort($generals, function($a, $b) use ($sortBy, $sortOrder) {
     $aValue = 0;
     $bValue = 0;
-    
+
     switch ($sortBy) {
         case 'name':
             $aValue = $a->getName();
@@ -43,37 +43,41 @@ usort($generals, function($a, $b) use ($sortBy, $sortOrder) {
             break;
         case 'rarity':
             $rarityOrder = [
-                'common' => 1,
-                'uncommon' => 2,
-                'rare' => 3,
-                'epic' => 4,
-                'legendary' => 5
+                'B' => 1,
+                'A' => 2,
+                'S' => 3,
+                'SS' => 4,
+                'P' => 5
             ];
             $aValue = $rarityOrder[$a->getRarity()];
             $bValue = $rarityOrder[$b->getRarity()];
             break;
-        case 'leadership':
-            $aValue = $a->getLeadership();
-            $bValue = $b->getLeadership();
+        case 'cost':
+            $aValue = $a->getCost();
+            $bValue = $b->getCost();
             break;
-        case 'strength':
-            $aValue = $a->getStrength();
-            $bValue = $b->getStrength();
+        case 'element':
+            $aValue = $a->getElement();
+            $bValue = $b->getElement();
+            break;
+        case 'attack':
+            $aValue = $a->getAttack();
+            $bValue = $b->getAttack();
+            break;
+        case 'defense':
+            $aValue = $a->getDefense();
+            $bValue = $b->getDefense();
+            break;
+        case 'speed':
+            $aValue = $a->getSpeed();
+            $bValue = $b->getSpeed();
             break;
         case 'intelligence':
             $aValue = $a->getIntelligence();
             $bValue = $b->getIntelligence();
             break;
-        case 'politics':
-            $aValue = $a->getPolitics();
-            $bValue = $b->getPolitics();
-            break;
-        case 'charm':
-            $aValue = $a->getCharm();
-            $bValue = $b->getCharm();
-            break;
     }
-    
+
     if ($sortOrder == 'asc') {
         return $aValue <=> $bValue;
     } else {
@@ -100,23 +104,23 @@ $pageTitle = '武将管理';
             border-radius: 5px;
             box-shadow: 0 2px 5px rgba(0, 0, 0, 0.1);
         }
-        
+
         .generals-header {
             display: flex;
             justify-content: space-between;
             align-items: center;
             margin-bottom: 20px;
         }
-        
+
         .generals-title {
             margin: 0;
         }
-        
+
         .generals-controls {
             display: flex;
             gap: 10px;
         }
-        
+
         .generals-controls button {
             padding: 5px 10px;
             background-color: #333;
@@ -125,35 +129,35 @@ $pageTitle = '武将管理';
             border-radius: 3px;
             cursor: pointer;
         }
-        
+
         .generals-controls button:hover {
             background-color: #555;
         }
-        
+
         .generals-sort {
             display: flex;
             align-items: center;
             margin-bottom: 20px;
         }
-        
+
         .generals-sort label {
             margin-right: 10px;
             font-weight: bold;
         }
-        
+
         .generals-sort select {
             padding: 5px 10px;
             border: 1px solid #ddd;
             border-radius: 3px;
             margin-right: 10px;
         }
-        
+
         .generals-list {
             display: grid;
             grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
             gap: 20px;
         }
-        
+
         .general-card {
             border: 1px solid #ddd;
             border-radius: 5px;
@@ -161,12 +165,12 @@ $pageTitle = '武将管理';
             background-color: #f9f9f9;
             transition: transform 0.3s ease;
         }
-        
+
         .general-card:hover {
             transform: translateY(-5px);
             box-shadow: 0 5px 15px rgba(0, 0, 0, 0.1);
         }
-        
+
         .general-card h4 {
             margin-top: 0;
             margin-bottom: 10px;
@@ -174,7 +178,7 @@ $pageTitle = '武将管理';
             justify-content: space-between;
             align-items: center;
         }
-        
+
         .general-card .rarity {
             display: inline-block;
             padding: 3px 8px;
@@ -182,54 +186,98 @@ $pageTitle = '武将管理';
             font-size: 12px;
             font-weight: bold;
         }
-        
-        .general-card .rarity.common {
+
+        .general-card .rarity.B {
             background-color: #e0e0e0;
             color: #333;
         }
-        
-        .general-card .rarity.uncommon {
+
+        .general-card .rarity.A {
             background-color: #a5d6a7;
             color: #1b5e20;
         }
-        
-        .general-card .rarity.rare {
+
+        .general-card .rarity.S {
             background-color: #90caf9;
             color: #0d47a1;
         }
-        
-        .general-card .rarity.epic {
+
+        .general-card .rarity.SS {
             background-color: #ce93d8;
             color: #4a148c;
         }
-        
-        .general-card .rarity.legendary {
+
+        .general-card .rarity.P {
             background-color: #ffcc80;
             color: #e65100;
         }
-        
+
+        .general-card .element {
+            font-size: 14px;
+            color: #666;
+            margin-bottom: 5px;
+        }
+
+        .general-card .source {
+            font-size: 14px;
+            color: #666;
+            margin-bottom: 10px;
+        }
+
+        .general-card .skills {
+            margin-top: 10px;
+            padding-top: 10px;
+            border-top: 1px dashed #ddd;
+        }
+
+        .general-card .skills h5 {
+            margin-top: 0;
+            margin-bottom: 5px;
+            font-size: 14px;
+        }
+
+        .general-card .skill {
+            font-size: 13px;
+            margin-bottom: 5px;
+            display: flex;
+            justify-content: space-between;
+        }
+
+        .general-card .skill-name {
+            font-weight: bold;
+        }
+
+        .general-card .skill-level {
+            color: #666;
+        }
+
+        .general-card .skill-type {
+            color: #999;
+            font-style: italic;
+        }
+
         .general-card .level {
             font-size: 14px;
             color: #666;
             margin-bottom: 10px;
         }
-        
+
         .general-card .attributes {
             display: grid;
             grid-template-columns: repeat(2, 1fr);
             gap: 10px;
             margin-bottom: 15px;
         }
-        
+
         .general-card .attribute {
             display: flex;
             justify-content: space-between;
         }
-        
+
         .general-card .attribute .name {
             font-weight: bold;
         }
-        
+
         .general-card .assignment {
             margin-top: 10px;
             padding-top: 10px;
@@ -237,13 +285,13 @@ $pageTitle = '武将管理';
             font-size: 14px;
             color: #666;
         }
-        
+
         .general-card .actions {
             margin-top: 15px;
             display: flex;
             justify-content: space-between;
         }
-        
+
         .general-card .actions button {
             padding: 5px 10px;
             background-color: #333;
@@ -253,11 +301,11 @@ $pageTitle = '武将管理';
             cursor: pointer;
             font-size: 14px;
         }
-        
+
         .general-card .actions button:hover {
             background-color: #555;
         }
-        
+
         .no-generals {
             padding: 20px;
             text-align: center;
@@ -285,7 +333,7 @@ $pageTitle = '武将管理';
                 </ul>
             </nav>
         </header>
-        
+
         <!-- 主内容 -->
         <main>
             <!-- 资源显示 -->
@@ -315,7 +363,7 @@ $pageTitle = '武将管理';
                     <span class="resource-value"><?php echo number_format($resource->getNightCrystal()); ?></span>
                 </div>
             </div>
-            
+
             <!-- 武将容器 -->
             <div class="generals-container">
                 <div class="generals-header">
@@ -324,27 +372,28 @@ $pageTitle = '武将管理';
                         <button onclick="window.location.href='recruit.php'">招募武将</button>
                     </div>
                 </div>
-                
+
                 <div class="generals-sort">
                     <label for="sort-by">排序方式:</label>
                     <select id="sort-by">
                         <option value="level" <?php echo $sortBy == 'level' ? 'selected' : ''; ?>>等级</option>
                         <option value="name" <?php echo $sortBy == 'name' ? 'selected' : ''; ?>>名称</option>
                         <option value="rarity" <?php echo $sortBy == 'rarity' ? 'selected' : ''; ?>>稀有度</option>
-                        <option value="leadership" <?php echo $sortBy == 'leadership' ? 'selected' : ''; ?>>统帅</option>
-                        <option value="strength" <?php echo $sortBy == 'strength' ? 'selected' : ''; ?>>武力</option>
+                        <option value="cost" <?php echo $sortBy == 'cost' ? 'selected' : ''; ?>>COST</option>
+                        <option value="element" <?php echo $sortBy == 'element' ? 'selected' : ''; ?>>元素</option>
+                        <option value="attack" <?php echo $sortBy == 'attack' ? 'selected' : ''; ?>>攻击力</option>
+                        <option value="defense" <?php echo $sortBy == 'defense' ? 'selected' : ''; ?>>守备力</option>
+                        <option value="speed" <?php echo $sortBy == 'speed' ? 'selected' : ''; ?>>速度</option>
                         <option value="intelligence" <?php echo $sortBy == 'intelligence' ? 'selected' : ''; ?>>智力</option>
-                        <option value="politics" <?php echo $sortBy == 'politics' ? 'selected' : ''; ?>>政治</option>
-                        <option value="charm" <?php echo $sortBy == 'charm' ? 'selected' : ''; ?>>魅力</option>
                     </select>
-                    
+
                     <label for="sort-order">排序顺序:</label>
                     <select id="sort-order">
                         <option value="desc" <?php echo $sortOrder == 'desc' ? 'selected' : ''; ?>>降序</option>
                         <option value="asc" <?php echo $sortOrder == 'asc' ? 'selected' : ''; ?>>升序</option>
                     </select>
                 </div>
-                
+
                 <?php if (empty($generals)): ?>
                 <div class="no-generals">
                     <p>您还没有任何武将。请前往招募页面招募武将。</p>
@@ -357,66 +406,55 @@ $pageTitle = '武将管理';
                         <h4>
                             <?php echo $general->getName(); ?>
                             <span class="rarity <?php echo $general->getRarity(); ?>">
-                                <?php
-                                $rarityText = '';
-                                switch ($general->getRarity()) {
-                                    case 'common':
-                                        $rarityText = '普通';
-                                        break;
-                                    case 'uncommon':
-                                        $rarityText = '稀有';
-                                        break;
-                                    case 'rare':
-                                        $rarityText = '史诗';
-                                        break;
-                                    case 'epic':
-                                        $rarityText = '传奇';
-                                        break;
-                                    case 'legendary':
-                                        $rarityText = '神话';
-                                        break;
-                                }
-                                echo $rarityText;
-                                ?>
+                                <?php echo $general->getRarity(); ?>
                             </span>
                         </h4>
-                        
-                        <div class="level">等级: <?php echo $general->getLevel(); ?></div>
-                        
+
+                        <div class="level">等级: <?php echo $general->getLevel(); ?> | COST: <?php echo $general->getCost(); ?></div>
+                        <div class="element">元素: <?php echo $general->getElement(); ?></div>
+                        <div class="source">来源: <?php echo $general->getSource(); ?></div>
+
                         <div class="attributes">
                             <div class="attribute">
-                                <span class="name">统帅</span>
-                                <span class="value"><?php echo $general->getLeadership(); ?></span>
+                                <span class="name">攻击力</span>
+                                <span class="value"><?php echo $general->getAttack(); ?></span>
                             </div>
                             <div class="attribute">
-                                <span class="name">武力</span>
-                                <span class="value"><?php echo $general->getStrength(); ?></span>
+                                <span class="name">守备力</span>
+                                <span class="value"><?php echo $general->getDefense(); ?></span>
+                            </div>
+                            <div class="attribute">
+                                <span class="name">速度</span>
+                                <span class="value"><?php echo $general->getSpeed(); ?></span>
                             </div>
                             <div class="attribute">
                                 <span class="name">智力</span>
                                 <span class="value"><?php echo $general->getIntelligence(); ?></span>
                             </div>
                             <div class="attribute">
-                                <span class="name">政治</span>
-                                <span class="value"><?php echo $general->getPolitics(); ?></span>
-                            </div>
-                            <div class="attribute">
-                                <span class="name">魅力</span>
-                                <span class="value"><?php echo $general->getCharm(); ?></span>
-                            </div>
-                            <div class="attribute">
-                                <span class="name">技能点</span>
-                                <span class="value"><?php echo $general->getSkillPoints(); ?></span>
+                                <span class="name">HP</span>
+                                <span class="value"><?php echo $general->getHp(); ?> / <?php echo $general->getMaxHp(); ?></span>
                             </div>
                         </div>
-                        
+
+                        <div class="skills">
+                            <h5>技能卡牌</h5>
+                            <?php foreach ($general->getSkills() as $skill): ?>
+                            <div class="skill">
+                                <span class="skill-name"><?php echo $skill->getSkillName(); ?></span>
+                                <span class="skill-level">Lv.<?php echo $skill->getSkillLevel(); ?></span>
+                                <span class="skill-type">(<?php echo $skill->getSkillType(); ?>)</span>
+                            </div>
+                            <?php endforeach; ?>
+                        </div>
+
                         <?php
                         $assignment = $general->getAssignment();
                         if ($assignment) {
                             $assignmentType = $assignment->getAssignmentType();
                             $targetId = $assignment->getTargetId();
                             $assignmentText = '';
-                            
+
                             if ($assignmentType == 'city') {
                                 $city = new City($targetId);
                                 if ($city->isValid()) {
@@ -428,13 +466,13 @@ $pageTitle = '武将管理';
                                     $assignmentText = '分配到军队: ' . $army->getName();
                                 }
                             }
-                            
+
                             if ($assignmentText) {
                                 echo '<div class="assignment">' . $assignmentText . '</div>';
                             }
                         }
                         ?>
-                        
+
                         <div class="actions">
                             <button onclick="window.location.href='general_detail.php?id=<?php echo $general->getGeneralId(); ?>'">查看详情</button>
                             <button onclick="window.location.href='assign_general.php?id=<?php echo $general->getGeneralId(); ?>'">分配武将</button>
@@ -445,13 +483,13 @@ $pageTitle = '武将管理';
                 <?php endif; ?>
             </div>
         </main>
-        
+
         <!-- 页脚 -->
         <footer>
             <p>&copy; <?php echo date('Y'); ?> <?php echo SITE_NAME; ?> - 版本 <?php echo GAME_VERSION; ?></p>
         </footer>
     </div>
-    
+
     <script src="assets/js/script.js"></script>
     <script>
         document.addEventListener('DOMContentLoaded', function() {
@@ -459,11 +497,11 @@ $pageTitle = '武将管理';
             document.getElementById('sort-by').addEventListener('change', function() {
                 updateSortUrl();
             });
-            
+
             document.getElementById('sort-order').addEventListener('change', function() {
                 updateSortUrl();
             });
-            
+
             function updateSortUrl() {
                 const sortBy = document.getElementById('sort-by').value;
                 const sortOrder = document.getElementById('sort-order').value;

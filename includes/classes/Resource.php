@@ -357,6 +357,114 @@ class Resource {
     }
 
     /**
+     * 增加亮晶晶资源
+     * @param int $amount 增加的数量
+     * @return bool
+     */
+    public function addBrightCrystal($amount) {
+        return $this->addResource('bright', $amount);
+    }
+
+    /**
+     * 增加暖洋洋资源
+     * @param int $amount 增加的数量
+     * @return bool
+     */
+    public function addWarmCrystal($amount) {
+        return $this->addResource('warm', $amount);
+    }
+
+    /**
+     * 增加冷冰冰资源
+     * @param int $amount 增加的数量
+     * @return bool
+     */
+    public function addColdCrystal($amount) {
+        return $this->addResource('cold', $amount);
+    }
+
+    /**
+     * 增加郁萌萌资源
+     * @param int $amount 增加的数量
+     * @return bool
+     */
+    public function addGreenCrystal($amount) {
+        return $this->addResource('green', $amount);
+    }
+
+    /**
+     * 增加昼闪闪资源
+     * @param int $amount 增加的数量
+     * @return bool
+     */
+    public function addDayCrystal($amount) {
+        return $this->addResource('day', $amount);
+    }
+
+    /**
+     * 增加夜静静资源
+     * @param int $amount 增加的数量
+     * @return bool
+     */
+    public function addNightCrystal($amount) {
+        return $this->addResource('night', $amount);
+    }
+
+    /**
+     * 减少亮晶晶资源
+     * @param int $amount 减少的数量
+     * @return bool
+     */
+    public function consumeBrightCrystal($amount) {
+        return $this->reduceResource('bright', $amount);
+    }
+
+    /**
+     * 减少暖洋洋资源
+     * @param int $amount 减少的数量
+     * @return bool
+     */
+    public function consumeWarmCrystal($amount) {
+        return $this->reduceResource('warm', $amount);
+    }
+
+    /**
+     * 减少冷冰冰资源
+     * @param int $amount 减少的数量
+     * @return bool
+     */
+    public function consumeColdCrystal($amount) {
+        return $this->reduceResource('cold', $amount);
+    }
+
+    /**
+     * 减少郁萌萌资源
+     * @param int $amount 减少的数量
+     * @return bool
+     */
+    public function consumeGreenCrystal($amount) {
+        return $this->reduceResource('green', $amount);
+    }
+
+    /**
+     * 减少昼闪闪资源
+     * @param int $amount 减少的数量
+     * @return bool
+     */
+    public function consumeDayCrystal($amount) {
+        return $this->reduceResource('day', $amount);
+    }
+
+    /**
+     * 减少夜静静资源
+     * @param int $amount 减少的数量
+     * @return bool
+     */
+    public function consumeNightCrystal($amount) {
+        return $this->reduceResource('night', $amount);
+    }
+
+    /**
      * 更新资源产出
      * @param int $userId 用户ID
      * @return bool

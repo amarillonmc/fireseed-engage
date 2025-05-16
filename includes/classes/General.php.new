@@ -806,7 +806,7 @@ class General {
      * @param string $element 元素类型
      * @return string 技能名称
      */
-    public static function getRandomSkillName($element) {
+    private static function getRandomSkillName($element) {
         $skillNames = [
             '亮晶晶' => ['资源加速', '士兵训练加速', '资源爆发', '建筑加速', '税收增加'],
             '暖洋洋' => ['行军加速', '闪电行军', '火焰打击', '战斗爆发', '士气提升'],
@@ -825,7 +825,7 @@ class General {
      * @param string $element 元素类型
      * @return array 技能效果
      */
-    public static function getRandomSkillEffect($element) {
+    private static function getRandomSkillEffect($element) {
         $skillEffects = [
             '亮晶晶' => [
                 ['production' => 10],
