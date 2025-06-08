@@ -10,6 +10,9 @@ class User {
     private $circuitPoints;
     private $maxCircuitPoints;
     private $maxGeneralCost;
+    private $adminLevel;
+    private $lastLogin;
+    private $createdAt;
     private $isValid = false;
     
     /**
@@ -34,7 +37,7 @@ class User {
         $stmt->bind_param('i', $this->userId);
         $stmt->execute();
         $result = $stmt->get_result();
-        
+
         if ($result && $result->num_rows > 0) {
             $userData = $result->fetch_assoc();
             $this->username = $userData['username'];
@@ -43,9 +46,12 @@ class User {
             $this->circuitPoints = $userData['circuit_points'];
             $this->maxCircuitPoints = $userData['max_circuit_points'];
             $this->maxGeneralCost = $userData['max_general_cost'];
+            $this->adminLevel = $userData['admin_level'] ?? 0;
+            $this->lastLogin = $userData['last_login'];
+            $this->createdAt = $userData['registration_date'];
             $this->isValid = true;
         }
-        
+
         $stmt->close();
     }
     
@@ -97,8 +103,8 @@ class User {
         $hashedPassword = password_hash($password, PASSWORD_DEFAULT);
         $registrationDate = date('Y-m-d H:i:s');
         
-        $query = "INSERT INTO users (username, password, email, registration_date, level, circuit_points, max_circuit_points, max_general_cost) 
-                  VALUES (?, ?, ?, ?, 1, 1, 10, 10.0)";
+        $query = "INSERT INTO users (username, password, email, registration_date, level, circuit_points, max_circuit_points, max_general_cost, admin_level)
+                  VALUES (?, ?, ?, ?, 1, 1, 10, 10.0, 0)";
         $stmt = $this->db->prepare($query);
         $stmt->bind_param('ssss', $username, $hashedPassword, $email, $registrationDate);
         $result = $stmt->execute();
@@ -226,6 +232,55 @@ class User {
     public function getMaxGeneralCost() {
         return $this->maxGeneralCost;
     }
+
+    /**
+     * 获取管理员等级
+     * @return int
+     */
+    public function getAdminLevel() {
+        return $this->adminLevel;
+    }
+
+    /**
+     * 获取最后登录时间
+     * @return string
+     */
+    public function getLastLogin() {
+        return $this->lastLogin;
+    }
+
+    /**
+     * 获取创建时间
+     * @return string
+     */
+    public function getCreatedAt() {
+        return $this->createdAt;
+    }
+
+    /**
+     * 检查是否为管理员
+     * @return bool
+     */
+    public function isAdmin() {
+        return $this->adminLevel > 0;
+    }
+
+    /**
+     * 检查是否为超级管理员
+     * @return bool
+     */
+    public function isSuperAdmin() {
+        return $this->adminLevel >= 9;
+    }
+
+    /**
+     * 检查管理员权限等级
+     * @param int $requiredLevel 需要的权限等级
+     * @return bool
+     */
+    public function hasAdminLevel($requiredLevel) {
+        return $this->adminLevel >= $requiredLevel;
+    }
     
     /**
      * 增加思考回路点数
@@ -309,6 +364,143 @@ class User {
             return true;
         }
         
+        return false;
+    }
+
+    /**
+     * 设置用户管理员等级
+     * @param int $adminLevel 管理员等级 (0=普通用户, 1-8=不同等级管理员, 9=超级管理员)
+     * @return bool
+     */
+    public function setAdminLevel($adminLevel) {
+        if ($adminLevel < 0 || $adminLevel > 9) {
+            return false;
+        }
+
+        $query = "UPDATE users SET admin_level = ? WHERE user_id = ?";
+        $stmt = $this->db->prepare($query);
+        $stmt->bind_param('ii', $adminLevel, $this->userId);
+        $result = $stmt->execute();
+        $stmt->close();
+
+        if ($result) {
+            $this->adminLevel = $adminLevel;
+            return true;
+        }
+
+        return false;
+    }
+
+    /**
+     * 记录管理员操作日志
+     * @param string $action 操作类型
+     * @param string $targetType 目标类型
+     * @param int $targetId 目标ID
+     * @param string $details 详细信息
+     * @return bool
+     */
+    public function logAdminAction($action, $targetType = null, $targetId = null, $details = null) {
+        if (!$this->isAdmin()) {
+            return false;
+        }
+
+        $ipAddress = $_SERVER['REMOTE_ADDR'] ?? null;
+        $userAgent = $_SERVER['HTTP_USER_AGENT'] ?? null;
+
+        $query = "INSERT INTO admin_logs (admin_id, action, target_type, target_id, details, ip_address, user_agent)
+                  VALUES (?, ?, ?, ?, ?, ?, ?)";
+        $stmt = $this->db->prepare($query);
+        $stmt->bind_param('issiiss', $this->userId, $action, $targetType, $targetId, $details, $ipAddress, $userAgent);
+        $result = $stmt->execute();
+        $stmt->close();
+
+        return $result;
+    }
+
+    /**
+     * 获取所有用户列表（管理员功能）
+     * @param int $limit 限制数量
+     * @param int $offset 偏移量
+     * @return array
+     */
+    public static function getAllUsers($limit = 50, $offset = 0) {
+        $db = Database::getInstance()->getConnection();
+        $query = "SELECT user_id, username, email, level, admin_level, registration_date, last_login
+                  FROM users ORDER BY user_id DESC LIMIT ? OFFSET ?";
+        $stmt = $db->prepare($query);
+        $stmt->bind_param('ii', $limit, $offset);
+        $stmt->execute();
+        $result = $stmt->get_result();
+
+        $users = [];
+        if ($result) {
+            while ($row = $result->fetch_assoc()) {
+                $users[] = $row;
+            }
+        }
+
+        $stmt->close();
+        return $users;
+    }
+
+    /**
+     * 搜索用户（管理员功能）
+     * @param string $keyword 搜索关键词
+     * @param int $limit 限制数量
+     * @return array
+     */
+    public static function searchUsers($keyword, $limit = 50) {
+        $db = Database::getInstance()->getConnection();
+        $searchTerm = '%' . $keyword . '%';
+        $query = "SELECT user_id, username, email, level, admin_level, registration_date, last_login
+                  FROM users
+                  WHERE username LIKE ? OR email LIKE ?
+                  ORDER BY user_id DESC LIMIT ?";
+        $stmt = $db->prepare($query);
+        $stmt->bind_param('ssi', $searchTerm, $searchTerm, $limit);
+        $stmt->execute();
+        $result = $stmt->get_result();
+
+        $users = [];
+        if ($result) {
+            while ($row = $result->fetch_assoc()) {
+                $users[] = $row;
+            }
+        }
+
+        $stmt->close();
+        return $users;
+    }
+
+    /**
+     * 获取用户总数
+     * @return int
+     */
+    public static function getTotalUserCount() {
+        $db = Database::getInstance()->getConnection();
+        $query = "SELECT COUNT(*) as total FROM users";
+        $result = $db->query($query);
+        $row = $result->fetch_assoc();
+        return $row['total'];
+    }
+
+    /**
+     * 创建管理员用户（安装时使用）
+     * @param string $username 用户名
+     * @param string $password 密码
+     * @param string $email 邮箱
+     * @param int $adminLevel 管理员等级
+     * @return bool|int 成功返回用户ID，失败返回false
+     */
+    public static function createAdminUser($username, $password, $email, $adminLevel = 9) {
+        $user = new User();
+        $userId = $user->createUser($username, $password, $email);
+
+        if ($userId) {
+            $user->setAdminLevel($adminLevel);
+            return $userId;
+        }
+
         return false;
     }
 }

@@ -24,6 +24,8 @@ require_once 'includes/classes/Technology.php';
 require_once 'includes/classes/UserTechnology.php';
 require_once 'includes/classes/Army.php';
 require_once 'includes/classes/Battle.php';
+require_once 'includes/classes/AdminManager.php';
+require_once 'includes/classes/GameConfig.php';
 
 // 包含辅助函数
 require_once 'includes/functions.php';

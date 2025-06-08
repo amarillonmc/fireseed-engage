@@ -4,7 +4,7 @@ require_once '../includes/init.php';
 
 // 检查用户是否已登录且是管理员
 if (!isset($_SESSION['user_id'])) {
-    header('Location: ../login.php');
+    header('Location: login.php');
     exit;
 }
 
