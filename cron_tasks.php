@@ -23,6 +23,10 @@ $logMessages[] = "完成升级的设施数量: " . count($completedUpgrades);
 $completedTrainings = Soldier::checkAndCompleteTraining();
 $logMessages[] = "完成训练的士兵记录数量: " . count($completedTrainings);
 
+// 3.5. 检查并完成所有已完成的科技研究
+$completedResearch = UserTechnology::checkAndCompleteResearch();
+$logMessages[] = "完成研究的科技数量: " . count($completedResearch);
+
 // 4. 更新所有用户的资源产出
 $query = "SELECT user_id FROM users";
 $result = $db->query($query);
