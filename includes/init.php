@@ -12,16 +12,18 @@ require_once 'includes/database.php';
 require_once 'includes/classes/User.php';
 require_once 'includes/classes/Resource.php';
 require_once 'includes/classes/Map.php';
+require_once 'includes/classes/MapGenerator.php';
+require_once 'includes/classes/ResourceCollector.php';
 require_once 'includes/classes/City.php';
 require_once 'includes/classes/Facility.php';
 require_once 'includes/classes/Soldier.php';
 require_once 'includes/classes/General.php';
-require_once 'includes/classes/Skill.php';
+require_once 'includes/classes/GeneralSkill.php';
+require_once 'includes/classes/GeneralAssignment.php';
 require_once 'includes/classes/Technology.php';
+require_once 'includes/classes/UserTechnology.php';
 require_once 'includes/classes/Army.php';
 require_once 'includes/classes/Battle.php';
-require_once 'includes/classes/Alliance.php';
-require_once 'includes/classes/GameManager.php';
 
 // 包含辅助函数
 require_once 'includes/functions.php';
