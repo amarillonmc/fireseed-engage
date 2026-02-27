@@ -339,7 +339,18 @@ $pageTitle = '管理后台';
                         <span class="nav-icon">📋</span>
                         <span class="nav-text">操作日志</span>
                     </a>
-                    <a href="game_data.php" class="nav-link">
+                    <a href="skills.php" class="nav-link">
+                        <span class="nav-icon">✨</span>
+                        <span class="nav-text">技能管理</span>
+                    </a>
+                    <a href="generals.php" class="nav-link">
+                        <span class="nav-icon">⚔️</span>
+                        <span class="nav-text">武将管理</span>
+                    </a>
+                    <a href="logs.php" class="nav-link">
+                        <span class="nav-icon">📋</span>
+                        <span class="nav-text">操作日志</span>
+                    </a>
                         <span class="nav-icon">🎮</span>
                         <span class="nav-text">游戏数据</span>
                     </a>

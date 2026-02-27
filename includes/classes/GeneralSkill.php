@@ -272,3 +272,80 @@ class GeneralSkill {
         return $skills;
     }
 }
+    /**
+     * 获取技能效果（JSON格式）
+     * @return string
+     */
+    public function getSkillEffect() {
+        return is_array($this->skillEffect) ? $this->skillEffect : json_decode($this->skillEffect, true);
+    }
+    
+    /**
+     * 设置技能名称
+     * @param string $skillName 技能名称
+     */
+    public function setSkillName($skillName) {
+        $this->skillName = $skillName;
+    }
+    
+    /**
+     * 设置技能类型
+     * @param string $skillType 技能类型
+     */
+    public function setSkillType($skillType) {
+        $this->skillType = $skillType;
+    }
+    
+    /**
+     * 设置技能效果
+     * @param array $skillEffect 技能效果
+     */
+    public function setSkillEffect($skillEffect) {
+        $this->skillEffect = $skillEffect;
+    }
+    
+    /**
+     * 保存技能信息
+     * @return bool 是否成功
+     */
+    public function save() {
+        if (!$this->isValid) {
+            return false;
+        }
+        
+        $skillEffectJson = is_array($this->skillEffect) ? json_encode($this->skillEffect) : $this->skillEffect;
+        
+        $query = "UPDATE general_skills SET skill_name = ?, skill_type = ?, skill_effect = ? WHERE skill_id = ?";
+        $stmt = $this->db->prepare($query);
+        $stmt->bind_param('sssi', $this->skillName, $this->skillType, $skillEffectJson, $this->skillId);
+        $result = $stmt->execute();
+        $success = $result !== false;
+        $stmt->close();
+        
+        return $success;
+    }
+    
+    /**
+     * 删除技能
+     * @return bool 是否成功
+     */
+    public function delete() {
+        if (!$this->isValid) {
+            return false;
+        }
+        
+        $query = "DELETE FROM general_skills WHERE skill_id = ?";
+        $stmt = $this->db->prepare($query);
+        $stmt->bind_param('i', $this->skillId);
+        $result = $stmt->execute();
+        $success = $result !== false;
+        $stmt->close();
+        
+        if ($success) {
+            $this->isValid = false;
+        }
+        
+        return $success;
+    }
+}
+

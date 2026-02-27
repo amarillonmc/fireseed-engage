@@ -875,3 +875,143 @@ class General {
         return $elementEffects[array_rand($elementEffects)];
     }
 }
+    /**
+     * 设置武将名称
+     * @param string $name 武将名称
+     */
+    public function setName($name) {
+        $this->name = $name;
+    }
+    
+    /**
+     * 设置武将来源
+     * @param string $source 武将来源
+     */
+    public function setSource($source) {
+        $this->source = $source;
+    }
+    
+    /**
+     * 设置武将稀有度
+     * @param string $rarity 武将稀有度
+     */
+    public function setRarity($rarity) {
+        $this->rarity = $rarity;
+    }
+    
+    /**
+     * 设置武将COST
+     * @param float $cost 武将COST
+     */
+    public function setCost($cost) {
+        $this->cost = $cost;
+    }
+    
+    /**
+     * 设置武将元素
+     * @param string $element 武将元素
+     */
+    public function setElement($element) {
+        $this->element = $element;
+    }
+    
+    /**
+     * 设置攻击力
+     * @param int $attack 攻击力
+     */
+    public function setAttack($attack) {
+        $this->attack = $attack;
+    }
+    
+    /**
+     * 设置防御力
+     * @param int $defense 防御力
+     */
+    public function setDefense($defense) {
+        $this->defense = $defense;
+    }
+    
+    /**
+     * 设置速度
+     * @param int $speed 速度
+     */
+    public function setSpeed($speed) {
+        $this->speed = $speed;
+    }
+    
+    /**
+     * 设置智力
+     * @param int $intelligence 智力
+     */
+    public function setIntelligence($intelligence) {
+        $this->intelligence = $intelligence;
+    }
+    
+    /**
+     * 保存武将信息
+     * @return bool 是否成功
+     */
+    public function save() {
+        if (!$this->isValid) {
+            return false;
+        }
+        
+        $query = "UPDATE generals SET name = ?, source = ?, rarity = ?, cost = ?, element = ?, attack = ?, defense = ?, speed = ?, intelligence = ? WHERE general_id = ?";
+        $stmt = $this->db->prepare($query);
+        $stmt->bind_param('sssdsiiiii', $this->name, $this->source, $this->rarity, $this->cost, $this->element, $this->attack, $this->defense, $this->speed, $this->intelligence, $this->generalId);
+        $result = $stmt->execute();
+        $success = $result !== false;
+        $stmt->close();
+        
+        return $success;
+    }
+    
+    /**
+     * 删除武将
+     * @return bool 是否成功
+     */
+    public function delete() {
+        if (!$this->isValid) {
+            return false;
+        }
+        
+        // 开始事务
+        $this->db->begin_transaction();
+        
+        try {
+            // 删除武将的技能
+            $query = "DELETE FROM general_skills WHERE general_id = ?";
+            $stmt = $this->db->prepare($query);
+            $stmt->bind_param('i', $this->generalId);
+            $stmt->execute();
+            $stmt->close();
+            
+            // 删除武将的分配记录
+            $query = "DELETE FROM general_assignments WHERE general_id = ?";
+            $stmt = $this->db->prepare($query);
+            $stmt->bind_param('i', $this->generalId);
+            $stmt->execute();
+            $stmt->close();
+            
+            // 删除武将
+            $query = "DELETE FROM generals WHERE general_id = ?";
+            $stmt = $this->db->prepare($query);
+            $stmt->bind_param('i', $this->generalId);
+            $result = $stmt->execute();
+            $stmt->close();
+            
+            if ($result) {
+                $this->db->commit();
+                $this->isValid = false;
+                return true;
+            } else {
+                $this->db->rollback();
+                return false;
+            }
+        } catch (Exception $e) {
+            $this->db->rollback();
+            return false;
+        }
+    }
+}
+

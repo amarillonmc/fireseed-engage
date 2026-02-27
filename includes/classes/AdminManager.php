@@ -35,6 +35,14 @@ class AdminManager {
         'edit_user_armies' => 4,     // 编辑用户军队
         'edit_game_config' => 5,     // 编辑游戏配置
         'manage_map' => 5,           // 管理地图
+        'manage_generals' => 3,      // 管理武将（查看）
+        'create_generals' => 3,      // 创建武将
+        'edit_generals' => 3,        // 编辑武将
+        'delete_generals' => 4,      // 删除武将
+        'manage_skills' => 3,        // 管理技能（查看）
+        'create_skills' => 3,        // 创建技能
+        'edit_skills' => 3,          // 编辑技能
+        'delete_skills' => 4,        // 删除技能
         'reset_game' => 6,           // 重置游戏
         'manage_admins' => 7,        // 管理管理员
         'system_maintenance' => 8,   // 系统维护
