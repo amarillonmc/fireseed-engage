@@ -141,3 +141,200 @@ function generateRandomString($length = 10) {
     }
     return $randomString;
 }
+
+/**
+ * 转义HTML输出 / Escape a value for HTML output
+ * @param mixed $value 待输出值 / Value to render
+ * @return string 已转义文本 / Escaped text
+ */
+function escapeHtml($value) {
+    return htmlspecialchars((string) $value, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8');
+}
+
+/**
+ * 获取当前会话的CSRF令牌 / Get the current session CSRF token
+ * @return string CSRF令牌 / CSRF token
+ */
+function getCsrfToken() {
+    if (empty($_SESSION['csrf_token'])) {
+        $_SESSION['csrf_token'] = bin2hex(random_bytes(32));
+    }
+
+    return $_SESSION['csrf_token'];
+}
+
+/**
+ * 渲染CSRF隐藏字段 / Render a CSRF hidden input
+ * @return string HTML字段 / HTML input
+ */
+function csrfField() {
+    return '<input type="hidden" name="csrf_token" value="' . escapeHtml(getCsrfToken()) . '">';
+}
+
+/**
+ * 验证请求携带的CSRF令牌 / Validate a request CSRF token
+ * @param string|null $token 请求令牌 / Request token
+ * @return bool 是否有效 / Whether the token is valid
+ */
+function validateCsrfToken($token = null) {
+    $requestToken = $token;
+    if ($requestToken === null) {
+        $requestToken = isset($_POST['csrf_token']) ? $_POST['csrf_token'] : '';
+    }
+
+    return isset($_SESSION['csrf_token'])
+        && is_string($requestToken)
+        && hash_equals($_SESSION['csrf_token'], $requestToken);
+}
+
+/**
+ * 要求当前请求使用POST且通过CSRF校验 / Require POST with a valid CSRF token
+ * @return bool 是否通过 / Whether validation passed
+ */
+function isValidPostRequest() {
+    return isset($_SERVER['REQUEST_METHOD'])
+        && $_SERVER['REQUEST_METHOD'] === 'POST'
+        && validateCsrfToken();
+}
+
+/**
+ * 获取当前赛季对城池与地图操作的锁定状态 / Get the current season lock for city and map actions
+ * @return array 锁定状态、重置时间与提示 / Lock state, reset time, and message
+ */
+function getSeasonGameplayLockState() {
+    static $loaded = false;
+    static $state = null;
+
+    if ($loaded) {
+        return $state;
+    }
+    $loaded = true;
+    $state = [
+        'frozen' => false,
+        'reset_at' => null,
+        'message' => ''
+    ];
+
+    try {
+        $db = Database::getInstance()->getConnection();
+        $query = "SELECT status, reset_at
+                  FROM seasons
+                  WHERE ended_at IS NULL
+                  ORDER BY season_number DESC
+                  LIMIT 1";
+        $stmt = $db->prepare($query);
+        if (!$stmt) {
+            return $state;
+        }
+        if (!$stmt->execute()) {
+            $stmt->close();
+            return $state;
+        }
+        $result = $stmt->get_result();
+        $season = $result ? $result->fetch_assoc() : null;
+        $stmt->close();
+
+        if ($season && $season['status'] === 'reset_pending') {
+            $state['frozen'] = true;
+            $state['reset_at'] = $season['reset_at'];
+            $state['message'] = '本轮已经结束，城池与地图操作将在新赛季开始后恢复'
+                . ($season['reset_at']
+                    ? '（预计 ' . $season['reset_at'] . '）'
+                    : '')
+                . ' / This round has ended; city and map actions resume with the next season.';
+        }
+    } catch (Throwable $exception) {
+        // 旧数据库尚未迁移时保持可用，并记录诊断信息 / Keep legacy installations usable before migration and log diagnostics
+        error_log('Unable to read season gameplay lock: ' . $exception->getMessage());
+    }
+
+    return $state;
+}
+
+/**
+ * 判断城池与地图操作是否处于赛季冻结期 / Determine whether city and map actions are season-frozen
+ * @return bool 是否冻结 / Whether actions are frozen
+ */
+function isSeasonGameplayFrozen() {
+    $state = getSeasonGameplayLockState();
+
+    return !empty($state['frozen']);
+}
+
+/**
+ * 获取赛季冻结提示 / Get the season-freeze message
+ * @return string 双语提示 / Bilingual message
+ */
+function getSeasonGameplayFreezeMessage() {
+    $state = getSeasonGameplayLockState();
+
+    return !empty($state['message'])
+        ? (string) $state['message']
+        : '当前无法进行城池或地图操作 / City and map actions are currently unavailable.';
+}
+
+/**
+ * 在世界操作事务中锁定当前赛季并拒绝冻结期写入 / Lock the current season in a world-action transaction and reject frozen writes
+ *
+ * 调用方必须已经开启事务；赛季锁始终先于玩家、地图、城池和军队锁，
+ * 使冻结切换与玩家操作形成单一的先后顺序。
+ * The caller must already have an open transaction. The season lock always
+ * precedes user, map, city, and army locks so freeze transitions and player
+ * actions have one authoritative ordering.
+ *
+ * @param mysqli $db 数据库连接 / Database connection
+ * @return void
+ * @throws RuntimeException 无法读取赛季或当前处于冻结期 / Season read failure or active freeze
+ */
+function lockSeasonForWorldAction($db) {
+    $query = "SELECT status
+              FROM seasons
+              WHERE ended_at IS NULL
+              ORDER BY season_number DESC
+              LIMIT 1
+              LOCK IN SHARE MODE";
+    $stmt = $db->prepare($query);
+    if (!$stmt || !$stmt->execute()) {
+        if ($stmt) {
+            $stmt->close();
+        }
+        throw new RuntimeException(
+            '无法锁定当前赛季 / Failed to lock the current season'
+        );
+    }
+    $result = $stmt->get_result();
+    $season = $result ? $result->fetch_assoc() : null;
+    $stmt->close();
+
+    if ($season && $season['status'] === 'reset_pending') {
+        throw new RuntimeException(
+            '本轮已经结束，城池与地图操作将在新赛季开始后恢复'
+            . ' / This round has ended; city and map actions resume with the next season.'
+        );
+    }
+}
+
+/**
+ * 限制并清理单行文本输入 / Normalize and bound a single-line text input
+ * @param mixed $value 输入值 / Input value
+ * @param int $maxLength 最大字符数 / Maximum character count
+ * @return string 已清理文本 / Normalized text
+ */
+function normalizeTextInput($value, $maxLength = 255) {
+    $text = trim(str_replace(["\r", "\n"], ' ', (string) $value));
+    if (function_exists('mb_substr')) {
+        return mb_substr($text, 0, $maxLength, 'UTF-8');
+    }
+
+    return substr($text, 0, $maxLength);
+}
+
+/**
+ * 安全地解码JSON对象 / Safely decode a JSON object
+ * @param string|null $json JSON文本 / JSON text
+ * @return array 解码结果 / Decoded object
+ */
+function decodeJsonObject($json) {
+    $decoded = json_decode((string) $json, true);
+    return is_array($decoded) ? $decoded : [];
+}

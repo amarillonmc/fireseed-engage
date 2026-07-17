@@ -1,0 +1,130 @@
+# 种火集结号 - 玩法扩展补全记录 / Fireseed Engage - Gameplay Expansion Completion Log
+# 时间 / Timestamp: 2026-07-17 18:02:07 America/Toronto
+
+## 依据 / Sources
+
+- 用户提供的《日本网页游戏〈メガミエンゲイジ〉设计文档草稿》结构化内容。
+  Structured content from the user-provided reference-game design draft.
+- doc/etc/20260226_201832_generals_skills_management_implementation.txt 中的缺失功能清单。
+  The missing-feature list in the prior generals and skills implementation log.
+- 仓库既有 User、City、Facility、Army、Battle、General 与 Resource 机制。
+  Existing User, City, Facility, Army, Battle, General, and Resource mechanics.
+
+本次只借鉴机制结构，并完全沿用本企划的原创角色、六系晶体、思考回路、十二门与银白之孔等虚构层；没有加入付费货币、充值入口或外部作品角色。
+This implementation borrows only mechanical structure and keeps the project's OC roster and established fiction. It adds no paid currency, purchase flow, or third-party characters.
+
+## 已实现 / Implemented
+
+### 武将、招募与成长 / Generals, Recruitment, and Progression
+
+- 加入公共原创武将模板、初始五次选择、普通/高级/共鸣招募与抽取记录。
+- 加入 B/A/S/SS/P 稀有度概率、重复武将转化技能点、无可用稀有度时安全回退。
+- 加入经验、稳定属性成长、HP、离线回复、五阶 BREAK、蜕变核心消耗与 10% 属性提升。
+- 同步 G001-G014 企划模板，并补足六个 B 稀有度版本以保证各招募池可用。
+- 管理后台只管理 owner_id=0 的公共原创模板，并加入输入校验、权限检查、CSRF、安全删除限制，以及与真实技能卡目录同步的零号槽固有技能。
+- 已停用技能卡的历史固有映射可以原样保留或明确移除，但不能被新建模板或其他模板重新绑定。
+
+- Added public OC templates, five starter choices, normal/advanced/resonance recruitment, and draw history.
+- Added rarity rolls, duplicate-to-skill-point conversion, safe rarity fallback, experience, HP recovery, and five BREAK stages.
+- Synchronized G001-G014 and six B-rarity variants.
+- Restricted the admin general page to validated public templates and added transactional inherent-card synchronization with non-destructive historical mappings.
+
+### 技能卡 / Skill Cards
+
+- 加入技能卡目录、库存、抽取、装备/卸下、升级、技能点消耗、冷却与主动效果持久化。
+- 主动技能支持即时资源、治疗与限时效果；停用目录卡不会继续生效或被装备。
+- 被动技能接入军队攻击/防御/速度、内政生产/训练/建造/城防、侦察范围、战损减免与任务奖励。
+- skill_power 会增强主动技能，quest_reward 会增强实际领取的任务与成就奖励。
+- 管理后台改为维护真实 skill_card_catalog；删除采用非破坏性停用，保留玩家库存与装备历史。
+
+- Added catalog, inventory, draws, equipment, upgrades, cooldowns, and persisted active effects.
+- Connected passive and active effects to military, city, scouting, loss reduction, and reward consumers.
+- Reworked skill administration around the real catalog with non-destructive disabling.
+
+### 城建、训练与经济 / Construction, Training, and Economy
+
+- 补齐核心 resources、cities、soldiers 表与安装顺序。
+- 修复设施建设/升级、士兵训练/升级、容量、加速、资源扣除与完成结算。
+- 新增只使用游戏内资源的兑换商店、每日限购、技能点/功勋/竞技代币与蜕变核心。
+- 资源生产、收集、研究、武将升级等状态变更使用原子校验，并统一数据库与 PHP 时区。
+
+- Completed core schemas and lifecycle handling for construction, training, storage, and resource settlement.
+- Added an earned-currency exchange shop and synchronized application/database time.
+
+### 地图、PVP 与赛季 / Map, PVP, and Seasons
+
+- 补齐军队选择、行军、返回、目标攻击、兵种克制、真实战损、武将 HP 损伤、俘虏与战报快照。
+- 所有攻击重新校验军队所有权、编成、目标位置、相邻/可达性与联盟友军保护。
+- 加入普通领地驻军的整军部署、按兵种撤回、敌方总量隐藏显示，以及空地/资源地的连续战损与易主。
+- 加入分基地上限、驻军前置条件、资源地改建、总督府/资源设施初始化与思考回路结算。
+- 加入纯侦察军编成、玩家城/NPC 据点侦察、严格攻防判定、私密侦察报告与普通来袭倒计时。
+- 战斗在出发时保存军名、战力、减伤与逐单位编成；战后永久保留参战方授权及准确损失。
+- PVP 掠夺改为双方资源行之间的真实转移；NPC 驻军会跨战斗持续减少，城池耐久只受幸存锤子兵攻击。
+- 加入十二门、银白之孔、通行权、耐久、占领计时、胜利判定、排行榜和赛季重置。
+- 赛季重置会取消旧赛季待处理战斗与协同作战，避免旧行军污染新赛季。
+- 胜者确定后的 48 小时结算期会集中冻结城池与地图写操作，立即停止未结战斗、行军与协同出征；武将招募、成长和技能管理保持开放。
+- 冻结边界使用事务内共享赛季锁覆盖首城、建造、训练、研究、生产、采集、驻军、分城、侦察、军队与联盟行动；重置持有排他锁。
+
+- Completed army selection, marching, PVP resolution, counters, losses, general HP damage, prisoners, and reports.
+- Added whole-army garrison deployment, typed withdrawal, territory attrition/capture, and owner-safe visibility.
+- Added sub-base limits and conversion, scout-only missions with private reports, departure combat snapshots, permanent participant authorization, real resource transfers, persistent NPC losses, and surviving-golem city damage.
+- Added twelve gateways, Silver Hole access, occupation victory, rankings, and safe season reset.
+- Added a transaction-level settlement boundary across every world mutation while keeping general-related systems available.
+
+### 联盟、挑战、任务与社交 / Alliance, Challenges, Progress, and Social
+
+- 加入联盟创建/申请/审核/角色、资源援助与到时自动派遣的协同作战。
+- 加入七日自动轮换讨伐战、贡献奖励、竞技场 ELO/每日次数、战斗之塔与赛季积分。
+- 讨伐页面与服务端共用同一最低贡献规则，并严格区分可攻击、可领取、已过期与贡献不足状态。
+- 加入日常/周常/主线任务、长期成就、事件账本与并发安全的一次性领取。
+- 加入站内邮件、世界/联盟聊天、好友申请/接受/拒绝和访问控制。
+- 共用导航与集结中枢加入战报入口，普通 PVP 记录不再成为孤立页面。
+- 定时任务使用数据库互斥锁，并负责建造、训练、研究、产出、HP、行军、战斗、讨伐、主动技能与赛季生命周期。
+- 首次主城创建改为赛季锁、玩家锁和候选地图格锁下的一次事务，并以数据库唯一约束阻止同账号并发生成多个主城。
+- 新页面统一校验 session 对应用户仍然有效；无效城防入口改回真实存在的主基地页面。
+
+- Added alliance governance, aid, scheduled operations, recurring raids, Arena, Tower, quests, achievements, mail, chat, and friendships.
+- Shared one authoritative raid-contribution threshold between service and UI eligibility states.
+- Added discoverable battle-report navigation through the shared header and engagement hub.
+- Expanded cron into the authoritative lifecycle driver under a database mutex.
+- Made initial-city onboarding atomic and season-aware, added a one-main-city database invariant, and hardened stale-session page access.
+
+## 数据库应用 / Database Application
+
+全新安装会由 install.php 依序载入核心表与 sql/gameplay_expansion.sql。
+Fresh installs load the core schemas and sql/gameplay_expansion.sql through install.php.
+
+现有数据库请先备份，再执行：
+Back up an existing database, then run:
+
+mysql -u root -p fireseed_engage < sql/upgrade_20260717_gameplay_expansion.sql
+
+升级脚本为自包含、可重复执行版本，不依赖 mysql 客户端 SOURCE 命令；它会确定性合并旧库重复资源行，并在建立唯一索引前保护既有玩家城市与领地。
+The upgrade script is self-contained and rerunnable, does not rely on the mysql-client SOURCE command, deterministically consolidates duplicate legacy resource rows, and protects existing player cities and territory before adding world sites.
+
+安装器的建表和管理员步骤支持中断后安全重跑；同名或同邮箱的冲突账号不会被静默接管。
+Installer table creation and administrator provisioning can safely resume after interruption; conflicting username or email ownership is never silently taken over.
+
+最终双轴审查后，无参数 SQL 也统一通过可关闭的预处理语句执行；定时任务、赛季、联盟、经济、任务、地图生成与安装器不再直接调用 mysqli::query。
+After the final two-axis review, parameterless SQL also runs through closed prepared statements; cron, season, alliance, economy, progress, map generation, and installation no longer call mysqli::query directly.
+
+## 验证 / Verification
+
+- 全仓 PHP 语法检查 / Repository-wide PHP syntax checks
+- assets/js/map.js 与 assets/js/script.js 的 Node 语法检查 / Node syntax checks
+- GameRules、CityBonusRules、GeneralGrowth、ScoutingRules、ServiceInvariant 与 SqlSchema 静态回归测试
+- WorldMutationInvariant 世界状态事务回归测试；七组测试合计 432 项断言通过
+- WorldMutationInvariant transaction regression checks; seven suites passed 432 assertions in total
+- git diff --check
+- 付费/IP/TODO 残留扫描与状态变更端点 CSRF 扫描
+
+当前环境没有 MySQL/MariaDB 服务，且 PHP CLI 未加载 mysqli，因此无法在本次会话中执行真实数据库集成测试。
+The environment has no MySQL/MariaDB service and its PHP CLI lacks mysqli, so live database integration tests could not run in this session.
+
+DOCX 已完成结构化读取与内容核对；由于环境没有 LibreOffice，无法生成逐页渲染图进行版面核验。该限制不影响本次机制清单提取。
+The DOCX was structurally read and checked. LibreOffice was unavailable for page rendering, which does not affect the extracted mechanics list.
+
+## 待产品规则 / Product Rule Still Needed
+
+项目旧规格中的“最后主城失守后成为附属、缴纳大量资源并随机重开”没有给出缴纳数值、附属关系解除条件或重开时保留范围；既有代码也一直禁止主城易主。本次不擅自改变该既有边界。若要启用该流程，需要先确定这些平衡规则。
+The legacy project spec does not define the payment amount, vassal-release condition, or retained state for restarting after the last main city falls, while existing code has always excluded main-city capture. This implementation does not invent or silently alter that boundary; those balance rules must be decided before enabling the flow.

@@ -26,6 +26,23 @@ $armies = Army::getUserArmies($user->getUserId());
 // 获取用户的所有城池
 $cities = City::getUserCities($user->getUserId());
 
+// 汇总战斗中获得的俘虏 / Summarize captives earned from battles
+$query = "SELECT soldier_type, level, SUM(quantity) AS quantity
+          FROM prisoners
+          WHERE owner_id = ?
+          GROUP BY soldier_type, level
+          ORDER BY FIELD(soldier_type, 'pawn', 'knight', 'rook', 'bishop', 'golem'), level";
+$stmt = $db->prepare($query);
+$userId = (int) $user->getUserId();
+$stmt->bind_param('i', $userId);
+$stmt->execute();
+$result = $stmt->get_result();
+$prisonerSummary = [];
+while ($result && ($row = $result->fetch_assoc())) {
+    $prisonerSummary[] = $row;
+}
+$stmt->close();
+
 // 页面标题
 $pageTitle = '军队管理';
 ?>
@@ -35,6 +52,7 @@ $pageTitle = '军队管理';
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="csrf-token" content="<?php echo escapeHtml(getCsrfToken()); ?>">
     <title><?php echo SITE_NAME; ?> - <?php echo $pageTitle; ?></title>
     <link rel="stylesheet" href="assets/css/style.css">
     <style>
@@ -302,7 +320,7 @@ $pageTitle = '军队管理';
                 <div class="armies-list">
                     <?php foreach ($armies as $army): ?>
                     <div class="army-card" data-army-id="<?php echo $army->getArmyId(); ?>">
-                        <h4><?php echo $army->getName(); ?></h4>
+                        <h4><?php echo escapeHtml($army->getName()); ?></h4>
                         
                         <?php
                         $statusText = '';
@@ -336,14 +354,14 @@ $pageTitle = '军队管理';
                         <?php elseif ($army->getStatus() == 'returning'): ?>
                         <p>返回城池: <?php 
                             $city = new City($army->getCityId());
-                            echo $city->isValid() ? $city->getName() : '未知城池';
+                            echo $city->isValid() ? escapeHtml($city->getName()) : '未知城池';
                         ?></p>
                         <p>预计返回时间: <?php echo date('Y-m-d H:i:s', strtotime($army->getReturnTime())); ?></p>
                         <?php else: ?>
                         <p>当前位置: (<?php echo $army->getCurrentPosition()[0]; ?>, <?php echo $army->getCurrentPosition()[1]; ?>)</p>
                         <p>所属城池: <?php 
                             $city = new City($army->getCityId());
-                            echo $city->isValid() ? $city->getName() : '未知城池';
+                            echo $city->isValid() ? escapeHtml($city->getName()) : '未知城池';
                         ?></p>
                         <?php endif; ?>
                         
@@ -363,7 +381,20 @@ $pageTitle = '军队管理';
                             <?php if ($army->getStatus() == 'idle'): ?>
                             <button class="view-on-map" data-x="<?php echo $army->getCurrentPosition()[0]; ?>" data-y="<?php echo $army->getCurrentPosition()[1]; ?>">查看位置</button>
                             <button class="move" data-army-id="<?php echo $army->getArmyId(); ?>">移动</button>
+                            <?php
+                            $disbandCity = new City($army->getCityId());
+                            $disbandCoordinates = $disbandCity->isValid()
+                                ? $disbandCity->getCoordinates()
+                                : [null, null];
+                            $canDisbandHere = $disbandCity->isValid()
+                                && (int) $army->getCurrentPosition()[0] === (int) $disbandCoordinates[0]
+                                && (int) $army->getCurrentPosition()[1] === (int) $disbandCoordinates[1];
+                            ?>
+                            <?php if ($canDisbandHere): ?>
                             <button class="disband" data-army-id="<?php echo $army->getArmyId(); ?>">解散</button>
+                            <?php else: ?>
+                            <span>返回所属城池后才能解散</span>
+                            <?php endif; ?>
                             <?php elseif ($army->getStatus() == 'marching'): ?>
                             <button class="view-on-map" data-x="<?php echo $army->getTargetPosition()[0]; ?>" data-y="<?php echo $army->getTargetPosition()[1]; ?>">查看目标</button>
                             <button class="return" data-army-id="<?php echo $army->getArmyId(); ?>">返回</button>
@@ -390,7 +421,7 @@ $pageTitle = '军队管理';
                         <select id="city-id" name="city-id" required>
                             <option value="">-- 选择城池 --</option>
                             <?php foreach ($cities as $city): ?>
-                            <option value="<?php echo $city->getCityId(); ?>"><?php echo $city->getName(); ?></option>
+                            <option value="<?php echo $city->getCityId(); ?>"><?php echo escapeHtml($city->getName()); ?></option>
                             <?php endforeach; ?>
                         </select>
                     </div>
@@ -409,6 +440,30 @@ $pageTitle = '军队管理';
                     </div>
                 </div>
             </div>
+
+            <div class="armies-container">
+                <div class="armies-header">
+                    <h3 class="armies-title">俘虏名册</h3>
+                </div>
+                <?php if (empty($prisonerSummary)): ?>
+                    <div class="message info">尚未在玩家战斗中获得俘虏。</div>
+                <?php else: ?>
+                    <table class="gameplay-table">
+                        <thead>
+                            <tr><th>兵种</th><th>等级</th><th>累计数量</th></tr>
+                        </thead>
+                        <tbody>
+                            <?php foreach ($prisonerSummary as $prisoner): ?>
+                            <tr>
+                                <td><?php echo getSoldierName($prisoner['soldier_type']); ?></td>
+                                <td><?php echo number_format((int) $prisoner['level']); ?></td>
+                                <td><?php echo number_format((int) $prisoner['quantity']); ?></td>
+                            </tr>
+                            <?php endforeach; ?>
+                        </tbody>
+                    </table>
+                <?php endif; ?>
+            </div>
         </main>
         
         <!-- 页脚 -->
@@ -420,6 +475,7 @@ $pageTitle = '军队管理';
     <script src="assets/js/script.js"></script>
     <script>
         document.addEventListener('DOMContentLoaded', function() {
+            const csrfToken = document.querySelector('meta[name="csrf-token"]').getAttribute('content');
             // 创建新军队按钮点击事件
             document.getElementById('create-army-btn').addEventListener('click', function() {
                 document.getElementById('create-army-form').style.display = 'block';
@@ -500,6 +556,7 @@ $pageTitle = '军队管理';
                         'Content-Type': 'application/json'
                     },
                     body: JSON.stringify({
+                        csrf_token: csrfToken,
                         name: armyName,
                         city_id: cityId,
                         units: units
@@ -550,7 +607,7 @@ $pageTitle = '军队管理';
                     const armyId = this.getAttribute('data-army-id');
                     
                     if (confirm('确定要让军队返回城池吗？')) {
-                        fetch(`api/return_army.php?army_id=${armyId}`)
+                        postForm('api/return_army.php', {army_id: armyId})
                             .then(response => response.json())
                             .then(data => {
                                 if (data.success) {
@@ -579,7 +636,7 @@ $pageTitle = '军队管理';
                     const armyId = this.getAttribute('data-army-id');
                     
                     if (confirm('确定要解散这支军队吗？士兵将返回城池。')) {
-                        fetch(`api/disband_army.php?army_id=${armyId}`)
+                        postForm('api/disband_army.php', {army_id: armyId})
                             .then(response => response.json())
                             .then(data => {
                                 if (data.success) {
@@ -600,6 +657,17 @@ $pageTitle = '军队管理';
                     }
                 });
             });
+
+            // 统一发送带CSRF令牌的军队操作 / Send army mutations with a CSRF token
+            function postForm(url, values) {
+                const body = new FormData();
+                body.append('csrf_token', csrfToken);
+                Object.keys(values).forEach(key => body.append(key, values[key]));
+                return fetch(url, {
+                    method: 'POST',
+                    body: body
+                });
+            }
             
             // 渲染士兵选择
             function renderUnitSelection(soldiers) {
@@ -645,28 +713,6 @@ $pageTitle = '军队管理';
                 }
             }
         });
-        
-        // 获取士兵名称函数（PHP版本）
-        <?php
-        function getSoldierName($type) {
-            switch ($type) {
-                case 'pawn':
-                    return '兵卒';
-                case 'knight':
-                    return '骑士';
-                case 'rook':
-                    return '城壁';
-                case 'bishop':
-                    return '主教';
-                case 'golem':
-                    return '锤子兵';
-                case 'scout':
-                    return '侦察兵';
-                default:
-                    return '未知士兵';
-            }
-        }
-        ?>
     </script>
 </body>
 </html>

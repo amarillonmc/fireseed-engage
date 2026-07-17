@@ -43,6 +43,14 @@ if ($endX - $startX > $maxRange || $endY - $startY > $maxRange) {
 
 // 获取指定范围内的地图格子
 $tiles = Map::getTilesInRange($startX, $startY, $endX, $endY);
+$garrisonService = new TerritoryGarrisonService();
+$garrisons = $garrisonService->getMapGarrisonsInRange(
+    $startX,
+    $startY,
+    $endX,
+    $endY,
+    (int) $_SESSION['user_id']
+);
 
 // 准备返回数据
 $tileData = [];
@@ -64,8 +72,26 @@ foreach ($tiles as $tile) {
         
         // 根据地图格子类型添加额外信息
         switch ($tile->getType()) {
+            case 'empty':
+                $garrison = isset($garrisons[$tile->getTileId()])
+                    ? $garrisons[$tile->getTileId()]
+                    : ['total' => 0, 'units' => []];
+                $data['garrison_total'] = (int) $garrison['total'];
+                if ((int) $tile->getOwnerId() === (int) $_SESSION['user_id']) {
+                    // 只有领主能看到驻军编成，敌方只获得总量 / Only the owner receives the composition; enemies receive only the total
+                    $data['garrison_units'] = $garrison['units'];
+                }
+                break;
             case 'resource':
                 $data['resource_amount'] = $tile->getResourceAmount();
+                $garrison = isset($garrisons[$tile->getTileId()])
+                    ? $garrisons[$tile->getTileId()]
+                    : ['total' => 0, 'units' => []];
+                $data['garrison_total'] = (int) $garrison['total'];
+                if ((int) $tile->getOwnerId() === (int) $_SESSION['user_id']) {
+                    // 只有领主能看到驻军编成，敌方只获得总量 / Only the owner receives the composition; enemies receive only the total
+                    $data['garrison_units'] = $garrison['units'];
+                }
                 break;
             case 'npc_fort':
                 $data['npc_level'] = $tile->getNpcLevel();

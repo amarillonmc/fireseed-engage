@@ -1,15 +1,15 @@
 <?php
-// 包含初始化文件
-require_once 'includes/init.php';
+// 种火集结号 - 领地与驻军管理 / Fireseed Engage - territory and garrison management
 
-// 检查用户是否已登录
+require_once 'includes/init.php';
+require_once 'includes/gameplay_ui.php';
+
 if (!isset($_SESSION['user_id'])) {
     header('Location: login.php');
     exit;
 }
 
-// 获取用户信息
-$user = new User($_SESSION['user_id']);
+$user = new User((int) $_SESSION['user_id']);
 if (!$user->isValid()) {
     session_unset();
     session_destroy();
@@ -17,538 +17,469 @@ if (!$user->isValid()) {
     exit;
 }
 
-// 获取用户资源
+$garrisonService = new TerritoryGarrisonService();
+$territories = $garrisonService->getUserTerritories($user->getUserId());
+$cities = City::getUserCities($user->getUserId());
 $resource = new Resource($user->getUserId());
-
-// 获取用户拥有的所有资源点
-$query = "SELECT * FROM map_tiles WHERE owner_id = ? AND type = 'resource'";
-$stmt = $db->prepare($query);
-$stmt->bind_param('i', $user->getUserId());
-$stmt->execute();
-$result = $stmt->get_result();
-
-$resourceTiles = [];
-
-if ($result) {
-    while ($row = $result->fetch_assoc()) {
-        $tile = new Map($row['tile_id']);
-        if ($tile->isValid()) {
-            $resourceTiles[] = [
-                'tile_id' => $tile->getTileId(),
-                'x' => $tile->getX(),
-                'y' => $tile->getY(),
-                'type' => $tile->getType(),
-                'subtype' => $tile->getSubtype(),
-                'resource_amount' => $tile->getResourceAmount(),
-                'last_collection_time' => $tile->getLastCollectionTime(),
-                'collection_efficiency' => $tile->getCollectionEfficiency(),
-                'name' => $tile->getName()
-            ];
-        }
-    }
-}
-
-$stmt->close();
-
-// 页面标题
 $pageTitle = '领地管理';
 ?>
-
 <!DOCTYPE html>
 <html lang="zh-CN">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title><?php echo SITE_NAME; ?> - <?php echo $pageTitle; ?></title>
+    <meta name="csrf-token" content="<?php echo escapeHtml(getCsrfToken()); ?>">
+    <title><?php echo escapeHtml(SITE_NAME . ' - ' . $pageTitle); ?></title>
     <link rel="stylesheet" href="assets/css/style.css">
     <style>
-        .territory-container {
-            background-color: #fff;
-            padding: 20px;
-            margin-bottom: 20px;
-            border-radius: 5px;
-            box-shadow: 0 2px 5px rgba(0, 0, 0, 0.1);
-        }
-        
-        .territory-header {
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            margin-bottom: 20px;
-        }
-        
-        .territory-title {
-            margin: 0;
-        }
-        
-        .territory-controls {
-            display: flex;
-            gap: 10px;
-        }
-        
-        .territory-controls button {
-            padding: 5px 10px;
-            background-color: #333;
-            color: #fff;
-            border: none;
-            border-radius: 3px;
-            cursor: pointer;
-        }
-        
-        .territory-controls button:hover {
-            background-color: #555;
-        }
-        
-        .territory-table {
-            width: 100%;
-            border-collapse: collapse;
-            margin-bottom: 20px;
-        }
-        
-        .territory-table th,
-        .territory-table td {
-            padding: 10px;
-            text-align: left;
-            border: 1px solid #eee;
-        }
-        
-        .territory-table th {
-            background-color: #f5f5f5;
-            font-weight: bold;
-        }
-        
-        .territory-table tr:nth-child(even) {
-            background-color: #f9f9f9;
-        }
-        
-        .territory-table .resource-bright {
-            background-color: #f0f0f0;
-        }
-        
-        .territory-table .resource-warm {
-            background-color: #ffeeee;
-        }
-        
-        .territory-table .resource-cold {
-            background-color: #eeeeff;
-        }
-        
-        .territory-table .resource-green {
-            background-color: #eeffee;
-        }
-        
-        .territory-table .resource-day {
-            background-color: #ffffee;
-        }
-        
-        .territory-table .resource-night {
-            background-color: #eeeeff;
-        }
-        
-        .territory-table .actions {
-            display: flex;
-            gap: 5px;
-        }
-        
-        .territory-table .actions button {
-            padding: 3px 8px;
-            background-color: #333;
-            color: #fff;
-            border: none;
-            border-radius: 3px;
-            cursor: pointer;
-            font-size: 12px;
-        }
-        
-        .territory-table .actions button:hover {
-            background-color: #555;
-        }
-        
-        .territory-table .actions button.abandon {
-            background-color: #cc0000;
-        }
-        
-        .territory-table .actions button.abandon:hover {
-            background-color: #ff0000;
-        }
-        
-        .territory-info {
-            margin-top: 20px;
-            padding: 15px;
-            background-color: #f5f5f5;
-            border-radius: 5px;
-        }
-        
-        .territory-info h3 {
-            margin-top: 0;
-            margin-bottom: 10px;
-        }
-        
-        .territory-info p {
-            margin: 5px 0;
-        }
-        
-        .territory-summary {
-            margin-top: 20px;
-            padding: 15px;
-            background-color: #f5f5f5;
-            border-radius: 5px;
-        }
-        
-        .territory-summary h3 {
-            margin-top: 0;
-            margin-bottom: 10px;
-        }
-        
-        .territory-summary p {
-            margin: 5px 0;
-        }
-        
-        .territory-summary .resource-list {
+        .territory-toolbar,
+        .territory-actions,
+        .garrison-actions {
             display: flex;
             flex-wrap: wrap;
+            gap: 8px;
+            align-items: center;
+        }
+        .territory-card {
+            border: 1px solid #ddd;
+            border-radius: 6px;
+            padding: 16px;
+            margin-bottom: 16px;
+            background: #fff;
+        }
+        .territory-card h4 {
+            margin: 0 0 10px;
+        }
+        .territory-meta {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+            gap: 8px;
+            margin-bottom: 12px;
+        }
+        .garrison-panel {
+            margin-top: 12px;
+            padding: 12px;
+            border-radius: 5px;
+            background: #f5f5f5;
+        }
+        .garrison-list,
+        .army-at-tile-list {
+            margin: 8px 0;
+            padding-left: 22px;
+        }
+        .withdraw-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
             gap: 10px;
-            margin-top: 10px;
+            margin: 10px 0;
         }
-        
-        .territory-summary .resource-item {
-            padding: 5px 10px;
-            border-radius: 3px;
-            font-weight: bold;
+        .withdraw-grid label {
+            display: flex;
+            flex-direction: column;
+            gap: 4px;
         }
-        
-        .territory-summary .resource-bright {
-            background-color: #f0f0f0;
-            color: #333;
+        .withdraw-grid input,
+        .withdraw-grid select {
+            box-sizing: border-box;
+            width: 100%;
+            padding: 7px;
         }
-        
-        .territory-summary .resource-warm {
-            background-color: #ffeeee;
-            color: #cc0000;
+        .blocked-reason {
+            color: #8a4b00;
         }
-        
-        .territory-summary .resource-cold {
-            background-color: #eeeeff;
-            color: #0000cc;
-        }
-        
-        .territory-summary .resource-green {
-            background-color: #eeffee;
-            color: #00cc00;
-        }
-        
-        .territory-summary .resource-day {
-            background-color: #ffffee;
-            color: #cccc00;
-        }
-        
-        .territory-summary .resource-night {
-            background-color: #eeeeff;
-            color: #6600cc;
+        button.danger {
+            background: #a40000;
+            color: #fff;
         }
     </style>
 </head>
 <body>
-    <div class="container">
-        <!-- 页首 -->
-        <header>
-            <h1 class="site-title"><?php echo SITE_NAME; ?></h1>
-            <h2 class="page-title"><?php echo $pageTitle; ?></h2>
-            <nav class="main-nav">
-                <ul>
-                    <li><a href="index.php">主基地</a></li>
-                    <li><a href="profile.php">档案</a></li>
-                    <li><a href="generals.php">武将</a></li>
-                    <li><a href="map.php">地图</a></li>
-                    <li><a href="territory.php">领地</a></li>
-                    <li><a href="internal.php">内政</a></li>
-                    <li><a href="ranking.php">排名</a></li>
-                    <li class="circuit-points">思考回路: <?php echo $user->getCircuitPoints(); ?> / <?php echo $user->getMaxCircuitPoints(); ?></li>
-                </ul>
-            </nav>
-        </header>
-        
-        <!-- 主内容 -->
-        <main>
-            <!-- 资源显示 -->
-            <div class="resource-bar">
-                <div class="resource bright-crystal">
-                    <span class="resource-name">亮晶晶</span>
-                    <span class="resource-value"><?php echo number_format($resource->getBrightCrystal()); ?></span>
-                </div>
-                <div class="resource warm-crystal">
-                    <span class="resource-name">暖洋洋</span>
-                    <span class="resource-value"><?php echo number_format($resource->getWarmCrystal()); ?></span>
-                </div>
-                <div class="resource cold-crystal">
-                    <span class="resource-name">冷冰冰</span>
-                    <span class="resource-value"><?php echo number_format($resource->getColdCrystal()); ?></span>
-                </div>
-                <div class="resource green-crystal">
-                    <span class="resource-name">郁萌萌</span>
-                    <span class="resource-value"><?php echo number_format($resource->getGreenCrystal()); ?></span>
-                </div>
-                <div class="resource day-crystal">
-                    <span class="resource-name">昼闪闪</span>
-                    <span class="resource-value"><?php echo number_format($resource->getDayCrystal()); ?></span>
-                </div>
-                <div class="resource night-crystal">
-                    <span class="resource-name">夜静静</span>
-                    <span class="resource-value"><?php echo number_format($resource->getNightCrystal()); ?></span>
-                </div>
+<div class="container">
+    <?php renderGameplayHeader($pageTitle, $user); ?>
+    <main>
+        <?php renderGameplayResourceBar($resource); ?>
+
+        <section class="gameplay-section">
+            <div class="territory-toolbar">
+                <button type="button" id="collect-all-btn">收集所有资源点</button>
+                <button type="button" id="refresh-btn">刷新</button>
+                <a href="armies.php">军队运输管理</a>
+                <a href="map.php">返回地图</a>
             </div>
-            
-            <!-- 领地容器 -->
-            <div class="territory-container">
-                <div class="territory-header">
-                    <h3 class="territory-title">资源点管理</h3>
-                    <div class="territory-controls">
-                        <button id="collect-all-btn">收集所有资源</button>
-                        <button id="refresh-btn">刷新</button>
-                    </div>
-                </div>
-                
-                <?php if (empty($resourceTiles)): ?>
-                <div class="message info">
-                    <p>您还没有占领任何资源点。请前往<a href="map.php">地图</a>占领资源点。</p>
-                </div>
-                <?php else: ?>
-                <table class="territory-table">
-                    <thead>
-                        <tr>
-                            <th>名称</th>
-                            <th>坐标</th>
-                            <th>资源类型</th>
-                            <th>剩余资源</th>
-                            <th>收集效率</th>
-                            <th>上次收集</th>
-                            <th>操作</th>
-                        </tr>
-                    </thead>
-                    <tbody>
-                        <?php foreach ($resourceTiles as $tile): ?>
-                        <tr class="resource-<?php echo $tile['subtype']; ?>">
-                            <td><?php echo $tile['name']; ?></td>
-                            <td>(<?php echo $tile['x']; ?>, <?php echo $tile['y']; ?>)</td>
-                            <td><?php echo getResourceName($tile['subtype']); ?></td>
-                            <td><?php echo number_format($tile['resource_amount']); ?></td>
-                            <td><?php echo $tile['collection_efficiency']; ?>/小时</td>
-                            <td>
-                                <?php if ($tile['last_collection_time']): ?>
-                                <?php echo date('Y-m-d H:i:s', strtotime($tile['last_collection_time'])); ?>
+            <p>
+                部署驻军前，请先通过军队移动把整支待命军队运到领地坐标。
+                驻军撤回后会组成一支以所选城池为归属的军队，并自动返城。
+            </p>
+        </section>
+
+        <section class="gameplay-section">
+            <h3>普通领地与驻军</h3>
+            <?php if (empty($territories)): ?>
+                <div class="message info">尚未占领空地或资源点。</div>
+            <?php else: ?>
+                <?php foreach ($territories as $territory): ?>
+                    <?php
+                    $withdrawableByType = [];
+                    foreach ($territory['garrison_units'] as $unit) {
+                        $soldierType = $unit['soldier_type'];
+                        $withdrawableByType[$soldierType] =
+                            (isset($withdrawableByType[$soldierType])
+                                ? $withdrawableByType[$soldierType]
+                                : 0)
+                            + (int) $unit['quantity'];
+                    }
+                    ?>
+                    <article
+                        class="territory-card"
+                        id="territory-<?php echo (int) $territory['tile_id']; ?>"
+                        data-tile-id="<?php echo (int) $territory['tile_id']; ?>"
+                    >
+                        <h4><?php echo escapeHtml($territory['name']); ?></h4>
+                        <div class="territory-meta">
+                            <span>
+                                坐标：
+                                (<?php echo number_format((int) $territory['x']); ?>,
+                                <?php echo number_format((int) $territory['y']); ?>)
+                            </span>
+                            <span>
+                                类型：
+                                <?php echo $territory['type'] === 'resource'
+                                    ? escapeHtml(getResourceName($territory['subtype']) . '资源点')
+                                    : '空地'; ?>
+                            </span>
+                            <span>
+                                驻军总量：
+                                <?php echo number_format((int) $territory['garrison_total']); ?>
+                            </span>
+                            <?php if ($territory['type'] === 'resource'): ?>
+                                <span>
+                                    剩余资源：
+                                    <?php echo number_format((int) $territory['resource_amount']); ?>
+                                </span>
+                                <span>
+                                    收集效率：
+                                    <?php echo number_format((int) $territory['collection_efficiency']); ?>/小时
+                                </span>
+                            <?php endif; ?>
+                        </div>
+
+                        <div class="territory-actions">
+                            <button
+                                type="button"
+                                class="view-on-map"
+                                data-x="<?php echo (int) $territory['x']; ?>"
+                                data-y="<?php echo (int) $territory['y']; ?>"
+                            >查看地图</button>
+                            <?php if ($territory['type'] === 'resource'): ?>
+                                <button
+                                    type="button"
+                                    class="collect-resource"
+                                    data-tile-id="<?php echo (int) $territory['tile_id']; ?>"
+                                >收集资源</button>
+                            <?php endif; ?>
+                            <?php if ((int) $territory['garrison_total'] === 0): ?>
+                                <button
+                                    type="button"
+                                    class="abandon-territory danger"
+                                    data-x="<?php echo (int) $territory['x']; ?>"
+                                    data-y="<?php echo (int) $territory['y']; ?>"
+                                >放弃领地</button>
+                            <?php else: ?>
+                                <span class="blocked-reason">有驻军时不能放弃领地</span>
+                            <?php endif; ?>
+                        </div>
+
+                        <div class="garrison-panel">
+                            <h5>当前驻军编成</h5>
+                            <?php if (empty($territory['garrison_units'])): ?>
+                                <p>无驻军。</p>
+                            <?php else: ?>
+                                <ul class="garrison-list">
+                                    <?php foreach ($territory['garrison_units'] as $unit): ?>
+                                        <li>
+                                            <?php echo escapeHtml(getSoldierName($unit['soldier_type'])); ?>
+                                            Lv.<?php echo number_format((int) $unit['level']); ?>：
+                                            <?php echo number_format((int) $unit['quantity']); ?>
+                                        </li>
+                                    <?php endforeach; ?>
+                                </ul>
+                            <?php endif; ?>
+
+                            <h5>同坐标待命军队</h5>
+                            <?php if (empty($territory['idle_armies'])): ?>
+                                <p>
+                                    没有待命军队。可在
+                                    <a href="armies.php">军队页面</a>
+                                    把军队移动到该坐标。
+                                </p>
+                            <?php else: ?>
+                                <ul class="army-at-tile-list">
+                                    <?php foreach ($territory['idle_armies'] as $army): ?>
+                                        <li>
+                                            <?php echo escapeHtml($army['name']); ?>
+                                            （<?php echo number_format((int) $army['unit_count']); ?>人）
+                                            <?php if ($army['deployable']): ?>
+                                                <button
+                                                    type="button"
+                                                    class="deploy-garrison"
+                                                    data-tile-id="<?php echo (int) $territory['tile_id']; ?>"
+                                                    data-army-id="<?php echo (int) $army['army_id']; ?>"
+                                                >整军部署</button>
+                                            <?php else: ?>
+                                                <span class="blocked-reason">
+                                                    不可部署：
+                                                    <?php echo escapeHtml($army['blocked_reason']); ?>
+                                                </span>
+                                            <?php endif; ?>
+                                        </li>
+                                    <?php endforeach; ?>
+                                </ul>
+                            <?php endif; ?>
+                        </div>
+
+                        <?php if (!empty($withdrawableByType)): ?>
+                            <div class="garrison-panel withdraw-form">
+                                <h5>撤回部分驻军</h5>
+                                <?php if (empty($cities)): ?>
+                                    <div class="message error">没有可作为返程目标的己方城池。</div>
                                 <?php else: ?>
-                                从未收集
+                                    <div class="withdraw-grid">
+                                        <label>
+                                            新军队名称
+                                            <input
+                                                type="text"
+                                                class="withdraw-name"
+                                                maxlength="50"
+                                                value="<?php
+                                                    echo escapeHtml(
+                                                        '驻军撤回 '
+                                                        . $territory['x']
+                                                        . ','
+                                                        . $territory['y']
+                                                    );
+                                                ?>"
+                                            >
+                                        </label>
+                                        <label>
+                                            返程城池
+                                            <select class="withdraw-city">
+                                                <?php foreach ($cities as $city): ?>
+                                                    <option value="<?php echo (int) $city->getCityId(); ?>">
+                                                        <?php echo escapeHtml($city->getName()); ?>
+                                                    </option>
+                                                <?php endforeach; ?>
+                                            </select>
+                                        </label>
+                                        <?php foreach ($withdrawableByType as $soldierType => $quantity): ?>
+                                            <label>
+                                                <?php echo escapeHtml(getSoldierName($soldierType)); ?>
+                                                （最多<?php echo number_format((int) $quantity); ?>）
+                                                <input
+                                                    type="number"
+                                                    class="withdraw-quantity"
+                                                    min="0"
+                                                    max="<?php echo (int) $quantity; ?>"
+                                                    value="0"
+                                                    data-soldier-type="<?php echo escapeHtml($soldierType); ?>"
+                                                >
+                                            </label>
+                                        <?php endforeach; ?>
+                                    </div>
+                                    <div class="garrison-actions">
+                                        <button
+                                            type="button"
+                                            class="withdraw-garrison"
+                                            data-tile-id="<?php echo (int) $territory['tile_id']; ?>"
+                                        >组成军队并返城</button>
+                                    </div>
                                 <?php endif; ?>
-                            </td>
-                            <td class="actions">
-                                <button class="collect" data-tile-id="<?php echo $tile['tile_id']; ?>">收集</button>
-                                <button class="view-on-map" data-x="<?php echo $tile['x']; ?>" data-y="<?php echo $tile['y']; ?>">查看</button>
-                                <button class="abandon" data-x="<?php echo $tile['x']; ?>" data-y="<?php echo $tile['y']; ?>">放弃</button>
-                            </td>
-                        </tr>
-                        <?php endforeach; ?>
-                    </tbody>
-                </table>
-                
-                <div class="territory-summary">
-                    <h3>资源点统计</h3>
-                    <p>总数: <?php echo count($resourceTiles); ?> 个资源点</p>
-                    <p>资源类型分布:</p>
-                    <div class="resource-list">
-                        <?php
-                        $resourceCounts = [
-                            'bright' => 0,
-                            'warm' => 0,
-                            'cold' => 0,
-                            'green' => 0,
-                            'day' => 0,
-                            'night' => 0
-                        ];
-                        
-                        foreach ($resourceTiles as $tile) {
-                            $resourceCounts[$tile['subtype']]++;
-                        }
-                        
-                        foreach ($resourceCounts as $type => $count) {
-                            if ($count > 0) {
-                                echo '<div class="resource-item resource-' . $type . '">' . getResourceName($type) . ': ' . $count . '</div>';
-                            }
-                        }
-                        ?>
-                    </div>
-                </div>
-                <?php endif; ?>
-            </div>
-        </main>
-        
-        <!-- 页脚 -->
-        <footer>
-            <p>&copy; <?php echo date('Y'); ?> <?php echo SITE_NAME; ?> - 版本 <?php echo GAME_VERSION; ?></p>
-        </footer>
-    </div>
-    
-    <script src="assets/js/script.js"></script>
-    <script>
-        document.addEventListener('DOMContentLoaded', function() {
-            // 收集所有资源按钮点击事件
-            document.getElementById('collect-all-btn').addEventListener('click', function() {
-                collectAllResources();
-            });
-            
-            // 刷新按钮点击事件
-            document.getElementById('refresh-btn').addEventListener('click', function() {
-                window.location.reload();
-            });
-            
-            // 收集按钮点击事件
-            const collectButtons = document.querySelectorAll('.collect');
-            collectButtons.forEach(button => {
-                button.addEventListener('click', function() {
-                    const tileId = this.getAttribute('data-tile-id');
-                    collectResource(tileId);
-                });
-            });
-            
-            // 查看按钮点击事件
-            const viewButtons = document.querySelectorAll('.view-on-map');
-            viewButtons.forEach(button => {
-                button.addEventListener('click', function() {
-                    const x = this.getAttribute('data-x');
-                    const y = this.getAttribute('data-y');
-                    window.location.href = `map.php?x=${x}&y=${y}`;
-                });
-            });
-            
-            // 放弃按钮点击事件
-            const abandonButtons = document.querySelectorAll('.abandon');
-            abandonButtons.forEach(button => {
-                button.addEventListener('click', function() {
-                    const x = this.getAttribute('data-x');
-                    const y = this.getAttribute('data-y');
-                    abandonTile(x, y);
-                });
-            });
-            
-            // 收集所有资源
-            function collectAllResources() {
-                fetch('api/collect_resources.php')
-                    .then(response => response.json())
-                    .then(data => {
-                        if (data.success) {
-                            let message = `收集成功，共收集了${data.total_collected}单位资源`;
-                            
-                            // 显示各类资源收集数量
-                            const resources = data.collected_resources;
-                            for (const type in resources) {
-                                if (resources[type] > 0) {
-                                    message += `\n${getResourceName(type)}: ${resources[type]}`;
-                                }
-                            }
-                            
-                            showNotification(message);
-                            
-                            // 刷新页面
-                            setTimeout(() => {
-                                window.location.reload();
-                            }, 2000);
-                        } else {
-                            showNotification(data.message);
-                        }
-                    })
-                    .catch(error => {
-                        console.error('Error collecting resources:', error);
-                        showNotification('收集资源时发生错误');
-                    });
-            }
-            
-            // 收集单个资源点的资源
-            function collectResource(tileId) {
-                fetch(`api/collect_resources.php?tile_id=${tileId}`)
-                    .then(response => response.json())
-                    .then(data => {
-                        if (data.success) {
-                            showNotification(`收集成功，获得了${data.collected}单位${getResourceName(data.resource_type)}`);
-                            
-                            // 刷新页面
-                            setTimeout(() => {
-                                window.location.reload();
-                            }, 2000);
-                        } else {
-                            showNotification(data.message);
-                        }
-                    })
-                    .catch(error => {
-                        console.error('Error collecting resource:', error);
-                        showNotification('收集资源时发生错误');
-                    });
-            }
-            
-            // 放弃资源点
-            function abandonTile(x, y) {
-                if (confirm('确定要放弃这个资源点吗？')) {
-                    fetch(`api/abandon_tile.php?x=${x}&y=${y}`)
-                        .then(response => response.json())
-                        .then(data => {
-                            if (data.success) {
-                                showNotification('放弃成功');
-                                
-                                // 刷新页面
-                                setTimeout(() => {
-                                    window.location.reload();
-                                }, 2000);
-                            } else {
-                                showNotification(data.message);
-                            }
-                        })
-                        .catch(error => {
-                            console.error('Error abandoning tile:', error);
-                            showNotification('放弃资源点时发生错误');
-                        });
+                            </div>
+                        <?php endif; ?>
+                    </article>
+                <?php endforeach; ?>
+            <?php endif; ?>
+        </section>
+    </main>
+    <?php renderGameplayFooter(); ?>
+</div>
+
+<script src="assets/js/script.js"></script>
+<script>
+document.addEventListener('DOMContentLoaded', function() {
+    const csrfToken = document.querySelector('meta[name="csrf-token"]').getAttribute('content');
+    const collectAllButton = document.getElementById('collect-all-btn');
+    const refreshButton = document.getElementById('refresh-btn');
+
+    collectAllButton.addEventListener('click', function() {
+        submitForm('api/collect_resources.php', {})
+            .then(handleJsonResponse)
+            .then(data => {
+                showNotification(data.message || (
+                    data.success
+                        ? `收集完成，共获得${Number(data.total_collected) || 0}单位资源`
+                        : '收集失败'
+                ));
+                if (data.success) {
+                    window.setTimeout(() => window.location.reload(), 800);
                 }
-            }
-            
-            // 获取资源名称
-            function getResourceName(type) {
-                switch (type) {
-                    case 'bright':
-                        return '亮晶晶';
-                    case 'warm':
-                        return '暖洋洋';
-                    case 'cold':
-                        return '冷冰冰';
-                    case 'green':
-                        return '郁萌萌';
-                    case 'day':
-                        return '昼闪闪';
-                    case 'night':
-                        return '夜静静';
-                    default:
-                        return '未知资源';
-                }
+            })
+            .catch(handleRequestError);
+    });
+
+    refreshButton.addEventListener('click', function() {
+        window.location.reload();
+    });
+
+    document.querySelectorAll('.view-on-map').forEach(function(button) {
+        button.addEventListener('click', function() {
+            const x = Number(this.getAttribute('data-x'));
+            const y = Number(this.getAttribute('data-y'));
+            if (Number.isInteger(x) && Number.isInteger(y)) {
+                window.location.href = `map.php?x=${x}&y=${y}`;
             }
         });
-        
-        // 获取资源名称函数（PHP版本）
-        <?php
-        function getResourceName($type) {
-            switch ($type) {
-                case 'bright':
-                    return '亮晶晶';
-                case 'warm':
-                    return '暖洋洋';
-                case 'cold':
-                    return '冷冰冰';
-                case 'green':
-                    return '郁萌萌';
-                case 'day':
-                    return '昼闪闪';
-                case 'night':
-                    return '夜静静';
-                default:
-                    return '未知资源';
+    });
+
+    document.querySelectorAll('.collect-resource').forEach(function(button) {
+        button.addEventListener('click', function() {
+            const tileId = Number(this.getAttribute('data-tile-id'));
+            submitForm('api/collect_resources.php', {tile_id: tileId})
+                .then(handleJsonResponse)
+                .then(data => {
+                    showNotification(data.message || (
+                        data.success ? '资源收集成功' : '资源收集失败'
+                    ));
+                    if (data.success) {
+                        window.setTimeout(() => window.location.reload(), 800);
+                    }
+                })
+                .catch(handleRequestError);
+        });
+    });
+
+    document.querySelectorAll('.abandon-territory').forEach(function(button) {
+        button.addEventListener('click', function() {
+            if (!window.confirm('确定放弃该领地并返还占领成本吗？')) {
+                return;
             }
-        }
-        ?>
-    </script>
+            const x = Number(this.getAttribute('data-x'));
+            const y = Number(this.getAttribute('data-y'));
+            submitForm('api/abandon_tile.php', {x: x, y: y})
+                .then(handleJsonResponse)
+                .then(data => {
+                    showNotification(data.message);
+                    if (data.success) {
+                        window.setTimeout(() => window.location.reload(), 800);
+                    }
+                })
+                .catch(handleRequestError);
+        });
+    });
+
+    document.querySelectorAll('.deploy-garrison').forEach(function(button) {
+        button.addEventListener('click', function() {
+            if (!window.confirm('部署会解散运输军队，并把全部士兵转为该领地驻军。确定继续吗？')) {
+                return;
+            }
+            const activeButton = this;
+            activeButton.disabled = true;
+            submitForm('api/deploy_garrison.php', {
+                tile_id: Number(activeButton.getAttribute('data-tile-id')),
+                army_id: Number(activeButton.getAttribute('data-army-id'))
+            })
+                .then(handleJsonResponse)
+                .then(data => {
+                    showNotification(data.message);
+                    if (data.success) {
+                        window.setTimeout(() => window.location.reload(), 800);
+                    } else {
+                        activeButton.disabled = false;
+                    }
+                })
+                .catch(error => {
+                    activeButton.disabled = false;
+                    handleRequestError(error);
+                });
+        });
+    });
+
+    document.querySelectorAll('.withdraw-garrison').forEach(function(button) {
+        button.addEventListener('click', function() {
+            const form = this.closest('.withdraw-form');
+            const tileId = Number(this.getAttribute('data-tile-id'));
+            const cityId = Number(form.querySelector('.withdraw-city').value);
+            const name = form.querySelector('.withdraw-name').value.trim();
+            const units = [];
+            let invalid = false;
+
+            form.querySelectorAll('.withdraw-quantity').forEach(function(input) {
+                const quantity = Number(input.value);
+                const maximum = Number(input.max);
+                if (!Number.isInteger(quantity) || quantity < 0 || quantity > maximum) {
+                    invalid = true;
+                    return;
+                }
+                if (quantity > 0) {
+                    units.push({
+                        soldier_type: input.getAttribute('data-soldier-type'),
+                        quantity: quantity
+                    });
+                }
+            });
+
+            if (invalid || units.length === 0 || name === '' || !Number.isInteger(cityId)) {
+                showNotification('请选择合法的正整数撤回数量、军队名称与返程城池');
+                return;
+            }
+
+            const activeButton = this;
+            activeButton.disabled = true;
+            submitForm('api/withdraw_garrison.php', {
+                tile_id: tileId,
+                city_id: cityId,
+                name: name,
+                units: JSON.stringify(units)
+            })
+                .then(handleJsonResponse)
+                .then(data => {
+                    showNotification(data.message);
+                    if (data.success) {
+                        window.setTimeout(() => {
+                            window.location.href = 'armies.php';
+                        }, 800);
+                    } else {
+                        activeButton.disabled = false;
+                    }
+                })
+                .catch(error => {
+                    activeButton.disabled = false;
+                    handleRequestError(error);
+                });
+        });
+    });
+
+    // 统一提交带CSRF令牌的状态变更 / Submit every state mutation with a CSRF token
+    function submitForm(url, values) {
+        const body = new FormData();
+        body.append('csrf_token', csrfToken);
+        Object.keys(values).forEach(key => body.append(key, values[key]));
+        return fetch(url, {
+            method: 'POST',
+            body: body
+        });
+    }
+
+    // 在解析JSON前保留HTTP错误语义 / Preserve HTTP error semantics before parsing JSON
+    function handleJsonResponse(response) {
+        return response.json();
+    }
+
+    // 统一处理网络错误 / Handle network failures consistently
+    function handleRequestError(error) {
+        console.error('Territory request failed:', error);
+        showNotification('领地操作请求失败');
+    }
+});
+</script>
 </body>
 </html>

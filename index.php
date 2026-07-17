@@ -54,6 +54,7 @@ $pageTitle = '主页';
             <nav class="main-nav">
                 <ul>
                     <li><a href="index.php">主基地</a></li>
+                    <li><a href="engage.php">集结中枢</a></li>
                     <li><a href="profile.php">档案</a></li>
                     <li><a href="generals.php">武将</a></li>
                     <li><a href="map.php">地图</a></li>
@@ -134,7 +135,13 @@ $pageTitle = '主页';
             </div>
             <?php else: ?>
             <div class="message error">
-                <p>无法创建初始城池，请联系管理员。</p>
+                <p><?php echo htmlspecialchars(
+                    isSeasonGameplayFrozen()
+                        ? getSeasonGameplayFreezeMessage()
+                        : '无法创建初始城池，请联系管理员。',
+                    ENT_QUOTES,
+                    'UTF-8'
+                ); ?></p>
             </div>
             <?php endif; ?>
         </main>

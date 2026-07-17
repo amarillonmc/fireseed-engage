@@ -444,7 +444,8 @@ $categoryNames = [
                         'Content-Type': 'application/json',
                     },
                     body: JSON.stringify({
-                        tech_id: techId
+                        tech_id: techId,
+                        csrf_token: <?php echo json_encode(getCsrfToken()); ?>
                     })
                 })
                 .then(response => response.json())

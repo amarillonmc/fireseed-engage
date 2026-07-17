@@ -476,7 +476,7 @@ class Facility {
         // 插入新设施
         $insertQuery = "INSERT INTO facilities (city_id, type, subtype, level, x_pos, y_pos, construction_time, upgrade_time) VALUES (?, ?, ?, ?, ?, ?, ?, ?)";
         $insertStmt = $this->db->prepare($insertQuery);
-        $insertStmt->bind_param('issiisss', $cityId, $type, $subtype, $level, $xPos, $yPos, $constructionTime, $upgradeTime);
+        $insertStmt->bind_param('issiiiss', $cityId, $type, $subtype, $level, $xPos, $yPos, $constructionTime, $upgradeTime);
         $result = $insertStmt->execute();
 
         if ($result) {
@@ -507,7 +507,7 @@ class Facility {
      * @return bool
      */
     public function upgrade() {
-        if (!$this->isValid) {
+        if (!$this->isValid || $this->level >= 10) {
             return false;
         }
 
@@ -516,14 +516,24 @@ class Facility {
             return false;
         }
 
-        // 计算升级时间（基础时间：30秒 * 等级）
-        $upgradeTime = date('Y-m-d H:i:s', time() + (30 * $this->level));
+        // 驻城武将的建造加速同样作用于设施升级 / Assigned-general construction speed also accelerates facility upgrades
+        $baseUpgradeSeconds = 30 * $this->level;
+        $city = new City($this->cityId);
+        $upgradeSeconds = $city->isValid()
+            ? $city->getAdjustedCityActionDuration($baseUpgradeSeconds, 'build_speed')
+            : $baseUpgradeSeconds;
+        $upgradeTime = date('Y-m-d H:i:s', time() + $upgradeSeconds);
 
         // 更新数据库
-        $query = "UPDATE facilities SET upgrade_time = ? WHERE facility_id = ?";
+        $query = "UPDATE facilities
+                  SET upgrade_time = ?
+                  WHERE facility_id = ?
+                    AND construction_time IS NULL
+                    AND upgrade_time IS NULL
+                    AND level < 10";
         $stmt = $this->db->prepare($query);
         $stmt->bind_param('si', $upgradeTime, $this->facilityId);
-        $result = $stmt->execute();
+        $result = $stmt->execute() && $stmt->affected_rows === 1;
         $stmt->close();
 
         if ($result) {
@@ -535,8 +545,8 @@ class Facility {
     }
 
     /**
-     * 完成升级
-     * @return bool
+     * 原子化完成升级并同步兵种等级 / Complete an upgrade and synchronize unit levels atomically
+     * @return bool 是否完成 / Whether the upgrade completed
      */
     public function completeUpgrade() {
         if (!$this->isValid || !$this->upgradeTime) {
@@ -551,23 +561,288 @@ class Facility {
             return false;
         }
 
-        // 升级等级
-        $newLevel = $this->level + 1;
+        $this->db->begin_transaction();
+        try {
+            lockSeasonForWorldAction($this->db);
 
-        // 更新数据库
-        $query = "UPDATE facilities SET level = ?, upgrade_time = NULL WHERE facility_id = ?";
-        $stmt = $this->db->prepare($query);
-        $stmt->bind_param('ii', $newLevel, $this->facilityId);
-        $result = $stmt->execute();
-        $stmt->close();
+            $query = "SELECT city_id, type, level, upgrade_time
+                      FROM facilities
+                      WHERE facility_id = ?
+                      FOR UPDATE";
+            $stmt = $this->db->prepare($query);
+            $stmt->bind_param('i', $this->facilityId);
+            $stmt->execute();
+            $result = $stmt->get_result();
+            $facility = $result ? $result->fetch_assoc() : null;
+            $stmt->close();
+            if (!$facility
+                || $facility['upgrade_time'] === null
+                || strtotime($facility['upgrade_time']) > $now
+                || (int) $facility['level'] >= 10) {
+                $this->db->rollback();
+                return false;
+            }
 
-        if ($result) {
+            $newLevel = (int) $facility['level'] + 1;
+            $completedAt = date('Y-m-d H:i:s', $now);
+            $query = "UPDATE facilities
+                      SET level = ?, upgrade_time = NULL
+                      WHERE facility_id = ?
+                        AND upgrade_time IS NOT NULL
+                        AND upgrade_time <= ?
+                        AND level = ?";
+            $stmt = $this->db->prepare($query);
+            $currentLevel = (int) $facility['level'];
+            $stmt->bind_param(
+                'iisi',
+                $newLevel,
+                $this->facilityId,
+                $completedAt,
+                $currentLevel
+            );
+            $completed = $stmt->execute() && $stmt->affected_rows === 1;
+            $stmt->close();
+            if (!$completed) {
+                throw new RuntimeException(
+                    '设施升级状态已经变化 / Facility upgrade state changed'
+                );
+            }
+
+            // 建筑升级会同步提高对应兵种等级 / Facility upgrades synchronize the associated soldier levels
+            $soldierTypes = [];
+            if ($facility['type'] === 'barracks') {
+                $soldierTypes = ['pawn', 'knight', 'rook', 'bishop'];
+            } elseif ($facility['type'] === 'workshop') {
+                $soldierTypes = ['golem'];
+            } elseif ($facility['type'] === 'watchtower') {
+                $soldierTypes = ['scout'];
+            }
+
+            if (!empty($soldierTypes)) {
+                $placeholders = implode(',', array_fill(0, count($soldierTypes), '?'));
+                $types = str_repeat('s', count($soldierTypes));
+                $query = "UPDATE soldiers
+                          SET level = GREATEST(level, ?)
+                          WHERE city_id = ? AND type IN ($placeholders)";
+                $stmt = $this->db->prepare($query);
+                $cityId = (int) $facility['city_id'];
+                $parameters = array_merge([$newLevel, $cityId], $soldierTypes);
+                $bindTypes = 'ii' . $types;
+                $stmt->bind_param($bindTypes, ...$parameters);
+                if (!$stmt->execute()) {
+                    $stmt->close();
+                    throw new RuntimeException(
+                        '同步兵种等级失败 / Failed to synchronize soldier levels'
+                    );
+                }
+                $stmt->close();
+            }
+
+            $this->db->commit();
             $this->level = $newLevel;
             $this->upgradeTime = null;
             return true;
+        } catch (Throwable $exception) {
+            $this->db->rollback();
+            error_log('Facility upgrade completion failed: ' . $exception->getMessage());
+            return false;
+        }
+    }
+
+    /**
+     * 完成已到期的设施建造 / Complete a facility whose construction timer has elapsed
+     * @return bool 是否完成 / Whether construction was completed
+     */
+    public function completeConstruction() {
+        if (!$this->isValid || !$this->constructionTime) {
+            return false;
         }
 
-        return false;
+        $completedAt = date('Y-m-d H:i:s');
+        if (strtotime($this->constructionTime) > strtotime($completedAt)) {
+            return false;
+        }
+
+        $this->db->begin_transaction();
+        try {
+            lockSeasonForWorldAction($this->db);
+
+            // 锁定后再核对到期时间，确保并发请求只完成一次 / Recheck the due time under lock so concurrent requests complete once
+            $query = "SELECT construction_time
+                      FROM facilities
+                      WHERE facility_id = ?
+                      FOR UPDATE";
+            $stmt = $this->db->prepare($query);
+            $stmt->bind_param('i', $this->facilityId);
+            $stmt->execute();
+            $result = $stmt->get_result();
+            $facility = $result ? $result->fetch_assoc() : null;
+            $stmt->close();
+            if (!$facility
+                || $facility['construction_time'] === null
+                || strtotime($facility['construction_time']) > strtotime($completedAt)) {
+                $this->db->rollback();
+                return false;
+            }
+
+            $query = "UPDATE facilities
+                      SET construction_time = NULL
+                      WHERE facility_id = ?
+                        AND construction_time IS NOT NULL
+                        AND construction_time <= ?";
+            $stmt = $this->db->prepare($query);
+            $stmt->bind_param('is', $this->facilityId, $completedAt);
+            $completed = $stmt->execute() && $stmt->affected_rows === 1;
+            $stmt->close();
+            if (!$completed) {
+                throw new RuntimeException(
+                    '设施建造状态已经变化 / Facility construction state changed'
+                );
+            }
+
+            $this->db->commit();
+            $this->constructionTime = null;
+            return true;
+        } catch (Throwable $exception) {
+            $this->db->rollback();
+            error_log(
+                'Facility construction completion failed: '
+                . $exception->getMessage()
+            );
+            return false;
+        }
+    }
+
+    /**
+     * 获取指定兵种在本设施的训练速率 / Get this facility's training rate for a soldier type
+     * @param string $soldierType 兵种类型 / Soldier type
+     * @return float 每秒训练数量 / Units trained per second
+     */
+    public function getSoldierTrainingRate($soldierType) {
+        if (!$this->isValid || $this->constructionTime !== null || $this->upgradeTime !== null) {
+            return 0;
+        }
+
+        $baseTime = 0;
+        switch ($soldierType) {
+            case 'pawn':
+                $baseTime = PAWN_TRAINING_TIME;
+                break;
+            case 'knight':
+                $baseTime = KNIGHT_TRAINING_TIME;
+                break;
+            case 'rook':
+                $baseTime = ROOK_TRAINING_TIME;
+                break;
+            case 'bishop':
+                $baseTime = BISHOP_TRAINING_TIME;
+                break;
+            case 'golem':
+                $baseTime = GOLEM_TRAINING_TIME;
+                break;
+            case 'scout':
+                $baseTime = SCOUT_TRAINING_TIME;
+                break;
+            default:
+                return 0;
+        }
+
+        $requiredFacility = Soldier::getTrainingFacilityType($soldierType);
+        if ($requiredFacility === null || $this->type !== $requiredFacility || $baseTime <= 0) {
+            return 0;
+        }
+
+        $levelMultiplier = 1 + (($this->level - 1) * 0.2);
+        return $levelMultiplier / $baseTime;
+    }
+
+    /**
+     * 计算一批士兵的训练时间 / Calculate training time for a soldier batch
+     * @param string $soldierType 兵种类型 / Soldier type
+     * @param int $quantity 数量 / Quantity
+     * @return int 训练秒数 / Training duration in seconds
+     */
+    public function calculateSoldierTrainingTime($soldierType, $quantity) {
+        $quantity = (int) $quantity;
+        if ($quantity <= 0) {
+            return 0;
+        }
+
+        $rate = $this->getSoldierTrainingRate($soldierType);
+        if ($rate <= 0) {
+            return 0;
+        }
+
+        $baseSeconds = $quantity / $rate;
+        $city = new City($this->cityId);
+        if (!$city->isValid()) {
+            return max(1, (int) ceil($baseSeconds));
+        }
+
+        // 驻城武将训练速度按倍率缩短整批队列时长 / Assigned-general training speed shortens the whole batch duration
+        return $city->getAdjustedCityActionDuration($baseSeconds, 'training_speed');
+    }
+
+    /**
+     * 获取宿舍提供的士兵容量 / Get the soldier capacity provided by a dormitory
+     * @return int 士兵容量 / Soldier capacity
+     */
+    public function getSoldierStorageCapacity() {
+        if (!$this->isValid || $this->type !== 'dormitory') {
+            return 0;
+        }
+
+        return (int) floor($this->getEffectValue());
+    }
+
+    /**
+     * 计算指定时长内的资源产量 / Calculate resource production for an elapsed duration
+     * @param int $seconds 经过的秒数 / Elapsed seconds
+     * @param float|null $productionBonus 已汇总的驻城生产百分比 / Pre-aggregated assigned-general production percentage
+     * @return int 产出的资源数量 / Produced resource amount
+     */
+    public function calculateResourceProduction($seconds, $productionBonus = null) {
+        if (!$this->isValid || $this->type !== 'resource_production' || $seconds <= 0) {
+            return 0;
+        }
+
+        $productionTicks = floor($seconds / RESOURCE_PRODUCTION_INTERVAL);
+        $baseProduction = $productionTicks * $this->getEffectValue();
+
+        if ($productionBonus === null) {
+            $city = new City($this->cityId);
+            $bonuses = $city->isValid()
+                ? $city->getAssignedGeneralCityBonuses()
+                : ['production' => 0];
+            $productionBonus = $bonuses['production'];
+        }
+
+        // 在累计产量上应用驻城百分比，避免逐 tick 舍入损失 / Apply the city percentage after accumulation to avoid per-tick rounding loss
+        return (int) floor(City::applyPercentageBonus($baseProduction, $productionBonus));
+    }
+
+    /**
+     * 获取贮存所提供的容量 / Get the capacity supplied by a storage facility
+     * @return int 额外容量 / Additional capacity
+     */
+    public function getResourceStorageCapacity() {
+        if (!$this->isValid || $this->type !== 'storage') {
+            return 0;
+        }
+
+        return (int) floor($this->getEffectValue());
+    }
+
+    /**
+     * 获取兵营可训练的最高兵种等级 / Get the highest soldier level trainable by this barracks
+     * @return int 可训练等级 / Trainable level
+     */
+    public function getMaxSoldierLevel() {
+        if (!$this->isValid || $this->type !== 'barracks') {
+            return 0;
+        }
+
+        return max(1, (int) $this->level);
     }
 
     /**
@@ -620,6 +895,26 @@ class Facility {
     }
 
     /**
+     * 获取城池总士兵容量 / Get a city's total soldier capacity
+     * @param int $cityId 城池ID / City ID
+     * @return int 总容量 / Total capacity
+     */
+    public static function getCityTotalSoldierCapacity($cityId) {
+        $capacity = 0;
+        $dormitories = self::getCityFacilitiesByType($cityId, 'dormitory');
+
+        foreach ($dormitories as $dormitory) {
+            if ($dormitory->getConstructionTime() !== null || $dormitory->getUpgradeTime() !== null) {
+                continue;
+            }
+
+            $capacity += $dormitory->getSoldierStorageCapacity();
+        }
+
+        return $capacity;
+    }
+
+    /**
      * 检查并完成所有已完成的建造
      * @return array 完成的建造列表
      */
@@ -638,14 +933,7 @@ class Facility {
         if ($result) {
             while ($row = $result->fetch_assoc()) {
                 $facility = new Facility($row['facility_id']);
-                if ($facility->isValid()) {
-                    // 完成建造
-                    $updateQuery = "UPDATE facilities SET construction_time = NULL WHERE facility_id = ?";
-                    $updateStmt = $db->prepare($updateQuery);
-                    $updateStmt->bind_param('i', $facility->getFacilityId());
-                    $updateStmt->execute();
-                    $updateStmt->close();
-
+                if ($facility->isValid() && $facility->completeConstruction()) {
                     $completedConstructions[] = [
                         'facility_id' => $facility->getFacilityId(),
                         'name' => $facility->getName(),

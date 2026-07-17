@@ -336,7 +336,7 @@ class Resource {
         }
 
         // 开始事务
-        $this->db->beginTransaction();
+        $this->db->begin_transaction();
 
         $success = true;
 
@@ -465,125 +465,147 @@ class Resource {
     }
 
     /**
-     * 更新资源产出
-     * @param int $userId 用户ID
-     * @return bool
+     * 原子化结算玩家城池资源产出 / Settle a player's city resource production atomically
+     * @param int $userId 用户ID / User ID
+     * @return bool 是否推进了产出时间 / Whether the production timestamp advanced
      */
     public static function updateResourceProduction($userId) {
+        $userId = (int) $userId;
+        if ($userId <= 0) {
+            return false;
+        }
+
         $db = Database::getInstance()->getConnection();
-
-        // 获取用户资源
-        $resource = new Resource($userId);
-        if (!$resource->isValid()) {
-            return false;
-        }
-
-        // 获取上次更新时间
-        $lastUpdate = strtotime($resource->getLastUpdate());
-        $now = time();
-
-        // 如果时间差小于1秒，不进行更新
-        if ($now - $lastUpdate < 1) {
-            return false;
-        }
-
-        // 获取用户的所有城池
-        $cities = City::getUserCities($userId);
-
-        // 计算资源产出
-        $brightCrystalProduction = 0;
-        $warmCrystalProduction = 0;
-        $coldCrystalProduction = 0;
-        $greenCrystalProduction = 0;
-        $dayCrystalProduction = 0;
-        $nightCrystalProduction = 0;
-
-        foreach ($cities as $city) {
-            // 获取城池中的资源产出设施
-            $resourceFacilities = Facility::getCityFacilitiesByType($city->getCityId(), 'resource_production');
-
-            foreach ($resourceFacilities as $facility) {
-                // 跳过正在建造或升级的设施
-                if ($facility->isUnderConstruction() || $facility->isUpgrading()) {
-                    continue;
-                }
-
-                // 计算设施产出的资源
-                $production = $facility->calculateResourceProduction($now - $lastUpdate);
-
-                // 根据设施子类型增加对应资源
-                switch ($facility->getSubtype()) {
-                    case 'bright':
-                        $brightCrystalProduction += $production;
-                        break;
-                    case 'warm':
-                        $warmCrystalProduction += $production;
-                        break;
-                    case 'cold':
-                        $coldCrystalProduction += $production;
-                        break;
-                    case 'green':
-                        $greenCrystalProduction += $production;
-                        break;
-                    case 'day':
-                        $dayCrystalProduction += $production;
-                        break;
-                    case 'night':
-                        $nightCrystalProduction += $production;
-                        break;
-                }
-            }
-        }
-
-        // 获取用户的资源存储上限
-        $storageCapacity = self::getUserResourceStorageCapacity($userId);
-
-        // 开始事务
-        $db->beginTransaction();
+        $db->begin_transaction();
 
         try {
-            // 更新资源
-            if ($brightCrystalProduction > 0) {
-                $newBrightCrystal = min($resource->getBrightCrystal() + $brightCrystalProduction, $storageCapacity);
-                $resource->addResource('bright', $newBrightCrystal - $resource->getBrightCrystal());
+            lockSeasonForWorldAction($db);
+
+            // 先按编号锁定全部城池，和建造及城战保持稳定的城市优先顺序 / Lock every city by ID first to match construction and siege ordering
+            $query = "SELECT city_id
+                      FROM cities
+                      WHERE owner_id = ?
+                      ORDER BY city_id
+                      FOR UPDATE";
+            $stmt = $db->prepare($query);
+            $stmt->bind_param('i', $userId);
+            $stmt->execute();
+            $result = $stmt->get_result();
+            $cityIds = [];
+            while ($result && ($row = $result->fetch_assoc())) {
+                $cityIds[] = (int) $row['city_id'];
+            }
+            $stmt->close();
+
+            $query = "SELECT bright_crystal, warm_crystal, cold_crystal,
+                             green_crystal, day_crystal, night_crystal,
+                             last_update
+                      FROM resources
+                      WHERE user_id = ?
+                      FOR UPDATE";
+            $stmt = $db->prepare($query);
+            $stmt->bind_param('i', $userId);
+            $stmt->execute();
+            $result = $stmt->get_result();
+            $resourceRow = $result ? $result->fetch_assoc() : null;
+            $stmt->close();
+            if (!$resourceRow) {
+                $db->rollback();
+                return false;
             }
 
-            if ($warmCrystalProduction > 0) {
-                $newWarmCrystal = min($resource->getWarmCrystal() + $warmCrystalProduction, $storageCapacity);
-                $resource->addResource('warm', $newWarmCrystal - $resource->getWarmCrystal());
+            $now = time();
+            $lastUpdate = strtotime((string) $resourceRow['last_update']);
+            if ($lastUpdate === false) {
+                $lastUpdate = $now;
+            }
+            $elapsedSeconds = max(0, $now - $lastUpdate);
+            if ($elapsedSeconds < 1) {
+                $db->commit();
+                return false;
             }
 
-            if ($coldCrystalProduction > 0) {
-                $newColdCrystal = min($resource->getColdCrystal() + $coldCrystalProduction, $storageCapacity);
-                $resource->addResource('cold', $newColdCrystal - $resource->getColdCrystal());
+            $production = [
+                'bright' => 0,
+                'warm' => 0,
+                'cold' => 0,
+                'green' => 0,
+                'day' => 0,
+                'night' => 0
+            ];
+            foreach ($cityIds as $cityId) {
+                $city = new City($cityId);
+                if (!$city->isValid()) {
+                    continue;
+                }
+                // 每座城池只汇总一次驻城生产加成 / Aggregate the assigned-general production bonus once per city
+                $cityBonuses = $city->getAssignedGeneralCityBonuses();
+                $facilities = Facility::getCityFacilitiesByType(
+                    $cityId,
+                    'resource_production'
+                );
+                foreach ($facilities as $facility) {
+                    if ($facility->isUnderConstruction() || $facility->isUpgrading()) {
+                        continue;
+                    }
+                    $resourceType = $facility->getSubtype();
+                    if (!isset($production[$resourceType])) {
+                        continue;
+                    }
+                    $produced = $facility->calculateResourceProduction(
+                        $elapsedSeconds,
+                        $cityBonuses['production']
+                    );
+                    $production[$resourceType] = min(
+                        2147483647,
+                        $production[$resourceType] + max(0, (int) $produced)
+                    );
+                }
             }
 
-            if ($greenCrystalProduction > 0) {
-                $newGreenCrystal = min($resource->getGreenCrystal() + $greenCrystalProduction, $storageCapacity);
-                $resource->addResource('green', $newGreenCrystal - $resource->getGreenCrystal());
-            }
-
-            if ($dayCrystalProduction > 0) {
-                $newDayCrystal = min($resource->getDayCrystal() + $dayCrystalProduction, $storageCapacity);
-                $resource->addResource('day', $newDayCrystal - $resource->getDayCrystal());
-            }
-
-            if ($nightCrystalProduction > 0) {
-                $newNightCrystal = min($resource->getNightCrystal() + $nightCrystalProduction, $storageCapacity);
-                $resource->addResource('night', $newNightCrystal - $resource->getNightCrystal());
-            }
-
-            // 更新最后更新时间
-            $query = "UPDATE resources SET last_update = ? WHERE user_id = ?";
+            $storageCapacity = max(
+                0,
+                (int) self::getUserResourceStorageCapacity($userId)
+            );
+            $query = "UPDATE resources
+                      SET bright_crystal = LEAST(?, bright_crystal + ?),
+                          warm_crystal = LEAST(?, warm_crystal + ?),
+                          cold_crystal = LEAST(?, cold_crystal + ?),
+                          green_crystal = LEAST(?, green_crystal + ?),
+                          day_crystal = LEAST(?, day_crystal + ?),
+                          night_crystal = LEAST(?, night_crystal + ?),
+                          last_update = ?
+                      WHERE user_id = ?";
             $stmt = $db->prepare($query);
             $nowDate = date('Y-m-d H:i:s', $now);
-            $stmt->bind_param('si', $nowDate, $userId);
-            $stmt->execute();
+            $stmt->bind_param(
+                'iiiiiiiiiiiisi',
+                $storageCapacity,
+                $production['bright'],
+                $storageCapacity,
+                $production['warm'],
+                $storageCapacity,
+                $production['cold'],
+                $storageCapacity,
+                $production['green'],
+                $storageCapacity,
+                $production['day'],
+                $storageCapacity,
+                $production['night'],
+                $nowDate,
+                $userId
+            );
+            if (!$stmt->execute() || $stmt->affected_rows !== 1) {
+                $stmt->close();
+                throw new RuntimeException(
+                    '更新资源产出失败 / Failed to update resource production'
+                );
+            }
             $stmt->close();
 
             $db->commit();
             return true;
-        } catch (Exception $e) {
+        } catch (Throwable $e) {
             $db->rollback();
             error_log('Resource production update failed: ' . $e->getMessage());
             return false;
@@ -652,6 +674,16 @@ class Resource {
      */
     public function addResourceByType($type, $amount) {
         return $this->addResource($type, $amount);
+    }
+
+    /**
+     * 减少指定类型的资源 / Subtract a resource by its short type
+     * @param string $type 资源类型 / Resource type
+     * @param int $amount 数量 / Amount
+     * @return bool 是否成功 / Whether the subtraction succeeded
+     */
+    public function subtractResourceByType($type, $amount) {
+        return $this->reduceResource($type, $amount);
     }
 
     /**

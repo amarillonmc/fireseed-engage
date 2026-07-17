@@ -20,8 +20,10 @@ if (!$user->isValid()) {
 // 获取用户资源
 $resource = new Resource($user->getUserId());
 
-// 获取军队ID
-$armyId = isset($_GET['army_id']) ? intval($_GET['army_id']) : 0;
+// 从GET展示页面、从POST执行移动 / Use GET for display and POST for the movement mutation
+$armyId = isset($_POST['army_id'])
+    ? (int) $_POST['army_id']
+    : (isset($_GET['army_id']) ? (int) $_GET['army_id'] : 0);
 
 // 获取军队信息
 $army = new Army($armyId);
@@ -30,19 +32,24 @@ if (!$army->isValid() || $army->getOwnerId() != $user->getUserId() || $army->get
     exit;
 }
 
-// 获取目标坐标
-$targetX = isset($_GET['target_x']) ? intval($_GET['target_x']) : null;
-$targetY = isset($_GET['target_y']) ? intval($_GET['target_y']) : null;
-
-// 如果提供了目标坐标，尝试移动军队
-if ($targetX !== null && $targetY !== null) {
-    // 检查坐标是否在地图范围内
-    if ($targetX >= 0 && $targetX < MAP_WIDTH && $targetY >= 0 && $targetY < MAP_HEIGHT) {
-        // 移动军队
-        if ($army->moveArmy($targetX, $targetY)) {
-            // 移动成功，重定向到军队页面
+$moveError = '';
+$prefillTargetX = isset($_GET['target_x']) ? (int) $_GET['target_x'] : '';
+$prefillTargetY = isset($_GET['target_y']) ? (int) $_GET['target_y'] : '';
+if ($_SERVER['REQUEST_METHOD'] === 'POST') {
+    if (!validateCsrfToken()) {
+        $moveError = '安全令牌无效，请刷新页面后重试。';
+    } elseif (isSeasonGameplayFrozen()) {
+        $moveError = getSeasonGameplayFreezeMessage();
+    } else {
+        $targetX = isset($_POST['target_x']) ? (int) $_POST['target_x'] : -1;
+        $targetY = isset($_POST['target_y']) ? (int) $_POST['target_y'] : -1;
+        if ($targetX < 0 || $targetX >= MAP_WIDTH || $targetY < 0 || $targetY >= MAP_HEIGHT) {
+            $moveError = '目标坐标超出地图范围。';
+        } elseif ($army->moveArmy($targetX, $targetY)) {
             header('Location: armies.php');
             exit;
+        } else {
+            $moveError = '移动失败，军队状态可能已经变化。';
         }
     }
 }
@@ -211,24 +218,28 @@ $pageTitle = '移动军队';
                 </div>
                 
                 <div class="move-army-info">
-                    <h4><?php echo $army->getName(); ?></h4>
+                    <h4><?php echo escapeHtml($army->getName()); ?></h4>
                     <p>当前位置: (<?php echo $currentPosition[0]; ?>, <?php echo $currentPosition[1]; ?>)</p>
                     <p>移动速度: <?php echo number_format($army->getMovementSpeed(), 2); ?> 格/小时</p>
                     <p>战斗力: <?php echo number_format($army->getCombatPower()); ?></p>
                 </div>
                 
                 <div class="move-army-form">
-                    <form method="get" action="move_army.php">
+                    <?php if ($moveError !== ''): ?>
+                    <div class="message error"><?php echo escapeHtml($moveError); ?></div>
+                    <?php endif; ?>
+                    <form method="post" action="move_army.php">
+                        <?php echo csrfField(); ?>
                         <input type="hidden" name="army_id" value="<?php echo $armyId; ?>">
                         
                         <div class="form-group">
                             <label for="target-x">目标X坐标</label>
-                            <input type="number" id="target-x" name="target_x" min="0" max="<?php echo MAP_WIDTH - 1; ?>" required>
+                            <input type="number" id="target-x" name="target_x" min="0" max="<?php echo MAP_WIDTH - 1; ?>" value="<?php echo escapeHtml($prefillTargetX); ?>" required>
                         </div>
                         
                         <div class="form-group">
                             <label for="target-y">目标Y坐标</label>
-                            <input type="number" id="target-y" name="target_y" min="0" max="<?php echo MAP_HEIGHT - 1; ?>" required>
+                            <input type="number" id="target-y" name="target_y" min="0" max="<?php echo MAP_HEIGHT - 1; ?>" value="<?php echo escapeHtml($prefillTargetY); ?>" required>
                         </div>
                         
                         <div class="form-actions">

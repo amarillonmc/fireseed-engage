@@ -26,18 +26,31 @@ $cityId = isset($_GET['city_id']) ? intval($_GET['city_id']) : 0;
 // 获取城池信息
 $city = new City($cityId);
 if (!$city->isValid() || $city->getOwnerId() != $user->getUserId()) {
-    header('Location: cities.php');
+    header('Location: index.php');
     exit;
 }
 
-// 处理防御策略设置
-if (isset($_POST['defense_strategy'])) {
-    $strategy = $_POST['defense_strategy'];
-    $city->setDefenseStrategy($strategy);
-    
-    // 重定向以避免表单重复提交
-    header('Location: defense.php?city_id=' . $cityId);
-    exit;
+$defenseMessage = '';
+
+// 使用POST、CSRF与赛季状态保护防御策略变更 / Protect defense-strategy changes with POST, CSRF, and season state
+if (isset($_SERVER['REQUEST_METHOD']) && $_SERVER['REQUEST_METHOD'] === 'POST') {
+    $strategy = isset($_POST['defense_strategy'])
+        ? (string) $_POST['defense_strategy']
+        : '';
+
+    if (!validateCsrfToken()) {
+        $defenseMessage = '请求校验失败，请刷新页面后重试。';
+    } elseif (isSeasonGameplayFrozen()) {
+        $defenseMessage = getSeasonGameplayFreezeMessage();
+    } elseif (!in_array($strategy, ['defense', 'balanced', 'production'], true)) {
+        $defenseMessage = '防御策略无效。';
+    } elseif (!$city->setDefenseStrategy($strategy)) {
+        $defenseMessage = '防御策略保存失败，请稍后重试。';
+    } else {
+        // 成功后重定向，防止重复提交 / Redirect after success to prevent duplicate submission
+        header('Location: defense.php?city_id=' . $cityId);
+        exit;
+    }
 }
 
 // 获取当前防御策略
@@ -45,6 +58,54 @@ $currentStrategy = $city->getDefenseStrategy();
 
 // 获取防御策略加成
 $defenseBonus = $city->getDefenseStrategyBonus();
+
+// 只从普通待结算战斗读取来袭信息；侦察任务存放于独立表中，因此不会泄露 / Read incoming alerts only from ordinary pending battles; scouting missions are isolated and never leaked
+$incomingBattles = [];
+$query = "SELECT b.battle_id, a.name AS attacker_name,
+                 COALESCE(a.arrival_time, b.battle_time) AS arrival_time,
+                 CASE
+                     WHEN b.defender_city_id IS NOT NULL
+                         THEN CONCAT('城池：', COALESCE(dc.name, '未知城池'))
+                     WHEN b.defender_tile_id IS NOT NULL
+                         THEN CONCAT(
+                             '领地：(',
+                             COALESCE(mt.x, '?'),
+                             ', ',
+                             COALESCE(mt.y, '?'),
+                             ')'
+                         )
+                     WHEN b.defender_army_id IS NOT NULL
+                         THEN CONCAT('军队：', COALESCE(da.name, '未知军队'))
+                     ELSE '未知目标'
+                 END AS target_name
+          FROM battles b
+          INNER JOIN armies a ON a.army_id = b.attacker_army_id
+          LEFT JOIN cities dc ON dc.city_id = b.defender_city_id
+          LEFT JOIN map_tiles mt ON mt.tile_id = b.defender_tile_id
+          LEFT JOIN armies da ON da.army_id = b.defender_army_id
+          WHERE b.result = 'pending'
+            AND a.owner_id <> ?
+            AND (
+                dc.owner_id = ?
+                OR mt.owner_id = ?
+                OR da.owner_id = ?
+            )
+          ORDER BY arrival_time, b.battle_id";
+$stmt = $db->prepare($query);
+$defendingUserId = (int) $user->getUserId();
+$stmt->bind_param(
+    'iiii',
+    $defendingUserId,
+    $defendingUserId,
+    $defendingUserId,
+    $defendingUserId
+);
+$stmt->execute();
+$incomingResult = $stmt->get_result();
+while ($incomingResult && ($incoming = $incomingResult->fetch_assoc())) {
+    $incomingBattles[] = $incoming;
+}
+$stmt->close();
 
 // 页面标题
 $pageTitle = '城池防御设置';
@@ -193,6 +254,18 @@ $pageTitle = '城池防御设置';
         .current-strategy .strategy-bonus p {
             margin: 5px 0;
         }
+
+        .incoming-battles {
+            margin-bottom: 20px;
+            padding: 15px;
+            border: 1px solid #dc3545;
+            border-radius: 5px;
+            background: #fff5f5;
+        }
+
+        .incoming-battles ul {
+            margin-bottom: 0;
+        }
     </style>
 </head>
 <body>
@@ -207,6 +280,7 @@ $pageTitle = '城池防御设置';
                     <li><a href="profile.php">档案</a></li>
                     <li><a href="armies.php">军队</a></li>
                     <li><a href="map.php">地图</a></li>
+                    <li><a href="scouting.php">侦察</a></li>
                     <li><a href="territory.php">领地</a></li>
                     <li><a href="internal.php">内政</a></li>
                     <li><a href="ranking.php">排名</a></li>
@@ -245,6 +319,28 @@ $pageTitle = '城池防御设置';
                 </div>
             </div>
             
+            <?php if (!empty($incomingBattles)): ?>
+                <section class="incoming-battles">
+                    <h3>普通战斗来袭</h3>
+                    <p>以下倒计时仅包含待结算战斗，不包含任何侦察任务。</p>
+                    <ul>
+                        <?php foreach ($incomingBattles as $incomingBattle): ?>
+                            <li>
+                                <?php echo escapeHtml($incomingBattle['attacker_name']); ?>
+                                → <?php echo escapeHtml($incomingBattle['target_name']); ?>
+                                ·
+                                <span
+                                    class="incoming-battle-countdown"
+                                    data-arrival="<?php echo (int) strtotime(
+                                        $incomingBattle['arrival_time']
+                                    ); ?>"
+                                >计算中</span>
+                            </li>
+                        <?php endforeach; ?>
+                    </ul>
+                </section>
+            <?php endif; ?>
+
             <!-- 防御设置容器 -->
             <div class="defense-container">
                 <div class="defense-header">
@@ -294,7 +390,11 @@ $pageTitle = '城池防御设置';
                 </div>
                 
                 <div class="defense-form">
+                    <?php if ($defenseMessage !== ''): ?>
+                        <div class="error-message"><?php echo escapeHtml($defenseMessage); ?></div>
+                    <?php endif; ?>
                     <form method="post" action="defense.php?city_id=<?php echo $cityId; ?>">
+                        <?php echo csrfField(); ?>
                         <div class="form-group">
                             <label>选择防御策略</label>
                             <div class="strategy-options">
@@ -359,8 +459,26 @@ $pageTitle = '城池防御设置';
             
             // 取消按钮点击事件
             document.getElementById('cancel-btn').addEventListener('click', function() {
-                window.location.href = 'cities.php';
+                window.location.href = 'index.php';
             });
+
+            // 普通战斗倒计时只写入文本，侦察任务从未进入本列表 / Ordinary battle countdowns write text only; scouting missions never enter this list
+            function updateIncomingBattleCountdowns() {
+                const now = Math.floor(Date.now() / 1000);
+                document.querySelectorAll('.incoming-battle-countdown').forEach(function(node) {
+                    const arrival = Number(node.dataset.arrival);
+                    const remaining = Math.max(0, arrival - now);
+                    const hours = Math.floor(remaining / 3600);
+                    const minutes = Math.floor((remaining % 3600) / 60);
+                    const seconds = remaining % 60;
+                    node.textContent = remaining <= 0
+                        ? '等待战斗结算'
+                        : hours + '时 ' + minutes + '分 ' + seconds + '秒';
+                });
+            }
+
+            updateIncomingBattleCountdowns();
+            window.setInterval(updateIncomingBattleCountdowns, 1000);
         });
     </script>
 </body>

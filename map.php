@@ -28,6 +28,25 @@ $centerY = isset($_GET['y']) ? intval($_GET['y']) : MAP_HEIGHT / 2;
 $centerX = max(0, min(MAP_WIDTH - 1, $centerX));
 $centerY = max(0, min(MAP_HEIGHT - 1, $centerY));
 
+// 只向探索选择器提供当前玩家的待命军队 / Offer only the current player's idle armies for scouting
+$requestedArmyId = isset($_GET['army_id']) ? (int) $_GET['army_id'] : 0;
+$explorationArmies = [];
+foreach (Army::getUserArmies($user->getUserId()) as $army) {
+    if ($army->getStatus() !== 'idle') {
+        continue;
+    }
+    $scoutPoints = max(0.0, min(15.0, (float) $army->getScoutRangeBonus()));
+    $bonusRadius = min(3, (int) floor($scoutPoints / 5));
+    $position = $army->getCurrentPosition();
+    $explorationArmies[] = [
+        'army_id' => (int) $army->getArmyId(),
+        'name' => $army->getName(),
+        'x' => (int) $position[0],
+        'y' => (int) $position[1],
+        'radius' => 3 + $bonusRadius
+    ];
+}
+
 // 获取地图视图范围
 $viewRadius = 5; // 视图半径
 $startX = max(0, $centerX - $viewRadius);
@@ -45,6 +64,7 @@ $pageTitle = '地图';
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <meta name="user-id" content="<?php echo $user->getUserId(); ?>">
+    <meta name="csrf-token" content="<?php echo escapeHtml(getCsrfToken()); ?>">
     <title><?php echo SITE_NAME; ?> - <?php echo $pageTitle; ?></title>
     <link rel="stylesheet" href="assets/css/style.css">
     <style>
@@ -70,6 +90,13 @@ $pageTitle = '地图';
         .map-controls {
             display: flex;
             gap: 10px;
+            flex-wrap: wrap;
+            align-items: center;
+        }
+
+        .map-controls select {
+            max-width: 320px;
+            padding: 5px;
         }
         
         .map-controls button {
@@ -339,6 +366,21 @@ $pageTitle = '地图';
                 <div class="map-header">
                     <h3 class="map-title">地图视图 (<?php echo $centerX; ?>, <?php echo $centerY; ?>)</h3>
                     <div class="map-controls">
+                        <label for="explore-army">侦察军队:</label>
+                        <select id="explore-army">
+                            <option value="0" data-radius="3">不派军队（基础半径 3）</option>
+                            <?php foreach ($explorationArmies as $explorationArmy): ?>
+                                <option
+                                    value="<?php echo $explorationArmy['army_id']; ?>"
+                                    data-radius="<?php echo $explorationArmy['radius']; ?>"
+                                    <?php echo $requestedArmyId === $explorationArmy['army_id'] ? 'selected' : ''; ?>
+                                >
+                                    <?php echo escapeHtml($explorationArmy['name']); ?>
+                                    (<?php echo $explorationArmy['x']; ?>, <?php echo $explorationArmy['y']; ?>)
+                                    · 半径 <?php echo $explorationArmy['radius']; ?>
+                                </option>
+                            <?php endforeach; ?>
+                        </select>
                         <button id="explore-btn">探索</button>
                         <button id="refresh-btn">刷新</button>
                     </div>

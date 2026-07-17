@@ -23,6 +23,10 @@ define('STORAGE_LEVEL_COEFFICIENT', 1.5); // 贮存所每级增加的系数
 
 // 思考回路设置
 define('CIRCUIT_PRODUCTION_INTERVAL', 172800); // 每48小时产出1点思考回路
+define('TERRITORY_OCCUPATION_COST', 2); // 占领普通领地的思考回路成本 / Circuit cost to claim ordinary territory
+
+// 武将成长设置 / General progression settings
+define('GENERAL_ATTRIBUTE_HARD_CAP', 2000000000); // 保持在MySQL有符号INT范围内 / Stay inside signed MySQL INT
 
 // 士兵设置
 // 士兵训练时间（秒）
@@ -47,6 +51,7 @@ define('KNIGHT_ATTACK', 2);
 define('ROOK_ATTACK', 2);
 define('BISHOP_ATTACK', 4);
 define('GOLEM_ATTACK', 1);
+define('SCOUT_ATTACK', 0); // 侦察兵不参与正面战斗 / Scouts do not contribute direct combat attack
 
 // 士兵对城池攻击力
 define('PAWN_CITY_ATTACK', 1);
@@ -54,6 +59,7 @@ define('KNIGHT_CITY_ATTACK', 2);
 define('ROOK_CITY_ATTACK', 2);
 define('BISHOP_CITY_ATTACK', 2);
 define('GOLEM_CITY_ATTACK', 10);
+define('SCOUT_CITY_ATTACK', 0); // 侦察兵没有攻城能力 / Scouts have no siege attack
 
 // 士兵防御力
 define('PAWN_DEFENSE', 1);
@@ -61,6 +67,7 @@ define('KNIGHT_DEFENSE', 2);
 define('ROOK_DEFENSE', 4);
 define('BISHOP_DEFENSE', 2);
 define('GOLEM_DEFENSE', 1);
+define('SCOUT_DEFENSE', 0); // 侦察兵没有正面防御力 / Scouts have no direct combat defense
 
 // NPC设置
 define('NPC_FORT_BASE_DURABILITY', 3000); // 1级NPC城池的耐久度
@@ -72,3 +79,4 @@ define('NPC_STRENGTH_COEFFICIENT', 1.0); // NPC强度系数
 
 // 游戏结束设置
 define('VICTORY_OCCUPATION_DAYS', 30); // 占领银白之孔需要的天数
+define('SEASON_RESET_DELAY_HOURS', 48); // 胜利后冻结与重置等待时间 / Freeze and reset delay after victory

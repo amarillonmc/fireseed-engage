@@ -167,24 +167,54 @@ class Soldier {
         if (!$this->isValid || !$this->isTrainingComplete()) {
             return false;
         }
-        
-        // 将训练中的士兵添加到现有士兵中
-        $newQuantity = $this->quantity + $this->inTraining;
-        
-        $query = "UPDATE soldiers SET quantity = ?, in_training = 0, training_complete_time = NULL WHERE soldier_id = ?";
-        $stmt = $this->db->prepare($query);
-        $stmt->bind_param('ii', $newQuantity, $this->soldierId);
-        $result = $stmt->execute();
-        $stmt->close();
-        
-        if ($result) {
+
+        $this->db->begin_transaction();
+
+        try {
+            lockSeasonForWorldAction($this->db);
+
+            // 锁定训练队列并重新读取，避免覆盖并发追加的训练 / Lock and reload the queue to avoid overwriting concurrent additions
+            $query = "SELECT quantity, in_training, training_complete_time
+                      FROM soldiers
+                      WHERE soldier_id = ?
+                      FOR UPDATE";
+            $stmt = $this->db->prepare($query);
+            $stmt->bind_param('i', $this->soldierId);
+            $stmt->execute();
+            $result = $stmt->get_result();
+            $row = $result ? $result->fetch_assoc() : null;
+            $stmt->close();
+
+            if (!$row
+                || (int) $row['in_training'] <= 0
+                || empty($row['training_complete_time'])
+                || strtotime($row['training_complete_time']) > time()) {
+                $this->db->rollback();
+                return false;
+            }
+
+            $completedQuantity = (int) $row['in_training'];
+            $newQuantity = (int) $row['quantity'] + $completedQuantity;
+            $query = "UPDATE soldiers
+                      SET quantity = ?, in_training = 0, training_complete_time = NULL
+                      WHERE soldier_id = ?";
+            $stmt = $this->db->prepare($query);
+            $stmt->bind_param('ii', $newQuantity, $this->soldierId);
+            if (!$stmt->execute()) {
+                throw new RuntimeException('完成士兵训练失败 / Failed to complete soldier training');
+            }
+            $stmt->close();
+
+            $this->db->commit();
             $this->quantity = $newQuantity;
             $this->inTraining = 0;
             $this->trainingCompleteTime = null;
             return true;
+        } catch (Throwable $e) {
+            $this->db->rollback();
+            error_log('Soldier training completion failed: ' . $e->getMessage());
+            return false;
         }
-        
-        return false;
     }
     
     /**
@@ -300,6 +330,14 @@ class Soldier {
      * @return bool|int 成功返回士兵ID，失败返回false
      */
     public function createSoldier($cityId, $type, $level = 1, $quantity = 0, $inTraining = 0, $trainingCompleteTime = null) {
+        $cityId = (int) $cityId;
+        $level = (int) $level;
+        $quantity = (int) $quantity;
+        $inTraining = (int) $inTraining;
+        if ($cityId <= 0 || $level <= 0 || $quantity < 0 || $inTraining < 0) {
+            return false;
+        }
+
         // 检查城池ID是否存在
         $cityQuery = "SELECT city_id FROM cities WHERE city_id = ?";
         $cityStmt = $this->db->prepare($cityQuery);
@@ -338,7 +376,7 @@ class Soldier {
         $query = "INSERT INTO soldiers (city_id, type, level, quantity, in_training, training_complete_time) 
                   VALUES (?, ?, ?, ?, ?, ?)";
         $stmt = $this->db->prepare($query);
-        $stmt->bind_param('isiiss', $cityId, $type, $level, $quantity, $inTraining, $trainingCompleteTime);
+        $stmt->bind_param('isiiis', $cityId, $type, $level, $quantity, $inTraining, $trainingCompleteTime);
         $result = $stmt->execute();
         
         if ($result) {
@@ -360,6 +398,314 @@ class Soldier {
         
         $stmt->close();
         return false;
+    }
+
+    /**
+     * 获取兵种所需的训练设施类型 / Get the facility type required to train a soldier
+     * @param string $soldierType 兵种类型 / Soldier type
+     * @return string|null 设施类型 / Facility type
+     */
+    public static function getTrainingFacilityType($soldierType) {
+        switch ($soldierType) {
+            case 'pawn':
+            case 'knight':
+            case 'rook':
+            case 'bishop':
+                return 'barracks';
+            case 'golem':
+                return 'workshop';
+            case 'scout':
+                return 'watchtower';
+            default:
+                return null;
+        }
+    }
+
+    /**
+     * 获取士兵训练费用 / Get the resource cost for training soldiers
+     * @param string $soldierType 兵种类型 / Soldier type
+     * @param int $quantity 数量 / Quantity
+     * @return array 资源费用 / Resource costs
+     */
+    public static function getTrainingCost($soldierType, $quantity = 1) {
+        $quantity = (int) $quantity;
+        if ($quantity <= 0) {
+            return [];
+        }
+
+        switch ($soldierType) {
+            case 'pawn':
+                return ['day' => 10 * $quantity];
+            case 'knight':
+                return ['warm' => 20 * $quantity];
+            case 'rook':
+                return ['cold' => 20 * $quantity];
+            case 'bishop':
+                return ['green' => 20 * $quantity];
+            case 'golem':
+                return [
+                    'warm' => 30 * $quantity,
+                    'cold' => 30 * $quantity,
+                    'green' => 30 * $quantity,
+                    'day' => 30 * $quantity
+                ];
+            case 'scout':
+                return [
+                    'warm' => 15 * $quantity,
+                    'cold' => 15 * $quantity,
+                    'green' => 15 * $quantity,
+                    'day' => 15 * $quantity
+                ];
+            default:
+                return [];
+        }
+    }
+
+    /**
+     * 原子化追加士兵训练队列 / Atomically append a soldier training batch
+     * @param int $userId 用户ID / User ID
+     * @param int $cityId 城池ID / City ID
+     * @param string $soldierType 兵种类型 / Soldier type
+     * @param int $quantity 数量 / Quantity
+     * @return array 训练结果 / Training result
+     */
+    public static function startTraining($userId, $cityId, $soldierType, $quantity) {
+        $userId = (int) $userId;
+        $cityId = (int) $cityId;
+        $quantity = (int) $quantity;
+        $facilityType = self::getTrainingFacilityType($soldierType);
+        $trainingCost = self::getTrainingCost($soldierType, $quantity);
+
+        if ($userId <= 0 || $cityId <= 0 || $quantity <= 0 || $quantity > 10000
+            || $facilityType === null || empty($trainingCost)) {
+            return ['success' => false, 'message' => '训练参数无效'];
+        }
+
+        $db = Database::getInstance()->getConnection();
+        $db->begin_transaction();
+
+        try {
+            lockSeasonForWorldAction($db);
+
+            // 锁定城池所有权，防止训练过程中城池易主 / Lock city ownership so it cannot change during training setup
+            $query = "SELECT owner_id FROM cities WHERE city_id = ? FOR UPDATE";
+            $stmt = $db->prepare($query);
+            $stmt->bind_param('i', $cityId);
+            $stmt->execute();
+            $result = $stmt->get_result();
+            $cityRow = $result ? $result->fetch_assoc() : null;
+            $stmt->close();
+
+            if (!$cityRow || (int) $cityRow['owner_id'] !== $userId) {
+                $db->rollback();
+                return ['success' => false, 'message' => '城池不存在或不属于当前用户'];
+            }
+
+            // 选择等级最高且完全可用的训练设施 / Select the highest-level fully available training facility
+            $query = "SELECT facility_id
+                      FROM facilities
+                      WHERE city_id = ?
+                        AND type = ?
+                        AND construction_time IS NULL
+                        AND upgrade_time IS NULL
+                      ORDER BY level DESC, facility_id ASC
+                      LIMIT 1
+                      FOR UPDATE";
+            $stmt = $db->prepare($query);
+            $stmt->bind_param('is', $cityId, $facilityType);
+            $stmt->execute();
+            $result = $stmt->get_result();
+            $facilityRow = $result ? $result->fetch_assoc() : null;
+            $stmt->close();
+
+            if (!$facilityRow) {
+                $db->rollback();
+                return ['success' => false, 'message' => '没有可用的训练设施'];
+            }
+
+            $facility = new Facility((int) $facilityRow['facility_id']);
+            $trainingSeconds = $facility->calculateSoldierTrainingTime($soldierType, $quantity);
+            if (!$facility->isValid() || $trainingSeconds <= 0) {
+                throw new RuntimeException('训练设施状态无效 / Training facility state is invalid');
+            }
+
+            $trainingLevel = $facilityType === 'barracks'
+                ? $facility->getMaxSoldierLevel()
+                : $facility->getLevel();
+
+            // 锁定全城士兵记录并核算宿舍容量 / Lock city soldier rows and calculate dormitory capacity usage
+            $query = "SELECT soldier_id, type, level, quantity, in_training, training_complete_time
+                      FROM soldiers
+                      WHERE city_id = ?
+                      FOR UPDATE";
+            $stmt = $db->prepare($query);
+            $stmt->bind_param('i', $cityId);
+            $stmt->execute();
+            $result = $stmt->get_result();
+            $usedCapacity = 0;
+            $targetRow = null;
+
+            while ($result && $row = $result->fetch_assoc()) {
+                $usedCapacity += (int) $row['quantity'] + (int) $row['in_training'];
+                if ($row['type'] === $soldierType) {
+                    $targetRow = $row;
+                }
+            }
+            $stmt->close();
+
+            $totalCapacity = Facility::getCityTotalSoldierCapacity($cityId);
+            if ($usedCapacity + $quantity > $totalCapacity) {
+                $db->rollback();
+                return [
+                    'success' => false,
+                    'message' => '士兵容量不足，请先建造或升级宿舍',
+                    'capacity' => $totalCapacity,
+                    'used_capacity' => $usedCapacity
+                ];
+            }
+
+            // 锁定并校验资源，再在同一事务中扣除 / Lock and validate resources before deducting them in the same transaction
+            $query = "SELECT bright_crystal, warm_crystal, cold_crystal,
+                             green_crystal, day_crystal, night_crystal
+                      FROM resources
+                      WHERE user_id = ?
+                      FOR UPDATE";
+            $stmt = $db->prepare($query);
+            $stmt->bind_param('i', $userId);
+            $stmt->execute();
+            $result = $stmt->get_result();
+            $resourceRow = $result ? $result->fetch_assoc() : null;
+            $stmt->close();
+
+            if (!$resourceRow) {
+                throw new RuntimeException('玩家资源记录不存在 / User resource record does not exist');
+            }
+
+            $resourceColumns = [
+                'bright' => 'bright_crystal',
+                'warm' => 'warm_crystal',
+                'cold' => 'cold_crystal',
+                'green' => 'green_crystal',
+                'day' => 'day_crystal',
+                'night' => 'night_crystal'
+            ];
+            foreach ($trainingCost as $resourceType => $amount) {
+                $column = $resourceColumns[$resourceType];
+                if ((int) $resourceRow[$column] < (int) $amount) {
+                    $db->rollback();
+                    return ['success' => false, 'message' => getResourceName($resourceType) . '不足'];
+                }
+            }
+
+            $brightCost = isset($trainingCost['bright']) ? (int) $trainingCost['bright'] : 0;
+            $warmCost = isset($trainingCost['warm']) ? (int) $trainingCost['warm'] : 0;
+            $coldCost = isset($trainingCost['cold']) ? (int) $trainingCost['cold'] : 0;
+            $greenCost = isset($trainingCost['green']) ? (int) $trainingCost['green'] : 0;
+            $dayCost = isset($trainingCost['day']) ? (int) $trainingCost['day'] : 0;
+            $nightCost = isset($trainingCost['night']) ? (int) $trainingCost['night'] : 0;
+            $nowDate = date('Y-m-d H:i:s');
+
+            $query = "UPDATE resources
+                      SET bright_crystal = bright_crystal - ?,
+                          warm_crystal = warm_crystal - ?,
+                          cold_crystal = cold_crystal - ?,
+                          green_crystal = green_crystal - ?,
+                          day_crystal = day_crystal - ?,
+                          night_crystal = night_crystal - ?,
+                          last_update = ?
+                      WHERE user_id = ?";
+            $stmt = $db->prepare($query);
+            $stmt->bind_param(
+                'iiiiiisi',
+                $brightCost,
+                $warmCost,
+                $coldCost,
+                $greenCost,
+                $dayCost,
+                $nightCost,
+                $nowDate,
+                $userId
+            );
+            if (!$stmt->execute() || $stmt->affected_rows !== 1) {
+                throw new RuntimeException('扣除训练资源失败 / Failed to deduct training resources');
+            }
+            $stmt->close();
+
+            // 新批次从当前队列末尾开始，已到期批次先转为现役 / Start after the queue tail and first activate any elapsed batch
+            $queueStart = time();
+            $currentQuantity = 0;
+            $currentTraining = 0;
+            $soldierId = 0;
+
+            if ($targetRow) {
+                $soldierId = (int) $targetRow['soldier_id'];
+                $currentQuantity = (int) $targetRow['quantity'];
+                $currentTraining = (int) $targetRow['in_training'];
+                $existingCompletion = !empty($targetRow['training_complete_time'])
+                    ? strtotime($targetRow['training_complete_time'])
+                    : 0;
+
+                if ($currentTraining > 0 && $existingCompletion > 0 && $existingCompletion <= time()) {
+                    $currentQuantity += $currentTraining;
+                    $currentTraining = 0;
+                } elseif ($currentTraining > 0 && $existingCompletion > time()) {
+                    $queueStart = $existingCompletion;
+                }
+
+                $newTraining = $currentTraining + $quantity;
+                $newLevel = max((int) $targetRow['level'], $trainingLevel);
+                $trainingCompleteTime = date('Y-m-d H:i:s', $queueStart + $trainingSeconds);
+                $query = "UPDATE soldiers
+                          SET level = ?, quantity = ?, in_training = ?, training_complete_time = ?
+                          WHERE soldier_id = ?";
+                $stmt = $db->prepare($query);
+                $stmt->bind_param(
+                    'iiisi',
+                    $newLevel,
+                    $currentQuantity,
+                    $newTraining,
+                    $trainingCompleteTime,
+                    $soldierId
+                );
+                if (!$stmt->execute() || $stmt->affected_rows > 1) {
+                    throw new RuntimeException('更新士兵训练队列失败 / Failed to update soldier training queue');
+                }
+                $stmt->close();
+            } else {
+                $trainingCompleteTime = date('Y-m-d H:i:s', $queueStart + $trainingSeconds);
+                $soldier = new Soldier();
+                $soldierId = $soldier->createSoldier(
+                    $cityId,
+                    $soldierType,
+                    $trainingLevel,
+                    0,
+                    $quantity,
+                    $trainingCompleteTime
+                );
+                if (!$soldierId) {
+                    throw new RuntimeException('创建士兵训练队列失败 / Failed to create soldier training queue');
+                }
+            }
+
+            $db->commit();
+            return [
+                'success' => true,
+                'message' => '士兵开始训练',
+                'training' => [
+                    'soldier_id' => (int) $soldierId,
+                    'soldier_type' => $soldierType,
+                    'level' => $trainingLevel,
+                    'quantity' => $quantity,
+                    'cost' => $trainingCost,
+                    'training_seconds' => $trainingSeconds,
+                    'training_complete_time' => $trainingCompleteTime
+                ]
+            ];
+        } catch (Throwable $e) {
+            $db->rollback();
+            error_log('Soldier training start failed: ' . $e->getMessage());
+            return ['success' => false, 'message' => '训练请求处理失败，请稍后重试'];
+        }
     }
     
     /**

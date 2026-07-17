@@ -102,89 +102,198 @@ class UserTechnology {
     }
     
     /**
-     * 开始研究科技
-     * @param int $cityId 城池ID（用于检查研究所等级）
-     * @return bool
+     * 原子化开始科技研究 / Start technology research atomically
+     * @param int $cityId 城池ID（用于检查研究所等级） / City ID used to validate the research lab
+     * @return bool 是否成功 / Whether research started
      */
     public function startResearch($cityId) {
-        // 检查是否已经在研究
-        if ($this->isResearching()) {
+        $cityId = (int) $cityId;
+        if ($cityId <= 0 || (int) $this->userId <= 0 || (int) $this->techId <= 0) {
             return false;
         }
-        
-        // 获取科技信息
+
         $technology = new Technology($this->techId);
         if (!$technology->isValid()) {
             return false;
         }
-        
-        // 检查是否已达到最高等级
-        if ($this->level >= $technology->getMaxLevel()) {
-            return false;
-        }
-        
-        // 检查研究所等级是否足够
-        $researchLabs = Facility::getCityFacilitiesByType($cityId, 'research_lab');
-        if (empty($researchLabs)) {
-            return false; // 没有研究所
-        }
-        
-        $researchLabLevel = $researchLabs[0]->getLevel();
-        $requiredLevel = $this->level + 1;
-        
-        if ($researchLabLevel < $requiredLevel) {
-            return false; // 研究所等级不够
-        }
-        
-        // 检查资源是否足够
-        $upgradeCost = $technology->getUpgradeCostAtLevel($this->level);
-        $resource = new Resource($this->userId);
-        
-        if (!$resource->isValid()) {
-            return false;
-        }
-        
-        foreach ($upgradeCost as $resourceType => $cost) {
-            if ($resource->getResourceByType($resourceType) < $cost) {
-                return false; // 资源不足
+
+        $this->db->begin_transaction();
+        try {
+            lockSeasonForWorldAction($this->db);
+
+            // 先锁城池与可用研究所，确保所有权和设施等级不会在扣费时变化 / Lock the city and usable lab before charging so ownership and level stay authoritative
+            $query = "SELECT owner_id
+                      FROM cities
+                      WHERE city_id = ?
+                      FOR UPDATE";
+            $stmt = $this->db->prepare($query);
+            $stmt->bind_param('i', $cityId);
+            $stmt->execute();
+            $result = $stmt->get_result();
+            $city = $result ? $result->fetch_assoc() : null;
+            $stmt->close();
+            if (!$city || (int) $city['owner_id'] !== (int) $this->userId) {
+                throw new DomainException('城池不存在或不属于当前玩家');
             }
-        }
-        
-        // 扣除资源
-        foreach ($upgradeCost as $resourceType => $cost) {
-            $resource->subtractResourceByType($resourceType, $cost);
-        }
-        
-        // 计算研究时间（基础时间：60秒 * (等级+1)）
-        $researchDuration = 60 * ($this->level + 1);
-        $researchTime = date('Y-m-d H:i:s', time() + $researchDuration);
-        
-        // 更新或插入记录
-        if ($this->isValid) {
-            $query = "UPDATE user_technologies SET research_time = ? WHERE user_id = ? AND tech_id = ?";
+
+            $query = "SELECT facility_id, level
+                      FROM facilities
+                      WHERE city_id = ? AND type = 'research_lab'
+                        AND construction_time IS NULL
+                        AND upgrade_time IS NULL
+                      ORDER BY level DESC, facility_id
+                      LIMIT 1
+                      FOR UPDATE";
             $stmt = $this->db->prepare($query);
-            $stmt->bind_param('sii', $researchTime, $this->userId, $this->techId);
-        } else {
-            $query = "INSERT INTO user_technologies (user_id, tech_id, level, research_time) VALUES (?, ?, ?, ?)";
+            $stmt->bind_param('i', $cityId);
+            $stmt->execute();
+            $result = $stmt->get_result();
+            $researchLab = $result ? $result->fetch_assoc() : null;
+            $stmt->close();
+            if (!$researchLab) {
+                throw new DomainException('没有可用的研究所');
+            }
+
+            // 锁内重读等级与队列，避免重复研究或使用旧等级价格 / Reload level and queue under lock to prevent duplicate research or stale pricing
+            $query = "SELECT level, research_time
+                      FROM user_technologies
+                      WHERE user_id = ? AND tech_id = ?
+                      FOR UPDATE";
             $stmt = $this->db->prepare($query);
-            $stmt->bind_param('iiis', $this->userId, $this->techId, $this->level, $researchTime);
-        }
-        
-        $result = $stmt->execute();
-        $stmt->close();
-        
-        if ($result) {
+            $userId = (int) $this->userId;
+            $techId = (int) $this->techId;
+            $stmt->bind_param('ii', $userId, $techId);
+            $stmt->execute();
+            $result = $stmt->get_result();
+            $userTechnology = $result ? $result->fetch_assoc() : null;
+            $stmt->close();
+
+            $currentLevel = $userTechnology
+                ? max(0, (int) $userTechnology['level'])
+                : 0;
+            if ($userTechnology && $userTechnology['research_time'] !== null) {
+                throw new DomainException('该科技正在研究中');
+            }
+            if ($currentLevel >= (int) $technology->getMaxLevel()) {
+                throw new DomainException('该科技已经达到最高等级');
+            }
+            if ((int) $researchLab['level'] < $currentLevel + 1) {
+                throw new DomainException('研究所等级不足');
+            }
+
+            $resourceColumns = [
+                'bright' => 'bright_crystal',
+                'warm' => 'warm_crystal',
+                'cold' => 'cold_crystal',
+                'green' => 'green_crystal',
+                'day' => 'day_crystal',
+                'night' => 'night_crystal'
+            ];
+            $upgradeCost = $technology->getUpgradeCostAtLevel($currentLevel);
+            $costs = array_fill_keys(array_keys($resourceColumns), 0);
+            foreach ($upgradeCost as $resourceType => $cost) {
+                if (!isset($resourceColumns[$resourceType])
+                    || !is_numeric($cost)
+                    || (int) $cost < 0) {
+                    throw new RuntimeException('科技研究成本无效 / Invalid research cost');
+                }
+                $costs[$resourceType] = (int) $cost;
+            }
+
+            $query = "SELECT bright_crystal, warm_crystal, cold_crystal,
+                             green_crystal, day_crystal, night_crystal
+                      FROM resources
+                      WHERE user_id = ?
+                      FOR UPDATE";
+            $stmt = $this->db->prepare($query);
+            $stmt->bind_param('i', $userId);
+            $stmt->execute();
+            $result = $stmt->get_result();
+            $resources = $result ? $result->fetch_assoc() : null;
+            $stmt->close();
+            if (!$resources) {
+                throw new RuntimeException('玩家资源记录不存在 / Resource wallet is missing');
+            }
+            foreach ($costs as $resourceType => $cost) {
+                $column = $resourceColumns[$resourceType];
+                if ((int) $resources[$column] < $cost) {
+                    throw new DomainException(getResourceName($resourceType) . '不足');
+                }
+            }
+
+            $query = "UPDATE resources
+                      SET bright_crystal = bright_crystal - ?,
+                          warm_crystal = warm_crystal - ?,
+                          cold_crystal = cold_crystal - ?,
+                          green_crystal = green_crystal - ?,
+                          day_crystal = day_crystal - ?,
+                          night_crystal = night_crystal - ?,
+                          last_update = NOW()
+                      WHERE user_id = ?";
+            $stmt = $this->db->prepare($query);
+            $stmt->bind_param(
+                'iiiiiii',
+                $costs['bright'],
+                $costs['warm'],
+                $costs['cold'],
+                $costs['green'],
+                $costs['day'],
+                $costs['night'],
+                $userId
+            );
+            if (!$stmt->execute() || $stmt->affected_rows !== 1) {
+                $stmt->close();
+                throw new RuntimeException('扣除研究资源失败 / Failed to charge research resources');
+            }
+            $stmt->close();
+
+            // 研究速度倍率大于一时缩短耗时，小于一时延长 / A multiplier above one shortens research and one below one lengthens it
+            $speedMultiplier = max(
+                0.1,
+                min(10.0, (float) GameConfig::get('research_speed_multiplier', 1.0))
+            );
+            $baseDuration = 60 * ($currentLevel + 1);
+            $researchDuration = max(
+                1,
+                (int) ceil($baseDuration / $speedMultiplier)
+            );
+            $researchTime = date('Y-m-d H:i:s', time() + $researchDuration);
+
+            if ($userTechnology) {
+                $query = "UPDATE user_technologies
+                          SET research_time = ?
+                          WHERE user_id = ? AND tech_id = ?
+                            AND research_time IS NULL";
+                $stmt = $this->db->prepare($query);
+                $stmt->bind_param('sii', $researchTime, $userId, $techId);
+            } else {
+                $query = "INSERT INTO user_technologies
+                            (user_id, tech_id, level, research_time)
+                          VALUES (?, ?, 0, ?)";
+                $stmt = $this->db->prepare($query);
+                $stmt->bind_param('iis', $userId, $techId, $researchTime);
+            }
+            if (!$stmt->execute() || $stmt->affected_rows !== 1) {
+                $stmt->close();
+                throw new RuntimeException('建立研究队列失败 / Failed to schedule research');
+            }
+            $stmt->close();
+
+            $this->db->commit();
+            $this->level = $currentLevel;
             $this->researchTime = $researchTime;
             $this->isValid = true;
             return true;
+        } catch (Throwable $exception) {
+            $this->db->rollback();
+            error_log('Technology research start failed: ' . $exception->getMessage());
+            return false;
         }
-        
-        return false;
     }
     
     /**
-     * 完成研究
-     * @return bool
+     * 原子化完成到期研究 / Complete due research atomically
+     * @return bool 是否完成 / Whether research completed
      */
     public function completeResearch() {
         if (!$this->researchTime) {
@@ -199,23 +308,54 @@ class UserTechnology {
             return false;
         }
         
-        // 升级等级
-        $newLevel = $this->level + 1;
-        
-        // 更新数据库
-        $query = "UPDATE user_technologies SET level = ?, research_time = NULL WHERE user_id = ? AND tech_id = ?";
-        $stmt = $this->db->prepare($query);
-        $stmt->bind_param('iii', $newLevel, $this->userId, $this->techId);
-        $result = $stmt->execute();
-        $stmt->close();
-        
-        if ($result) {
+        $this->db->begin_transaction();
+        try {
+            lockSeasonForWorldAction($this->db);
+
+            $query = "SELECT level, research_time
+                      FROM user_technologies
+                      WHERE user_id = ? AND tech_id = ?
+                      FOR UPDATE";
+            $stmt = $this->db->prepare($query);
+            $userId = (int) $this->userId;
+            $techId = (int) $this->techId;
+            $stmt->bind_param('ii', $userId, $techId);
+            $stmt->execute();
+            $result = $stmt->get_result();
+            $row = $result ? $result->fetch_assoc() : null;
+            $stmt->close();
+            if (!$row
+                || $row['research_time'] === null
+                || strtotime($row['research_time']) > time()) {
+                $this->db->rollback();
+                return false;
+            }
+
+            $newLevel = max(0, (int) $row['level']) + 1;
+            $query = "UPDATE user_technologies
+                      SET level = ?, research_time = NULL
+                      WHERE user_id = ? AND tech_id = ?
+                        AND research_time IS NOT NULL
+                        AND research_time <= NOW()";
+            $stmt = $this->db->prepare($query);
+            $stmt->bind_param('iii', $newLevel, $userId, $techId);
+            $completed = $stmt->execute() && $stmt->affected_rows === 1;
+            $stmt->close();
+            if (!$completed) {
+                throw new RuntimeException(
+                    '研究队列状态已经变化 / Research queue state changed'
+                );
+            }
+
+            $this->db->commit();
             $this->level = $newLevel;
             $this->researchTime = null;
             return true;
+        } catch (Throwable $exception) {
+            $this->db->rollback();
+            error_log('Technology research completion failed: ' . $exception->getMessage());
+            return false;
         }
-        
-        return false;
     }
     
     /**
@@ -263,17 +403,29 @@ class UserTechnology {
     }
     
     /**
-     * 检查并完成所有已完成的研究
-     * @return array 完成的研究列表
+     * 检查并完成到期研究，可限制为单个玩家 / Complete due research, optionally scoped to one user
+     * @param int|null $userId 玩家ID，空值表示定时任务处理全部 / User ID, or null for cron-wide processing
+     * @return array 完成的研究列表 / Completed research rows
      */
-    public static function checkAndCompleteResearch() {
+    public static function checkAndCompleteResearch($userId = null) {
         $db = Database::getInstance()->getConnection();
         $now = date('Y-m-d H:i:s');
         
-        // 查找所有已完成研究的科技
-        $query = "SELECT user_id, tech_id FROM user_technologies WHERE research_time IS NOT NULL AND research_time <= ?";
+        // 玩家接口不能顺带结算其他账号的研究 / A player request must not settle other accounts
+        $query = "SELECT user_id, tech_id
+                  FROM user_technologies
+                  WHERE research_time IS NOT NULL
+                    AND research_time <= ?";
+        if ($userId !== null) {
+            $query .= " AND user_id = ?";
+        }
         $stmt = $db->prepare($query);
-        $stmt->bind_param('s', $now);
+        if ($userId === null) {
+            $stmt->bind_param('s', $now);
+        } else {
+            $userId = (int) $userId;
+            $stmt->bind_param('si', $now, $userId);
+        }
         $stmt->execute();
         $result = $stmt->get_result();
         

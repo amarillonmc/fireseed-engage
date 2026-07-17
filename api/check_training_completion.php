@@ -13,6 +13,16 @@ if (!isset($_SESSION['user_id'])) {
     ]);
     exit;
 }
+// 赛季冻结期间不推进任何城池训练 / Do not advance city training during the season freeze
+if (isSeasonGameplayFrozen()) {
+    http_response_code(409);
+    echo json_encode([
+        'success' => false,
+        'frozen' => true,
+        'message' => getSeasonGameplayFreezeMessage()
+    ]);
+    exit;
+}
 
 // 获取用户的所有城池
 $cities = City::getUserCities($_SESSION['user_id']);

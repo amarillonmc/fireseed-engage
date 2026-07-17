@@ -16,7 +16,17 @@ document.addEventListener('DOMContentLoaded', function() {
         cell.addEventListener('click', function() {
             const x = this.getAttribute('data-x');
             const y = this.getAttribute('data-y');
-            window.location.href = 'build.php?x=' + x + '&y=' + y;
+            const cityView = this.closest('.city-view');
+            const cityId = cityView ? cityView.getAttribute('data-city-id') : '';
+            window.location.href = 'build.php?city_id=' + cityId + '&x=' + x + '&y=' + y;
+        });
+    });
+
+    // 绑定服务器渲染的训练按钮 / Bind server-rendered training buttons
+    const initialTrainingButtons = document.querySelectorAll('.train-button[data-soldier-type]');
+    initialTrainingButtons.forEach(button => {
+        button.addEventListener('click', function() {
+            showTrainingDialog(this.getAttribute('data-soldier-type'));
         });
     });
     
@@ -376,6 +386,7 @@ document.addEventListener('DOMContentLoaded', function() {
             formData.append('city_id', cityId);
             formData.append('soldier_type', soldierType);
             formData.append('quantity', quantity);
+            formData.append('csrf_token', barracksView.getAttribute('data-csrf-token') || '');
             
             fetch('api/train_soldiers.php', {
                 method: 'POST',

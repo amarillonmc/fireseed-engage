@@ -119,7 +119,11 @@ $pageTitle = $city->getName() . ' - 兵营';
             </div>
             
             <!-- 兵营视图 -->
-            <div class="barracks-view" data-city-id="<?php echo $city->getCityId(); ?>">
+            <div
+                class="barracks-view"
+                data-city-id="<?php echo $city->getCityId(); ?>"
+                data-csrf-token="<?php echo escapeHtml(getCsrfToken()); ?>"
+            >
                 <h3>兵营 - <?php echo $city->getName(); ?></h3>
                 
                 <?php if ($hasBarracks): ?>
@@ -174,7 +178,11 @@ $pageTitle = $city->getName() . ' - 兵营';
                                                 <?php endif; ?>
                                             </td>
                                             <td>
-                                                <button class="train-button" onclick="showTrainingDialog('<?php echo $type; ?>')">训练</button>
+                                                <button
+                                                    type="button"
+                                                    class="train-button"
+                                                    data-soldier-type="<?php echo escapeHtml($type); ?>"
+                                                >训练</button>
                                             </td>
                                         </tr>
                                         <?php
@@ -191,7 +199,11 @@ $pageTitle = $city->getName() . ' - 兵营';
                                         <td>0</td>
                                         <td>0</td>
                                         <td>
-                                            <button class="train-button" onclick="showTrainingDialog('<?php echo $type; ?>')">训练</button>
+                                            <button
+                                                type="button"
+                                                class="train-button"
+                                                data-soldier-type="<?php echo escapeHtml($type); ?>"
+                                            >训练</button>
                                         </td>
                                     </tr>
                                     <?php

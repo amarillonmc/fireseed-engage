@@ -29,6 +29,14 @@ class Database {
         
         // 设置字符集
         $this->conn->set_charset(DB_CHARSET);
+
+        // PHP 逻辑统一使用上海时区，数据库会话必须采用相同偏移 / Match the database session to PHP's Shanghai timezone
+        if (!executePreparedSql(
+            $this->conn,
+            "SET SESSION time_zone = '+08:00'"
+        )) {
+            die("数据库时区设置失败 / Failed to set database timezone");
+        }
     }
     
     // 获取数据库连接
@@ -38,7 +46,7 @@ class Database {
     
     // 执行查询
     public function query($sql) {
-        return $this->conn->query($sql);
+        return executePreparedSql($this->conn, $sql);
     }
     
     // 准备语句
@@ -84,4 +92,31 @@ class Database {
     public function escapeString($string) {
         return $this->conn->real_escape_string($string);
     }
+}
+
+/**
+ * 执行无绑定参数的预处理 SQL 并关闭语句 / Execute parameterless prepared SQL and close its statement
+ *
+ * 读取语句返回 mysqli_result，写入语句成功时返回 true，任何失败返回 false。
+ * Read statements return mysqli_result, successful writes return true, and failures return false.
+ *
+ * @param mysqli $db 数据库连接 / Database connection
+ * @param string $sql SQL语句 / SQL statement
+ * @return mysqli_result|bool 查询结果或执行状态 / Query result or execution status
+ */
+function executePreparedSql($db, $sql) {
+    $stmt = $db->prepare($sql);
+    if (!$stmt) {
+        return false;
+    }
+
+    if (!$stmt->execute()) {
+        $stmt->close();
+        return false;
+    }
+
+    $result = $stmt->get_result();
+    $stmt->close();
+
+    return $result === false ? true : $result;
 }

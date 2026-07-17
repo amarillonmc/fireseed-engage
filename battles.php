@@ -20,8 +20,10 @@ if (!$user->isValid()) {
 // 获取用户资源
 $resource = new Resource($user->getUserId());
 
-// 获取分页参数
-$page = isset($_GET['page']) ? intval($_GET['page']) : 1;
+// 获取并限制分页参数 / Read and bound pagination input
+$page = isset($_GET['page'])
+    ? min(1000000, max(1, intval($_GET['page'])))
+    : 1;
 $limit = 10;
 $offset = ($page - 1) * $limit;
 
@@ -255,15 +257,18 @@ $pageTitle = '战斗记录';
                             <td><?php echo date('Y-m-d H:i:s', strtotime($battle->getBattleTime())); ?></td>
                             <td>
                                 <?php
-                                $attackerArmy = new Army($battle->getAttackerArmyId());
-                                if ($attackerArmy->isValid()) {
-                                    echo $attackerArmy->getName();
-                                    
-                                    if ($attackerArmy->getOwnerId() == $user->getUserId()) {
-                                        echo ' (我方)';
-                                    }
-                                } else {
-                                    echo '未知军队';
+                                $participant = $battle->getParticipantSnapshot();
+                                echo escapeHtml($battle->getAttackerName());
+                                if (($participant
+                                        && (int) $participant['attacker_user_id']
+                                            === (int) $user->getUserId())
+                                    || (!$participant
+                                        && $battle->getAttackerArmyId() !== null
+                                        && ($legacyAttacker = new Army($battle->getAttackerArmyId()))
+                                        && $legacyAttacker->isValid()
+                                        && (int) $legacyAttacker->getOwnerId()
+                                            === (int) $user->getUserId())) {
+                                    echo ' (我方)';
                                 }
                                 ?>
                             </td>
@@ -279,7 +284,11 @@ $pageTitle = '战斗记录';
                                     if ($defenderArmy->isValid()) {
                                         $defenderInfo = $defenderArmy->getName();
                                         
-                                        if ($defenderArmy->getOwnerId() == $user->getUserId()) {
+                                        if (($participant
+                                                && (int) $participant['defender_user_id']
+                                                    === (int) $user->getUserId())
+                                            || (!$participant
+                                                && $defenderArmy->getOwnerId() == $user->getUserId())) {
                                             $defenderInfo .= ' (我方)';
                                         }
                                     } else {
@@ -290,7 +299,13 @@ $pageTitle = '战斗记录';
                                     if ($defenderCity->isValid()) {
                                         $defenderInfo = $defenderCity->getName();
                                         
-                                        if ($defenderCity->getOwnerId() == $user->getUserId()) {
+                                        if (($participant
+                                                && (int) $participant['defender_user_id']
+                                                    === (int) $user->getUserId())
+                                            || (!$participant
+                                                && $battle->getResult() === 'pending'
+                                                && (int) $defenderCity->getOwnerId()
+                                                    === (int) $user->getUserId())) {
                                             $defenderInfo .= ' (我方)';
                                         }
                                     } else {
@@ -315,7 +330,7 @@ $pageTitle = '战斗记录';
                                     $defenderInfo = '未知防守方';
                                 }
                                 
-                                echo $defenderInfo;
+                                echo escapeHtml($defenderInfo);
                                 ?>
                             </td>
                             <td>

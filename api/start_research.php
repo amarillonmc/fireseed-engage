@@ -14,7 +14,7 @@ if (!isset($_SESSION['user_id'])) {
     exit;
 }
 
-// 检查请求方法
+// 检查请求方法 / Validate the request method
 if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
     echo json_encode([
         'success' => false,
@@ -23,8 +23,26 @@ if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
     exit;
 }
 
-// 获取POST数据
+// 获取POST数据并校验CSRF令牌 / Read JSON input and validate the CSRF token
 $input = json_decode(file_get_contents('php://input'), true);
+if (!is_array($input)
+    || !validateCsrfToken(isset($input['csrf_token']) ? $input['csrf_token'] : null)) {
+    http_response_code(403);
+    echo json_encode([
+        'success' => false,
+        'message' => '请求安全令牌无效'
+    ]);
+    exit;
+}
+
+if (isSeasonGameplayFrozen()) {
+    http_response_code(409);
+    echo json_encode([
+        'success' => false,
+        'message' => getSeasonGameplayFreezeMessage()
+    ]);
+    exit;
+}
 
 if (!isset($input['tech_id'])) {
     echo json_encode([

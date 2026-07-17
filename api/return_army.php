@@ -1,5 +1,5 @@
 <?php
-// 包含初始化文件
+// 种火集结号 - 军队返城接口 / Fireseed Engage - army return endpoint
 require_once '../includes/init.php';
 
 // 设置响应头
@@ -14,11 +14,29 @@ if (!isset($_SESSION['user_id'])) {
     exit;
 }
 
-// 获取请求参数
-$armyId = isset($_GET['army_id']) ? intval($_GET['army_id']) : 0;
+if (!isValidPostRequest()) {
+    echo json_encode([
+        'success' => false,
+        'message' => '请求方式或安全令牌无效'
+    ]);
+    exit;
+}
+if (isSeasonGameplayFrozen()) {
+    http_response_code(409);
+    echo json_encode([
+        'success' => false,
+        'frozen' => true,
+        'message' => getSeasonGameplayFreezeMessage()
+    ]);
+    exit;
+}
+
+$armyId = isset($_POST['army_id']) && is_scalar($_POST['army_id'])
+    ? filter_var($_POST['army_id'], FILTER_VALIDATE_INT)
+    : false;
 
 // 验证参数
-if ($armyId <= 0) {
+if ($armyId === false || $armyId <= 0) {
     echo json_encode([
         'success' => false,
         'message' => '参数无效'

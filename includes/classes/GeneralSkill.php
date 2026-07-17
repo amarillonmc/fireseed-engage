@@ -271,7 +271,7 @@ class GeneralSkill {
         $stmt->close();
         return $skills;
     }
-}
+
     /**
      * 获取技能效果（JSON格式）
      * @return string
@@ -348,4 +348,3 @@ class GeneralSkill {
         return $success;
     }
 }
-

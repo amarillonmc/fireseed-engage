@@ -14,8 +14,36 @@ if (!isset($_SESSION['user_id'])) {
     exit;
 }
 
-// 获取请求数据
+// 只允许带安全令牌的POST请求 / Allow only POST requests carrying a CSRF token
+if (!isset($_SERVER['REQUEST_METHOD']) || $_SERVER['REQUEST_METHOD'] !== 'POST') {
+    http_response_code(405);
+    echo json_encode([
+        'success' => false,
+        'message' => '仅支持POST请求'
+    ]);
+    exit;
+}
+
+// 获取请求数据 / Read request data
 $data = json_decode(file_get_contents('php://input'), true);
+if (!is_array($data)
+    || !validateCsrfToken(isset($data['csrf_token']) ? $data['csrf_token'] : null)) {
+    http_response_code(403);
+    echo json_encode([
+        'success' => false,
+        'message' => '请求校验失败，请刷新页面后重试'
+    ]);
+    exit;
+}
+
+if (isSeasonGameplayFrozen()) {
+    http_response_code(409);
+    echo json_encode([
+        'success' => false,
+        'message' => getSeasonGameplayFreezeMessage()
+    ]);
+    exit;
+}
 
 // 验证请求数据
 if (!isset($data['city_id']) || !isset($data['strategy'])) {

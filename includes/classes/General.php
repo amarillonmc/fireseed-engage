@@ -234,16 +234,39 @@ class General {
      * @return int 新属性值
      */
     private function calculateNewAttribute($attribute) {
-        $baseValue = $this->$attribute;
-        $levelFactor = 1 + $this->level * 0.1;
-        $costFactor = 1 + $this->cost * 0.2;
+        return self::calculateLevelUpAttribute(
+            $this->$attribute,
+            $this->cost,
+            $attribute === 'speed'
+        );
+    }
 
-        if ($attribute == 'speed') {
-            $levelFactor = 1 + $this->level * 0.05;
-            $costFactor = 1 + $this->cost * 0.1;
-        }
+    /**
+     * 以稳定的逐级成长率计算下一属性 / Calculate the next attribute with stable per-level growth
+     * @param int $currentValue 当前属性 / Current attribute
+     * @param float $cost 武将COST / General cost
+     * @param bool $isSpeed 是否为速度 / Whether this is speed
+     * @return int 下一属性 / Next attribute
+     */
+    public static function calculateLevelUpAttribute(
+        $currentValue,
+        $cost,
+        $isSpeed = false
+    ) {
+        $safeValue = max(0, (int) $currentValue);
+        $safeCost = min(4.0, max(0.0, (float) $cost));
+        $growthRate = $isSpeed
+            ? 0.01 + $safeCost * 0.0025
+            : 0.02 + $safeCost * 0.005;
+        $grownValue = max(
+            $safeValue + 1,
+            (int) round($safeValue * (1 + $growthRate))
+        );
+        $hardCap = defined('GENERAL_ATTRIBUTE_HARD_CAP')
+            ? (int) GENERAL_ATTRIBUTE_HARD_CAP
+            : 2000000000;
 
-        return round($baseValue * $levelFactor * $costFactor);
+        return min($hardCap, $grownValue);
     }
 
     /**
@@ -436,10 +459,13 @@ class General {
                 break;
         }
 
-        // 技能加成
+        // 技能加成 / Apply passive or currently active skill effects
         foreach ($this->skills as $skill) {
-            $skillEffect = $skill->getEffect();
+            $skillEffect = $this->getApplicableSkillEffect($skill);
             foreach ($skillEffect as $effectType => $effectValue) {
+                if (!is_numeric($effectValue)) {
+                    continue;
+                }
                 if (isset($bonus[$effectType])) {
                     $bonus[$effectType] += $effectValue;
                 } else {
@@ -449,6 +475,128 @@ class General {
         }
 
         return $bonus;
+    }
+
+    /**
+     * 获取当前可生效的技能效果 / Get skill effects that currently apply
+     * @param GeneralSkill $skill 武将技能 / General skill
+     * @return array 可应用效果 / Applicable effects
+     */
+    private function getApplicableSkillEffect($skill) {
+        $baseEffect = $skill->getEffect();
+        if (!is_array($baseEffect)) {
+            return [];
+        }
+
+        $query = "SELECT mapped.card_id, card.activation_type, card.is_active,
+                         active.effect_json, active.expires_at
+                  FROM equipped_skill_cards mapped
+                  LEFT JOIN skill_card_catalog card
+                    ON card.card_id = mapped.card_id
+                  LEFT JOIN active_skill_effects active
+                    ON active.skill_id = mapped.skill_id
+                    AND active.user_id = ?
+                    AND active.expires_at > NOW()
+                  WHERE mapped.skill_id = ?";
+        $stmt = $this->db->prepare($query);
+        if (!$stmt) {
+            return [];
+        }
+
+        $stmt->bind_param('ii', $this->ownerId, $skill->getSkillId());
+        if (!$stmt->execute()) {
+            $stmt->close();
+            return [];
+        }
+        $result = $stmt->get_result();
+        $row = $result ? $result->fetch_assoc() : null;
+        $stmt->close();
+
+        if (!$row) {
+            if (in_array(
+                strtolower(trim((string) $skill->getSkillType())),
+                ['主动', '主动技能', 'active'],
+                true
+            )) {
+                return [];
+            }
+            return $this->scalePassiveEffect(
+                $baseEffect,
+                $skill->getSkillLevel()
+            );
+        }
+        if ((int) $row['is_active'] !== 1) {
+            return [];
+        }
+        if ($row['activation_type'] === 'active') {
+            $activeEffect = $row['effect_json']
+                ? json_decode($row['effect_json'], true)
+                : [];
+            return is_array($activeEffect) ? $activeEffect : [];
+        }
+
+        return $this->scalePassiveEffect(
+            $baseEffect,
+            $skill->getSkillLevel()
+        );
+    }
+
+    /**
+     * 按技能等级与智力缩放被动效果 / Scale passive effects by skill level and intelligence
+     * @param array $effect 基础效果 / Base effects
+     * @param int $skillLevel 技能等级 / Skill level
+     * @return array 缩放后的效果 / Scaled effects
+     */
+    private function scalePassiveEffect($effect, $skillLevel) {
+        $levelFactor = 1 + max(1, (int) $skillLevel) * 0.2;
+        $intelligenceFactor = 1 + max(0, (int) $this->intelligence) * 0.01;
+        $scaled = [];
+
+        foreach ($effect as $effectType => $effectValue) {
+            if ($effectType === 'duration' || !is_numeric($effectValue)) {
+                continue;
+            }
+            $scaled[$effectType] = round(
+                (float) $effectValue * $levelFactor * $intelligenceFactor,
+                2
+            );
+        }
+
+        return $scaled;
+    }
+
+    /**
+     * 汇总当前可生效技能中的指定数值 / Sum one numeric key across currently applicable skills
+     * @param string $effectType 效果键 / Effect key
+     * @param float $maximum 最大安全值 / Safe maximum
+     * @return float 非负汇总值 / Non-negative total
+     */
+    public function getSkillEffectTotal($effectType, $maximum = 100.0) {
+        if (!$this->isValid) {
+            return 0.0;
+        }
+
+        $effectType = trim((string) $effectType);
+        $maximum = max(0.0, (float) $maximum);
+        if ($effectType === '' || $maximum <= 0.0) {
+            return 0.0;
+        }
+
+        $total = 0.0;
+        foreach ($this->skills as $skill) {
+            $effect = $this->getApplicableSkillEffect($skill);
+            if (!isset($effect[$effectType])
+                || !is_numeric($effect[$effectType])) {
+                continue;
+            }
+            $value = (float) $effect[$effectType];
+            if (!is_finite($value) || $value <= 0.0) {
+                continue;
+            }
+            $total = min($maximum, $total + $value);
+        }
+
+        return $total;
     }
 
     /**
@@ -874,7 +1022,7 @@ class General {
         $elementEffects = isset($skillEffects[$element]) ? $skillEffects[$element] : $skillEffects['亮晶晶'];
         return $elementEffects[array_rand($elementEffects)];
     }
-}
+
     /**
      * 设置武将名称
      * @param string $name 武将名称
@@ -975,25 +1123,25 @@ class General {
             return false;
         }
         
-        // 开始事务
+        // 开始事务 / Start the transaction.
         $this->db->begin_transaction();
         
         try {
-            // 删除武将的技能
+            // 删除武将的技能 / Delete the general's skills.
             $query = "DELETE FROM general_skills WHERE general_id = ?";
             $stmt = $this->db->prepare($query);
             $stmt->bind_param('i', $this->generalId);
             $stmt->execute();
             $stmt->close();
             
-            // 删除武将的分配记录
+            // 删除武将的分配记录 / Delete the general's assignments.
             $query = "DELETE FROM general_assignments WHERE general_id = ?";
             $stmt = $this->db->prepare($query);
             $stmt->bind_param('i', $this->generalId);
             $stmt->execute();
             $stmt->close();
             
-            // 删除武将
+            // 删除武将 / Delete the general.
             $query = "DELETE FROM generals WHERE general_id = ?";
             $stmt = $this->db->prepare($query);
             $stmt->bind_param('i', $this->generalId);
@@ -1014,4 +1162,3 @@ class General {
         }
     }
 }
-

@@ -1,14 +1,184 @@
 <?php
-// 包含初始化文件
-require_once 'includes/init.php';
+// 种火集结号 - 武将成长详情页面 / Fireseed Engage - General progression detail page
 
-// 检查用户是否已登录
+require_once 'includes/init.php';
+require_once 'includes/classes/GameRules.php';
+require_once 'includes/classes/GeneralProgression.php';
+require_once 'includes/gameplay_ui.php';
+
+/**
+ * 在事务内升级玩家拥有的武将 / Levels an owned general inside a transaction
+ *
+ * @param mysqli $db 数据库连接 / Database connection
+ * @param int $userId 玩家ID / User ID
+ * @param int $generalId 武将ID / General ID
+ * @return array 操作结果 / Operation result
+ */
+function upgradeOwnedGeneralForPage($db, $userId, $generalId) {
+    $transactionStarted = false;
+
+    try {
+        // 先通过标准资源路径结算产出；后续扣费不改写产出时间戳 / Settle production through the canonical resource path first; the later charge leaves its timestamp untouched
+        Resource::updateResourceProduction($userId);
+
+        if (!$db->begin_transaction()) {
+            throw new RuntimeException('无法开始升级事务 / Unable to start level-up transaction');
+        }
+        $transactionStarted = true;
+
+        $query = "SELECT g.level, g.rarity, gp.break_level
+                  FROM generals g
+                  JOIN general_progression gp
+                    ON gp.general_id = g.general_id
+                  WHERE g.general_id = ?
+                    AND g.owner_id = ?
+                    AND g.is_active = 1
+                  FOR UPDATE";
+        $stmt = $db->prepare($query);
+        if (!$stmt) {
+            throw new RuntimeException('无法锁定武将 / Unable to lock general');
+        }
+        $stmt->bind_param('ii', $generalId, $userId);
+        if (!$stmt->execute()) {
+            $error = $stmt->error;
+            $stmt->close();
+            throw new RuntimeException('无法锁定武将 / Unable to lock general: ' . $error);
+        }
+        $result = $stmt->get_result();
+        $row = $result ? $result->fetch_assoc() : null;
+        $stmt->close();
+
+        if (!$row) {
+            throw new DomainException('武将不存在或不属于玩家 / General does not exist or is not owned');
+        }
+
+        $finalLevelCap = GameRules::getBreakLevelCap((string) $row['rarity']);
+        $currentLevelCap = min(
+            $finalLevelCap,
+            20 + max(0, (int) $row['break_level']) * 20
+        );
+        if ((int) $row['level'] >= $currentLevelCap) {
+            throw new DomainException(
+                '武将已达到当前等级上限，请先完成BREAK / General reached the current level cap; complete BREAK first'
+            );
+        }
+
+        $lockedGeneral = new General($generalId);
+        if (!$lockedGeneral->isValid()
+            || (int) $lockedGeneral->getOwnerId() !== $userId) {
+            throw new DomainException('武将所有权验证失败 / General ownership validation failed');
+        }
+
+        $upgradeCost = (int) $lockedGeneral->getUpgradeCost();
+        $resourceUpdate = "UPDATE resources
+                           SET bright_crystal = bright_crystal - ?
+                           WHERE user_id = ?
+                             AND bright_crystal >= ?";
+        $stmt = $db->prepare($resourceUpdate);
+        if (!$stmt) {
+            throw new RuntimeException('无法扣除亮晶晶 / Unable to consume bright crystals');
+        }
+        $stmt->bind_param('iii', $upgradeCost, $userId, $upgradeCost);
+        if (!$stmt->execute()) {
+            $error = $stmt->error;
+            $stmt->close();
+            throw new RuntimeException('无法扣除亮晶晶 / Unable to consume bright crystals: ' . $error);
+        }
+        $affectedRows = $stmt->affected_rows;
+        $stmt->close();
+
+        if ($affectedRows !== 1) {
+            throw new DomainException('亮晶晶不足 / Insufficient bright crystals');
+        }
+
+        if (!$lockedGeneral->levelUp()) {
+            throw new RuntimeException('武将升级失败 / General level-up failed');
+        }
+
+        $eventType = 'general_leveled';
+        $referenceType = 'general';
+        $eventInsert = "INSERT INTO gameplay_events
+                          (user_id, event_type, event_value, reference_type, reference_id)
+                        VALUES (?, ?, 1, ?, ?)";
+        $stmt = $db->prepare($eventInsert);
+        if (!$stmt) {
+            throw new RuntimeException('无法记录升级事件 / Unable to record level-up event');
+        }
+        $stmt->bind_param(
+            'issi',
+            $userId,
+            $eventType,
+            $referenceType,
+            $generalId
+        );
+        if (!$stmt->execute()) {
+            $error = $stmt->error;
+            $stmt->close();
+            throw new RuntimeException('无法记录升级事件 / Unable to record level-up event: ' . $error);
+        }
+        $stmt->close();
+
+        if (!$db->commit()) {
+            throw new RuntimeException('无法提交升级事务 / Unable to commit level-up transaction');
+        }
+        $transactionStarted = false;
+
+        return [
+            'success' => true,
+            'message' => '武将升级成功 / General level-up successful',
+            'cost' => ['bright' => $upgradeCost],
+            'level' => (int) $lockedGeneral->getLevel()
+        ];
+    } catch (DomainException $e) {
+        if ($transactionStarted) {
+            $db->rollback();
+        }
+
+        return ['success' => false, 'message' => $e->getMessage()];
+    } catch (Throwable $e) {
+        if ($transactionStarted) {
+            $db->rollback();
+        }
+        error_log('general_detail level-up failed: ' . $e->getMessage());
+
+        return [
+            'success' => false,
+            'message' => '武将升级失败，未消耗资源 / General level-up failed and no resources were consumed'
+        ];
+    }
+}
+
+/**
+ * 格式化武将技能效果 / Formats general skill effects
+ *
+ * @param array $effects 技能效果 / Skill effects
+ * @return string 可读摘要 / Readable summary
+ */
+function formatGeneralSkillEffectsForPage(array $effects) {
+    if (empty($effects)) {
+        return '无';
+    }
+
+    $parts = [];
+    foreach ($effects as $name => $value) {
+        if (is_array($value)) {
+            $parts[] = (string) $name . '（'
+                . formatGeneralSkillEffectsForPage($value) . '）';
+        } elseif (is_bool($value)) {
+            $parts[] = (string) $name . '：' . ($value ? '是' : '否');
+        } else {
+            $parts[] = (string) $name . '：' . (string) $value;
+        }
+    }
+
+    return implode('、', $parts);
+}
+
 if (!isset($_SESSION['user_id'])) {
     header('Location: login.php');
     exit;
 }
 
-// 获取用户信息
 $user = new User($_SESSION['user_id']);
 if (!$user->isValid()) {
     session_unset();
@@ -17,529 +187,339 @@ if (!$user->isValid()) {
     exit;
 }
 
-// 获取用户资源
-$resource = new Resource($user->getUserId());
-
-// 获取武将ID
-$generalId = isset($_GET['id']) ? intval($_GET['id']) : 0;
-if ($generalId <= 0) {
-    header('Location: generals.php');
-    exit;
-}
-
-// 获取武将信息
+$userId = (int) $user->getUserId();
+$generalId = isset($_GET['id']) ? (int) $_GET['id'] : 0;
 $general = new General($generalId);
-if (!$general->isValid() || $general->getOwnerId() != $user->getUserId()) {
+
+if ($generalId <= 0
+    || !$general->isValid()
+    || (int) $general->getOwnerId() !== $userId) {
     header('Location: generals.php');
     exit;
 }
 
-// 处理升级请求
-$upgradeResult = null;
-if (isset($_POST['action']) && $_POST['action'] == 'upgrade') {
-    $upgradeCost = $general->getUpgradeCost();
-    
-    // 检查资源是否足够
-    if ($resource->getBrightCrystal() >= $upgradeCost) {
-        // 扣除资源
-        $resource->consumeBrightCrystal($upgradeCost);
-        
-        // 升级武将
-        if ($general->levelUp()) {
-            $upgradeResult = [
-                'success' => true,
-                'message' => '武将升级成功！',
-                'new_level' => $general->getLevel(),
-                'new_attack' => $general->getAttack(),
-                'new_defense' => $general->getDefense(),
-                'new_speed' => $general->getSpeed(),
-                'new_intelligence' => $general->getIntelligence()
-            ];
+$progressionService = new GeneralProgression();
+$progressionService->ensure($generalId);
+$operationResult = null;
+
+if (isset($_SERVER['REQUEST_METHOD']) && $_SERVER['REQUEST_METHOD'] === 'POST') {
+    if (!validateCsrfToken()) {
+        $operationResult = [
+            'success' => false,
+            'message' => '请求验证失败，请刷新页面后重试 / Request verification failed; refresh and try again'
+        ];
+    } else {
+        $action = isset($_POST['action']) ? (string) $_POST['action'] : '';
+
+        if ($action === 'upgrade') {
+            $operationResult = upgradeOwnedGeneralForPage(
+                Database::getInstance()->getConnection(),
+                $userId,
+                $generalId
+            );
+        } elseif ($action === 'break') {
+            $operationResult = $progressionService->breakGeneral(
+                $userId,
+                $generalId
+            );
+        } elseif ($action === 'recover_hp') {
+            $operationResult = $progressionService->recoverAllHp($userId);
         } else {
-            $upgradeResult = [
+            $operationResult = [
                 'success' => false,
-                'message' => '武将升级失败，请稍后再试。'
+                'message' => '未知操作 / Unknown operation'
             ];
         }
-    } else {
-        $upgradeResult = [
-            'success' => false,
-            'message' => '亮晶晶不足，无法升级武将。'
-        ];
+    }
+
+    $general = new General($generalId);
+    if (!$general->isValid()
+        || (int) $general->getOwnerId() !== $userId) {
+        header('Location: generals.php');
+        exit;
     }
 }
 
-// 处理技能卡牌添加请求
-$skillResult = null;
-if (isset($_POST['action']) && $_POST['action'] == 'add_skill') {
-    $skillName = isset($_POST['skill_name']) ? $_POST['skill_name'] : '';
-    $skillSlot = isset($_POST['skill_slot']) ? intval($_POST['skill_slot']) : 0;
-    $skillEffect = isset($_POST['skill_effect']) ? json_decode($_POST['skill_effect'], true) : [];
-    
-    if (!empty($skillName) && $skillSlot > 0 && !empty($skillEffect)) {
-        if ($general->addSkillCard($skillName, $skillSlot, $skillEffect)) {
-            $skillResult = [
-                'success' => true,
-                'message' => '技能卡牌添加成功！'
-            ];
-        } else {
-            $skillResult = [
-                'success' => false,
-                'message' => '技能卡牌添加失败，请稍后再试。'
-            ];
-        }
-    } else {
-        $skillResult = [
-            'success' => false,
-            'message' => '参数错误，无法添加技能卡牌。'
-        ];
+$progressionResult = $progressionService->get($generalId);
+$progression = !empty($progressionResult['success'])
+    ? $progressionResult['progression']
+    : [];
+$resource = new Resource($userId);
+$breakCoreCount = 0;
+$db = Database::getInstance()->getConnection();
+$itemCode = 'break_core';
+$itemQuery = "SELECT quantity
+              FROM user_items
+              WHERE user_id = ? AND item_code = ?";
+$itemStmt = $db->prepare($itemQuery);
+if ($itemStmt) {
+    $itemStmt->bind_param('is', $userId, $itemCode);
+    if ($itemStmt->execute()) {
+        $itemResult = $itemStmt->get_result();
+        $itemRow = $itemResult ? $itemResult->fetch_assoc() : null;
+        $breakCoreCount = $itemRow ? (int) $itemRow['quantity'] : 0;
     }
+    $itemStmt->close();
 }
 
-// 处理技能卡牌移除请求
-if (isset($_POST['action']) && $_POST['action'] == 'remove_skill') {
-    $skillSlot = isset($_POST['skill_slot']) ? intval($_POST['skill_slot']) : 0;
-    
-    if ($skillSlot > 0) {
-        if ($general->removeSkillCard($skillSlot)) {
-            $skillResult = [
-                'success' => true,
-                'message' => '技能卡牌移除成功！'
-            ];
-        } else {
-            $skillResult = [
-                'success' => false,
-                'message' => '技能卡牌移除失败，请稍后再试。'
-            ];
-        }
-    } else {
-        $skillResult = [
-            'success' => false,
-            'message' => '参数错误，无法移除技能卡牌。'
-        ];
-    }
-}
-
-// 页面标题
+$recoveryModifier = isset($GLOBALS['GENERAL_HP_RECOVERY_MODIFIER'])
+    && is_numeric($GLOBALS['GENERAL_HP_RECOVERY_MODIFIER'])
+    ? max(0.0, (float) $GLOBALS['GENERAL_HP_RECOVERY_MODIFIER'])
+    : 1.0;
+$recoveryPerHour = 5.0 * $recoveryModifier;
 $pageTitle = '武将详情 - ' . $general->getName();
 ?>
-
 <!DOCTYPE html>
 <html lang="zh-CN">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title><?php echo SITE_NAME; ?> - <?php echo $pageTitle; ?></title>
+    <title><?php echo escapeHtml(SITE_NAME . ' - ' . $pageTitle); ?></title>
     <link rel="stylesheet" href="assets/css/style.css">
     <style>
-        .general-detail {
-            background-color: #fff;
-            padding: 20px;
-            margin-bottom: 20px;
-            border-radius: 5px;
-            box-shadow: 0 2px 5px rgba(0, 0, 0, 0.1);
+        .detail-panel {
+            background: #fff;
+            border: 1px solid #ddd;
+            border-radius: 6px;
+            padding: 18px;
+            margin-bottom: 16px;
         }
-        
-        .general-header {
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            margin-bottom: 20px;
-            padding-bottom: 10px;
-            border-bottom: 1px solid #eee;
-        }
-        
-        .general-title {
-            margin: 0;
-            display: flex;
-            align-items: center;
-        }
-        
-        .general-title .rarity {
-            display: inline-block;
-            padding: 3px 8px;
-            border-radius: 3px;
-            font-size: 12px;
-            font-weight: bold;
-            margin-left: 10px;
-        }
-        
-        .general-title .rarity.B {
-            background-color: #e0e0e0;
-            color: #333;
-        }
-        
-        .general-title .rarity.A {
-            background-color: #a5d6a7;
-            color: #1b5e20;
-        }
-        
-        .general-title .rarity.S {
-            background-color: #90caf9;
-            color: #0d47a1;
-        }
-        
-        .general-title .rarity.SS {
-            background-color: #ce93d8;
-            color: #4a148c;
-        }
-        
-        .general-title .rarity.P {
-            background-color: #ffcc80;
-            color: #e65100;
-        }
-        
-        .general-info {
+        .detail-heading,
+        .button-row {
             display: flex;
             flex-wrap: wrap;
-            margin-bottom: 20px;
-        }
-        
-        .general-info-item {
-            width: 33.33%;
-            padding: 5px 0;
-        }
-        
-        .general-info-item .label {
-            font-weight: bold;
-            margin-right: 5px;
-        }
-        
-        .general-attributes {
-            display: grid;
-            grid-template-columns: repeat(2, 1fr);
-            gap: 15px;
-            margin-bottom: 20px;
-        }
-        
-        .attribute-card {
-            background-color: #f9f9f9;
-            padding: 15px;
-            border-radius: 5px;
-            box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
-        }
-        
-        .attribute-card .name {
-            font-weight: bold;
-            margin-bottom: 5px;
-            display: block;
-        }
-        
-        .attribute-card .value {
-            font-size: 24px;
-            color: #333;
-        }
-        
-        .general-skills {
-            margin-bottom: 20px;
-        }
-        
-        .skills-header {
-            display: flex;
             justify-content: space-between;
+            gap: 10px;
             align-items: center;
+        }
+        .rarity {
+            display: inline-block;
+            border-radius: 3px;
+            padding: 2px 7px;
+            background: #333;
+            color: #fff;
+            font-weight: bold;
+        }
+        .stat-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(145px, 1fr));
+            gap: 12px;
+        }
+        .stat-card,
+        .skill-card {
+            background: #fafafa;
+            border: 1px solid #ddd;
+            border-radius: 5px;
+            padding: 12px;
+        }
+        .stat-value {
+            display: block;
+            margin-top: 4px;
+            font-size: 1.35rem;
+            font-weight: bold;
+        }
+        .skill-card {
             margin-bottom: 10px;
         }
-        
-        .skills-title {
+        .button-row {
+            justify-content: flex-start;
+        }
+        .button-row form {
             margin: 0;
         }
-        
-        .skill-card {
-            background-color: #f9f9f9;
-            padding: 15px;
-            border-radius: 5px;
-            box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
-            margin-bottom: 10px;
-        }
-        
-        .skill-header {
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            margin-bottom: 10px;
-        }
-        
-        .skill-name {
-            font-weight: bold;
-            font-size: 16px;
-        }
-        
-        .skill-type {
-            color: #666;
-            font-style: italic;
-        }
-        
-        .skill-level {
-            background-color: #333;
+        button,
+        .button-link {
+            display: inline-block;
+            border: 1px solid #555;
+            border-radius: 4px;
+            padding: 8px 13px;
+            background: #333;
             color: #fff;
-            padding: 2px 6px;
-            border-radius: 3px;
-            font-size: 12px;
-        }
-        
-        .skill-effects {
-            margin-top: 10px;
-        }
-        
-        .skill-effect {
-            display: flex;
-            justify-content: space-between;
-            margin-bottom: 5px;
-        }
-        
-        .skill-effect .name {
-            font-weight: bold;
-        }
-        
-        .upgrade-section {
-            background-color: #f9f9f9;
-            padding: 15px;
-            border-radius: 5px;
-            margin-bottom: 20px;
-        }
-        
-        .upgrade-title {
-            margin-top: 0;
-            margin-bottom: 10px;
-        }
-        
-        .upgrade-cost {
-            margin-bottom: 15px;
-        }
-        
-        .upgrade-button {
-            padding: 10px 20px;
-            background-color: #4CAF50;
-            color: white;
-            border: none;
-            border-radius: 4px;
+            text-decoration: none;
             cursor: pointer;
-            font-size: 16px;
         }
-        
-        .upgrade-button:hover {
-            background-color: #45a049;
-        }
-        
-        .upgrade-button:disabled {
-            background-color: #cccccc;
+        button:disabled {
             cursor: not-allowed;
+            opacity: 0.5;
         }
-        
-        .result-message {
-            margin-top: 10px;
-            padding: 10px;
-            border-radius: 4px;
-        }
-        
-        .result-message.success {
-            background-color: #d4edda;
-            color: #155724;
-        }
-        
-        .result-message.error {
-            background-color: #f8d7da;
-            color: #721c24;
-        }
-        
-        .actions {
-            display: flex;
-            gap: 10px;
-            margin-top: 20px;
-        }
-        
-        .actions button {
-            padding: 10px 20px;
-            background-color: #333;
-            color: white;
-            border: none;
-            border-radius: 4px;
-            cursor: pointer;
-        }
-        
-        .actions button:hover {
-            background-color: #555;
+        .muted {
+            color: #666;
         }
     </style>
 </head>
 <body>
-    <div class="container">
-        <!-- 页首 -->
-        <header>
-            <h1 class="site-title"><?php echo SITE_NAME; ?></h1>
-            <h2 class="page-title"><?php echo $pageTitle; ?></h2>
-            <nav class="main-nav">
-                <ul>
-                    <li><a href="index.php">主基地</a></li>
-                    <li><a href="profile.php">档案</a></li>
-                    <li><a href="armies.php">军队</a></li>
-                    <li><a href="map.php">地图</a></li>
-                    <li><a href="territory.php">领地</a></li>
-                    <li><a href="internal.php">内政</a></li>
-                    <li><a href="ranking.php">排名</a></li>
-                    <li class="circuit-points">思考回路: <?php echo $user->getCircuitPoints(); ?> / <?php echo $user->getMaxCircuitPoints(); ?></li>
-                </ul>
-            </nav>
-        </header>
-        
-        <!-- 主内容 -->
-        <main>
-            <!-- 资源显示 -->
-            <div class="resource-bar">
-                <div class="resource bright-crystal">
-                    <span class="resource-name">亮晶晶</span>
-                    <span class="resource-value"><?php echo number_format($resource->getBrightCrystal()); ?></span>
+<div class="container">
+    <?php renderGameplayHeader($pageTitle, $user, 'generals'); ?>
+    <main>
+        <?php renderGameplayResourceBar($resource); ?>
+        <?php renderGameplayNotice($operationResult); ?>
+        <?php if (empty($progressionResult['success'])): ?>
+            <?php renderGameplayNotice($progressionResult); ?>
+        <?php endif; ?>
+
+        <section class="detail-panel">
+            <div class="detail-heading">
+                <h3>
+                    <?php echo escapeHtml($general->getName()); ?>
+                    <span class="rarity"><?php echo escapeHtml($general->getRarity()); ?></span>
+                </h3>
+                <a href="generals.php">返回武将列表</a>
+            </div>
+            <p>
+                来源：<?php echo escapeHtml($general->getSource()); ?> /
+                元素：<?php echo escapeHtml($general->getElement()); ?> /
+                COST：<?php echo escapeHtml($general->getCost()); ?>
+            </p>
+            <div class="stat-grid">
+                <div class="stat-card">
+                    等级
+                    <span class="stat-value">
+                        <?php echo number_format((int) $general->getLevel()); ?>
+                        /
+                        <?php echo isset($progression['current_level_cap'])
+                            ? number_format((int) $progression['current_level_cap'])
+                            : '—'; ?>
+                    </span>
                 </div>
-                <div class="resource warm-crystal">
-                    <span class="resource-name">暖洋洋</span>
-                    <span class="resource-value"><?php echo number_format($resource->getWarmCrystal()); ?></span>
+                <div class="stat-card">
+                    BREAK
+                    <span class="stat-value">
+                        <?php echo isset($progression['break_level'])
+                            ? number_format((int) $progression['break_level'])
+                            : '—'; ?>
+                    </span>
                 </div>
-                <div class="resource cold-crystal">
-                    <span class="resource-name">冷冰冰</span>
-                    <span class="resource-value"><?php echo number_format($resource->getColdCrystal()); ?></span>
+                <div class="stat-card">
+                    HP
+                    <span class="stat-value">
+                        <?php echo number_format((int) $general->getHp()); ?>
+                        / <?php echo number_format((int) $general->getMaxHp()); ?>
+                    </span>
                 </div>
-                <div class="resource green-crystal">
-                    <span class="resource-name">郁萌萌</span>
-                    <span class="resource-value"><?php echo number_format($resource->getGreenCrystal()); ?></span>
+                <div class="stat-card">
+                    攻击
+                    <span class="stat-value"><?php echo number_format((int) $general->getAttack()); ?></span>
                 </div>
-                <div class="resource day-crystal">
-                    <span class="resource-name">昼闪闪</span>
-                    <span class="resource-value"><?php echo number_format($resource->getDayCrystal()); ?></span>
+                <div class="stat-card">
+                    守备
+                    <span class="stat-value"><?php echo number_format((int) $general->getDefense()); ?></span>
                 </div>
-                <div class="resource night-crystal">
-                    <span class="resource-name">夜静静</span>
-                    <span class="resource-value"><?php echo number_format($resource->getNightCrystal()); ?></span>
+                <div class="stat-card">
+                    速度
+                    <span class="stat-value"><?php echo number_format((int) $general->getSpeed()); ?></span>
+                </div>
+                <div class="stat-card">
+                    智力
+                    <span class="stat-value"><?php echo number_format((int) $general->getIntelligence()); ?></span>
                 </div>
             </div>
-            
-            <!-- 武将详情 -->
-            <div class="general-detail">
-                <div class="general-header">
-                    <h3 class="general-title">
-                        <?php echo $general->getName(); ?>
-                        <span class="rarity <?php echo $general->getRarity(); ?>"><?php echo $general->getRarity(); ?></span>
-                    </h3>
-                    <div class="general-controls">
-                        <button onclick="window.location.href='generals.php'">返回武将列表</button>
-                    </div>
-                </div>
-                
-                <div class="general-info">
-                    <div class="general-info-item">
-                        <span class="label">等级:</span>
-                        <span class="value"><?php echo $general->getLevel(); ?></span>
-                    </div>
-                    <div class="general-info-item">
-                        <span class="label">COST:</span>
-                        <span class="value"><?php echo $general->getCost(); ?></span>
-                    </div>
-                    <div class="general-info-item">
-                        <span class="label">元素:</span>
-                        <span class="value"><?php echo $general->getElement(); ?></span>
-                    </div>
-                    <div class="general-info-item">
-                        <span class="label">来源:</span>
-                        <span class="value"><?php echo $general->getSource(); ?></span>
-                    </div>
-                    <div class="general-info-item">
-                        <span class="label">HP:</span>
-                        <span class="value"><?php echo $general->getHp(); ?> / <?php echo $general->getMaxHp(); ?></span>
-                    </div>
-                </div>
-                
-                <div class="general-attributes">
-                    <div class="attribute-card">
-                        <span class="name">攻击力</span>
-                        <span class="value"><?php echo $general->getAttack(); ?></span>
-                    </div>
-                    <div class="attribute-card">
-                        <span class="name">守备力</span>
-                        <span class="value"><?php echo $general->getDefense(); ?></span>
-                    </div>
-                    <div class="attribute-card">
-                        <span class="name">速度</span>
-                        <span class="value"><?php echo $general->getSpeed(); ?></span>
-                    </div>
-                    <div class="attribute-card">
-                        <span class="name">智力</span>
-                        <span class="value"><?php echo $general->getIntelligence(); ?></span>
-                    </div>
-                </div>
-                
-                <div class="general-skills">
-                    <div class="skills-header">
-                        <h4 class="skills-title">技能卡牌</h4>
-                    </div>
-                    
-                    <?php if (empty($general->getSkills())): ?>
-                    <p>该武将没有技能卡牌。</p>
-                    <?php else: ?>
-                    <?php foreach ($general->getSkills() as $skill): ?>
-                    <div class="skill-card">
-                        <div class="skill-header">
-                            <span class="skill-name"><?php echo $skill->getSkillName(); ?></span>
-                            <span class="skill-type"><?php echo $skill->getSkillType(); ?> (槽位: <?php echo $skill->getSlot(); ?>)</span>
-                            <span class="skill-level">Lv.<?php echo $skill->getSkillLevel(); ?></span>
-                        </div>
-                        <div class="skill-effects">
-                            <?php foreach ($skill->getEffect() as $effectName => $effectValue): ?>
-                            <div class="skill-effect">
-                                <span class="name"><?php echo $effectName; ?></span>
-                                <span class="value">+<?php echo $effectValue; ?></span>
-                            </div>
-                            <?php endforeach; ?>
-                        </div>
-                        <?php if ($skill->getSlot() > 0): ?>
-                        <form method="post" style="margin-top: 10px;">
-                            <input type="hidden" name="action" value="remove_skill">
-                            <input type="hidden" name="skill_slot" value="<?php echo $skill->getSlot(); ?>">
-                            <button type="submit" class="remove-skill-button">移除技能卡牌</button>
-                        </form>
-                        <?php endif; ?>
-                    </div>
-                    <?php endforeach; ?>
-                    <?php endif; ?>
-                </div>
-                
-                <div class="upgrade-section">
-                    <h4 class="upgrade-title">升级武将</h4>
-                    <div class="upgrade-cost">
-                        <p>升级所需亮晶晶: <strong><?php echo number_format($general->getUpgradeCost()); ?></strong></p>
-                        <p>当前亮晶晶: <strong><?php echo number_format($resource->getBrightCrystal()); ?></strong></p>
-                    </div>
-                    
-                    <form method="post">
+        </section>
+
+        <section class="detail-panel">
+            <div class="detail-heading">
+                <h3>技能</h3>
+                <a href="skills.php">管理技能卡库存与槽位</a>
+            </div>
+            <?php if (empty($general->getSkills())): ?>
+                <p>该武将尚未拥有技能。</p>
+            <?php else: ?>
+                <?php foreach ($general->getSkills() as $skill): ?>
+                    <article class="skill-card">
+                        <strong><?php echo escapeHtml($skill->getSkillName()); ?></strong>
+                        <span>
+                            （<?php echo escapeHtml($skill->getSkillType()); ?> /
+                            槽位 <?php echo number_format((int) $skill->getSlot()); ?> /
+                            Lv.<?php echo number_format((int) $skill->getSkillLevel()); ?>）
+                        </span>
+                        <p><?php echo escapeHtml(formatGeneralSkillEffectsForPage($skill->getEffect())); ?></p>
+                    </article>
+                <?php endforeach; ?>
+            <?php endif; ?>
+            <p class="muted">固有技能位于零号槽；一号与二号槽只能通过库存技能卡页面装备，不能手工构造。</p>
+        </section>
+
+        <section class="detail-panel">
+            <h3>等级成长</h3>
+            <?php if (!empty($progression)): ?>
+                <p>
+                    当前等级上限：
+                    <strong><?php echo number_format((int) $progression['current_level_cap']); ?></strong>；
+                    最终等级上限：
+                    <strong><?php echo number_format((int) $progression['final_level_cap']); ?></strong>
+                </p>
+                <?php if ((int) $general->getLevel() < (int) $progression['current_level_cap']): ?>
+                    <p>
+                        升级消耗：亮晶晶 ×
+                        <strong><?php echo number_format((int) $general->getUpgradeCost()); ?></strong>
+                    </p>
+                    <form method="post" action="general_detail.php?id=<?php echo $generalId; ?>">
+                        <?php echo csrfField(); ?>
                         <input type="hidden" name="action" value="upgrade">
-                        <button type="submit" class="upgrade-button" <?php echo $resource->getBrightCrystal() < $general->getUpgradeCost() ? 'disabled' : ''; ?>>
-                            升级武将
+                        <button type="submit" <?php echo $resource->getBrightCrystal() < $general->getUpgradeCost() ? 'disabled' : ''; ?>>
+                            提升一级
                         </button>
                     </form>
-                    
-                    <?php if ($upgradeResult): ?>
-                    <div class="result-message <?php echo $upgradeResult['success'] ? 'success' : 'error'; ?>">
-                        <?php echo $upgradeResult['message']; ?>
-                        <?php if ($upgradeResult['success']): ?>
-                        <p>新等级: <?php echo $upgradeResult['new_level']; ?></p>
-                        <p>新属性: 攻击力 <?php echo $upgradeResult['new_attack']; ?>, 守备力 <?php echo $upgradeResult['new_defense']; ?>, 速度 <?php echo $upgradeResult['new_speed']; ?>, 智力 <?php echo $upgradeResult['new_intelligence']; ?></p>
-                        <?php endif; ?>
-                    </div>
-                    <?php endif; ?>
-                </div>
-                
-                <div class="actions">
-                    <button onclick="window.location.href='assign_general.php?id=<?php echo $general->getGeneralId(); ?>'">分配武将</button>
-                    <button onclick="window.location.href='generals.php'">返回武将列表</button>
-                </div>
+                <?php elseif ((int) $progression['current_level_cap'] < (int) $progression['final_level_cap']): ?>
+                    <p>已达到当前等级上限，完成 BREAK 后可继续成长。</p>
+                <?php else: ?>
+                    <p>该武将已达到最终等级上限。</p>
+                <?php endif; ?>
+            <?php endif; ?>
+        </section>
+
+        <section class="detail-panel">
+            <h3>BREAK</h3>
+            <p>
+                持有蜕变核心：<strong><?php echo number_format($breakCoreCount); ?></strong>
+            </p>
+            <?php if (!empty($progression['next_break_cost'])): ?>
+                <p>
+                    下一次 BREAK 消耗：
+                    <?php echo escapeHtml(formatGameplayBundle($progression['next_break_cost'])); ?>
+                </p>
+                <p>BREAK 会将基础战斗属性与最大 HP 提高约 10%，并解锁下一段等级上限。</p>
+                <form method="post" action="general_detail.php?id=<?php echo $generalId; ?>">
+                    <?php echo csrfField(); ?>
+                    <input type="hidden" name="action" value="break">
+                    <button type="submit" <?php echo empty($progression['can_break']) ? 'disabled' : ''; ?>>
+                        执行 BREAK
+                    </button>
+                </form>
+            <?php else: ?>
+                <p>该武将无需继续 BREAK。</p>
+            <?php endif; ?>
+        </section>
+
+        <section class="detail-panel">
+            <h3>HP 离线回复</h3>
+            <p>
+                当前回复速度：每小时
+                <strong><?php echo escapeHtml(rtrim(rtrim(number_format($recoveryPerHour, 2, '.', ''), '0'), '.')); ?></strong>
+                HP。上次结算：
+                <strong>
+                    <?php echo isset($progression['last_hp_recovery'])
+                        ? escapeHtml($progression['last_hp_recovery'])
+                        : '—'; ?>
+                </strong>
+            </p>
+            <p class="muted">结算会一次处理你全部武将自上次记录以来的回复，且不会超过各自最大 HP。</p>
+            <form method="post" action="general_detail.php?id=<?php echo $generalId; ?>">
+                <?php echo csrfField(); ?>
+                <input type="hidden" name="action" value="recover_hp">
+                <button type="submit">结算全部武将 HP</button>
+            </form>
+        </section>
+
+        <section class="detail-panel">
+            <div class="button-row">
+                <a class="button-link" href="assign_general.php?id=<?php echo $generalId; ?>">分配武将</a>
+                <a class="button-link" href="skills.php">技能卡管理</a>
+                <a class="button-link" href="generals.php">返回武将列表</a>
             </div>
-        </main>
-        
-        <!-- 页脚 -->
-        <footer>
-            <p>&copy; <?php echo date('Y'); ?> <?php echo SITE_NAME; ?> - 版本 <?php echo GAME_VERSION; ?></p>
-        </footer>
-    </div>
-    
-    <script src="assets/js/script.js"></script>
+        </section>
+    </main>
+    <?php renderGameplayFooter(); ?>
+</div>
+<script src="assets/js/script.js"></script>
 </body>
 </html>

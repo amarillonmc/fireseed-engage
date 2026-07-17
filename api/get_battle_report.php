@@ -36,46 +36,23 @@ if (!$battle->isValid()) {
     exit;
 }
 
-// 获取攻击方军队
-$attackerArmy = new Army($battle->getAttackerArmyId());
-if (!$attackerArmy->isValid()) {
+// 结算后必须按参与方快照授权，不能按易主后的当前领主授权 / Resolved reports are authorized by participant snapshots, never by a post-capture owner
+if (!$battle->canUserView((int) $_SESSION['user_id'])) {
     echo json_encode([
         'success' => false,
-        'message' => '攻击方军队不存在'
+        'message' => '您没有权限查看该战斗报告'
     ]);
     exit;
 }
-
-// 检查用户是否有权限查看战斗报告
-if ($attackerArmy->getOwnerId() != $_SESSION['user_id']) {
-    // 检查用户是否是防守方
-    $defenderArmyId = $battle->getDefenderArmyId();
-    $defenderCityId = $battle->getDefenderCityId();
-    
-    $isDefender = false;
-    
-    if ($defenderArmyId) {
-        $defenderArmy = new Army($defenderArmyId);
-        if ($defenderArmy->isValid() && $defenderArmy->getOwnerId() == $_SESSION['user_id']) {
-            $isDefender = true;
-        }
-    }
-    
-    if ($defenderCityId) {
-        $defenderCity = new City($defenderCityId);
-        if ($defenderCity->isValid() && $defenderCity->getOwnerId() == $_SESSION['user_id']) {
-            $isDefender = true;
-        }
-    }
-    
-    if (!$isDefender) {
-        echo json_encode([
-            'success' => false,
-            'message' => '您没有权限查看该战斗报告'
-        ]);
-        exit;
-    }
-}
+$participant = $battle->getParticipantSnapshot();
+$attackerArmy = $battle->getAttackerArmyId() === null
+    ? null
+    : new Army($battle->getAttackerArmyId());
+$attackerOwnerId = $participant
+    ? $participant['attacker_user_id']
+    : ($attackerArmy && $attackerArmy->isValid()
+        ? (int) $attackerArmy->getOwnerId()
+        : null);
 
 // 准备战斗报告数据
 $battleReport = [
@@ -83,9 +60,10 @@ $battleReport = [
     'battle_time' => $battle->getBattleTime(),
     'result' => $battle->getResult(),
     'attacker' => [
-        'army_id' => $attackerArmy->getArmyId(),
-        'name' => $attackerArmy->getName(),
-        'owner_id' => $attackerArmy->getOwnerId()
+        'army_id' => $battle->getAttackerArmyId(),
+        'name' => $battle->getAttackerName(),
+        'owner_id' => $attackerOwnerId,
+        'power_snapshot' => $battle->getAttackerPowerSnapshot()
     ],
     'defender' => [],
     'attacker_losses' => $battle->getAttackerLosses(),
@@ -102,35 +80,43 @@ if ($defenderArmyId) {
     $defenderArmy = new Army($defenderArmyId);
     if ($defenderArmy->isValid()) {
         $battleReport['defender'] = [
-            'type' => 'army',
+            'kind' => 'army',
             'army_id' => $defenderArmy->getArmyId(),
             'name' => $defenderArmy->getName(),
-            'owner_id' => $defenderArmy->getOwnerId()
+            'owner_id' => $participant
+                ? $participant['defender_user_id']
+                : $defenderArmy->getOwnerId()
         ];
     }
 } elseif ($defenderCityId) {
     $defenderCity = new City($defenderCityId);
     if ($defenderCity->isValid()) {
         $battleReport['defender'] = [
-            'type' => 'city',
+            'kind' => 'city',
             'city_id' => $defenderCity->getCityId(),
             'name' => $defenderCity->getName(),
-            'owner_id' => $defenderCity->getOwnerId()
+            'owner_id' => $participant
+                ? $participant['defender_user_id']
+                : $defenderCity->getOwnerId()
         ];
     }
 } elseif ($defenderTileId) {
     $defenderTile = new Map($defenderTileId);
     if ($defenderTile->isValid()) {
         $battleReport['defender'] = [
-            'type' => 'tile',
+            'kind' => 'tile',
             'tile_id' => $defenderTile->getTileId(),
             'x' => $defenderTile->getX(),
             'y' => $defenderTile->getY(),
-            'type' => $defenderTile->getType(),
+            'tile_type' => $defenderTile->getType(),
             'subtype' => $defenderTile->getSubtype()
         ];
     }
 }
+
+$battleReport['counter_details'] = $participant
+    ? $participant['counter_details']
+    : null;
 
 // 返回战斗报告
 echo json_encode([

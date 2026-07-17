@@ -1,5 +1,5 @@
 <?php
-// 包含初始化文件
+// 种火集结号 - 领地资源收集接口 / Fireseed Engage - territory resource collection endpoint
 require_once '../includes/init.php';
 
 // 设置响应头
@@ -14,8 +14,34 @@ if (!isset($_SESSION['user_id'])) {
     exit;
 }
 
-// 获取请求参数
-$tileId = isset($_GET['tile_id']) ? intval($_GET['tile_id']) : 0;
+// 资源收集会改变状态，必须使用POST和CSRF令牌 / Resource collection mutates state and requires POST with CSRF
+if (!isValidPostRequest()) {
+    echo json_encode([
+        'success' => false,
+        'message' => '请求方式或安全令牌无效'
+    ]);
+    exit;
+}
+if (isSeasonGameplayFrozen()) {
+    http_response_code(409);
+    echo json_encode([
+        'success' => false,
+        'frozen' => true,
+        'message' => getSeasonGameplayFreezeMessage()
+    ]);
+    exit;
+}
+
+$tileId = 0;
+if (isset($_POST['tile_id'])) {
+    $tileId = is_scalar($_POST['tile_id'])
+        ? filter_var($_POST['tile_id'], FILTER_VALIDATE_INT)
+        : false;
+    if ($tileId === false || $tileId <= 0) {
+        echo json_encode(['success' => false, 'message' => '资源点参数无效']);
+        exit;
+    }
+}
 
 // 创建资源收集器
 $resourceCollector = new ResourceCollector();

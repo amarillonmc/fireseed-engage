@@ -1,9 +1,9 @@
--- 种火集结号 - 武将表
+-- 种火集结号 - 武将表 / Fireseed Engage - generals table
 
 -- 创建新的武将表
 CREATE TABLE `generals` (
   `general_id` int(11) NOT NULL AUTO_INCREMENT,
-  `owner_id` int(11) NOT NULL,
+  `owner_id` int(11) NOT NULL DEFAULT 0,
   `name` varchar(100) NOT NULL,
   `source` varchar(255) DEFAULT '原创角色',
   `rarity` enum('B','A','S','SS','P') NOT NULL,
@@ -19,6 +19,5 @@ CREATE TABLE `generals` (
   `is_active` tinyint(1) NOT NULL DEFAULT 1,
   `created_at` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP,
   PRIMARY KEY (`general_id`),
-  KEY `owner_id` (`owner_id`),
-  CONSTRAINT `generals_ibfk_1` FOREIGN KEY (`owner_id`) REFERENCES `users` (`user_id`) ON DELETE CASCADE
+  KEY `owner_id` (`owner_id`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;

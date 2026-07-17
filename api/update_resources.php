@@ -13,6 +13,16 @@ if (!isset($_SESSION['user_id'])) {
     ]);
     exit;
 }
+// 赛季冻结期间资源与思考回路生产均暂停 / Pause resource and circuit production during the season freeze
+if (isSeasonGameplayFrozen()) {
+    http_response_code(409);
+    echo json_encode([
+        'success' => false,
+        'frozen' => true,
+        'message' => getSeasonGameplayFreezeMessage()
+    ]);
+    exit;
+}
 
 // 更新资源产出
 $resourceUpdated = Resource::updateResourceProduction($_SESSION['user_id']);

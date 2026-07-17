@@ -30,41 +30,24 @@ if (!$battle->isValid()) {
     exit;
 }
 
-// 获取攻击方军队
-$attackerArmy = new Army($battle->getAttackerArmyId());
-if (!$attackerArmy->isValid()) {
+// 结算战报按参与方快照授权，军队解散或领地易主后仍保持原权限 / Resolved reports use participant snapshots so disbanding or capture cannot rewrite access
+if (!$battle->canUserView($user->getUserId())) {
     header('Location: battles.php');
     exit;
 }
-
-// 检查用户是否有权限查看战斗报告
-$hasPermission = false;
-
-if ($attackerArmy->getOwnerId() == $user->getUserId()) {
-    $hasPermission = true;
-} else {
-    // 检查用户是否是防守方
-    $defenderArmyId = $battle->getDefenderArmyId();
-    $defenderCityId = $battle->getDefenderCityId();
-    
-    if ($defenderArmyId) {
-        $defenderArmy = new Army($defenderArmyId);
-        if ($defenderArmy->isValid() && $defenderArmy->getOwnerId() == $user->getUserId()) {
-            $hasPermission = true;
-        }
-    }
-    
-    if ($defenderCityId) {
-        $defenderCity = new City($defenderCityId);
-        if ($defenderCity->isValid() && $defenderCity->getOwnerId() == $user->getUserId()) {
-            $hasPermission = true;
-        }
-    }
-}
-
-if (!$hasPermission) {
-    header('Location: battles.php');
-    exit;
+$participant = $battle->getParticipantSnapshot();
+$attackerArmy = $battle->getAttackerArmyId() === null
+    ? null
+    : new Army($battle->getAttackerArmyId());
+$attackerOwnerId = $participant
+    ? $participant['attacker_user_id']
+    : ($attackerArmy && $attackerArmy->isValid()
+        ? (int) $attackerArmy->getOwnerId()
+        : null);
+$attackerName = $battle->getAttackerName();
+$attackerPower = $battle->getAttackerPowerSnapshot();
+if ($attackerPower <= 0 && $attackerArmy && $attackerArmy->isValid()) {
+    $attackerPower = $attackerArmy->getCombatPower();
 }
 
 // 获取防守方信息
@@ -77,31 +60,35 @@ if ($defenderArmyId) {
     $defenderArmy = new Army($defenderArmyId);
     if ($defenderArmy->isValid()) {
         $defenderInfo = [
-            'type' => 'army',
+            'kind' => 'army',
             'army_id' => $defenderArmy->getArmyId(),
             'name' => $defenderArmy->getName(),
-            'owner_id' => $defenderArmy->getOwnerId()
+            'owner_id' => $participant
+                ? $participant['defender_user_id']
+                : $defenderArmy->getOwnerId()
         ];
     }
 } elseif ($defenderCityId) {
     $defenderCity = new City($defenderCityId);
     if ($defenderCity->isValid()) {
         $defenderInfo = [
-            'type' => 'city',
+            'kind' => 'city',
             'city_id' => $defenderCity->getCityId(),
             'name' => $defenderCity->getName(),
-            'owner_id' => $defenderCity->getOwnerId()
+            'owner_id' => $participant
+                ? $participant['defender_user_id']
+                : $defenderCity->getOwnerId()
         ];
     }
 } elseif ($defenderTileId) {
     $defenderTile = new Map($defenderTileId);
     if ($defenderTile->isValid()) {
         $defenderInfo = [
-            'type' => 'tile',
+            'kind' => 'tile',
             'tile_id' => $defenderTile->getTileId(),
             'x' => $defenderTile->getX(),
             'y' => $defenderTile->getY(),
-            'type' => $defenderTile->getType(),
+            'tile_type' => $defenderTile->getType(),
             'subtype' => $defenderTile->getSubtype()
         ];
     }
@@ -112,6 +99,9 @@ $battleResult = $battle->getResult();
 $attackerLosses = $battle->getAttackerLosses();
 $defenderLosses = $battle->getDefenderLosses();
 $rewards = $battle->getRewards();
+
+// 读取战斗结算时保存的兵种克制快照 / Read the unit-counter snapshot saved during battle resolution
+$counterDetails = $participant ? $participant['counter_details'] : null;
 
 // 页面标题
 $pageTitle = '战斗报告';
@@ -357,38 +347,42 @@ $pageTitle = '战斗报告';
                 <div class="battle-report-sides">
                     <div class="battle-report-side">
                         <h4>攻击方</h4>
-                        <p><strong>军队名称:</strong> <?php echo $attackerArmy->getName(); ?></p>
+                        <p><strong>军队名称:</strong> <?php echo escapeHtml($attackerName); ?></p>
                         <p><strong>拥有者:</strong> <?php 
-                            $attackerOwner = new User($attackerArmy->getOwnerId());
-                            echo $attackerOwner->isValid() ? $attackerOwner->getUsername() : '未知用户';
+                            $attackerOwner = $attackerOwnerId === null
+                                ? null
+                                : new User($attackerOwnerId);
+                            echo $attackerOwner && $attackerOwner->isValid()
+                                ? escapeHtml($attackerOwner->getUsername())
+                                : '未知用户';
                         ?></p>
-                        <p><strong>战斗力:</strong> <?php echo number_format($attackerArmy->getCombatPower()); ?></p>
+                        <p><strong>战斗力:</strong> <?php echo number_format($attackerPower); ?></p>
                     </div>
                     
                     <div class="battle-report-side">
                         <h4>防守方</h4>
                         <?php if ($defenderInfo): ?>
-                            <?php if ($defenderInfo['type'] == 'army'): ?>
-                                <p><strong>军队名称:</strong> <?php echo $defenderInfo['name']; ?></p>
+                            <?php if ($defenderInfo['kind'] == 'army'): ?>
+                                <p><strong>军队名称:</strong> <?php echo escapeHtml($defenderInfo['name']); ?></p>
                                 <p><strong>拥有者:</strong> <?php 
                                     $defenderOwner = new User($defenderInfo['owner_id']);
-                                    echo $defenderOwner->isValid() ? $defenderOwner->getUsername() : '未知用户';
+                                    echo $defenderOwner->isValid() ? escapeHtml($defenderOwner->getUsername()) : '未知用户';
                                 ?></p>
-                            <?php elseif ($defenderInfo['type'] == 'city'): ?>
-                                <p><strong>城池名称:</strong> <?php echo $defenderInfo['name']; ?></p>
+                            <?php elseif ($defenderInfo['kind'] == 'city'): ?>
+                                <p><strong>城池名称:</strong> <?php echo escapeHtml($defenderInfo['name']); ?></p>
                                 <p><strong>拥有者:</strong> <?php 
                                     $defenderOwner = new User($defenderInfo['owner_id']);
-                                    echo $defenderOwner->isValid() ? $defenderOwner->getUsername() : '未知用户';
+                                    echo $defenderOwner->isValid() ? escapeHtml($defenderOwner->getUsername()) : '未知用户';
                                 ?></p>
-                            <?php elseif ($defenderInfo['type'] == 'tile'): ?>
+                            <?php elseif ($defenderInfo['kind'] == 'tile'): ?>
                                 <p><strong>地图格子:</strong> (<?php echo $defenderInfo['x']; ?>, <?php echo $defenderInfo['y']; ?>)</p>
                                 <p><strong>类型:</strong> <?php 
-                                    if ($defenderInfo['type'] == 'resource') {
+                                    if ($defenderInfo['tile_type'] == 'resource') {
                                         echo '资源点 - ' . getResourceName($defenderInfo['subtype']);
-                                    } elseif ($defenderInfo['type'] == 'npc_fort') {
+                                    } elseif ($defenderInfo['tile_type'] == 'npc_fort') {
                                         echo 'NPC城池';
                                     } else {
-                                        echo $defenderInfo['type'];
+                                        echo escapeHtml($defenderInfo['tile_type']);
                                     }
                                 ?></p>
                             <?php endif; ?>
@@ -429,6 +423,17 @@ $pageTitle = '战斗报告';
                     <h5>防守方损失</h5>
                     <?php if (isset($defenderLosses['durability_loss'])): ?>
                         <p>城池耐久度损失: <?php echo number_format($defenderLosses['durability_loss']); ?></p>
+                        <?php if (!empty($defenderLosses['soldier_losses'])): ?>
+                        <ul>
+                            <?php foreach ($defenderLosses['soldier_losses'] as $loss): ?>
+                            <li>
+                                <?php echo getSoldierName($loss['soldier_type']); ?>
+                                Lv.<?php echo number_format((int) $loss['level']); ?>：
+                                <?php echo number_format((int) $loss['quantity']); ?>
+                            </li>
+                            <?php endforeach; ?>
+                        </ul>
+                        <?php endif; ?>
                     <?php elseif (isset($defenderLosses['resource_loss'])): ?>
                         <p>资源损失: <?php echo number_format($defenderLosses['resource_loss']); ?></p>
                     <?php else: ?>
@@ -455,6 +460,21 @@ $pageTitle = '战斗报告';
                     <p>防守方没有损失</p>
                     <?php endif; ?>
                 </div>
+
+                <?php if (is_array($counterDetails)): ?>
+                <div class="battle-report-rewards">
+                    <h4>兵种克制结算</h4>
+                    <p>攻击方倍率：<?php echo number_format((float) $counterDetails['attacker_multiplier'], 2); ?></p>
+                    <p>防守方倍率：<?php echo number_format((float) $counterDetails['defender_multiplier'], 2); ?></p>
+                    <p>
+                        结算战力：
+                        <?php echo number_format((int) $counterDetails['raw_attacker_power']); ?>
+                        → <?php echo number_format((int) round($counterDetails['raw_attacker_power'] * $counterDetails['attacker_multiplier'])); ?> /
+                        <?php echo number_format((int) $counterDetails['raw_defender_power']); ?>
+                        → <?php echo number_format((int) round($counterDetails['raw_defender_power'] * $counterDetails['defender_multiplier'])); ?>
+                    </p>
+                </div>
+                <?php endif; ?>
                 
                 <?php if (!empty($rewards)): ?>
                 <div class="battle-report-rewards">
@@ -485,6 +505,19 @@ $pageTitle = '战斗报告';
                         }
                         ?>
                     </p>
+                    <?php endif; ?>
+
+                    <?php if (!empty($rewards['captives']['units'])): ?>
+                    <p>俘虏：共 <?php echo number_format((int) $rewards['captives']['total']); ?> 名</p>
+                    <ul>
+                        <?php foreach ($rewards['captives']['units'] as $captive): ?>
+                        <li>
+                            <?php echo getSoldierName($captive['soldier_type']); ?>
+                            Lv.<?php echo number_format((int) $captive['level']); ?>：
+                            <?php echo number_format((int) $captive['quantity']); ?>
+                        </li>
+                        <?php endforeach; ?>
+                    </ul>
                     <?php endif; ?>
                 </div>
                 <?php endif; ?>
@@ -563,47 +596,5 @@ $pageTitle = '战斗报告';
             }
         }
     </script>
-    
-    <?php
-    // 获取资源名称函数（PHP版本）
-    function getResourceName($type) {
-        switch ($type) {
-            case 'bright':
-                return '亮晶晶';
-            case 'warm':
-                return '暖洋洋';
-            case 'cold':
-                return '冷冰冰';
-            case 'green':
-                return '郁萌萌';
-            case 'day':
-                return '昼闪闪';
-            case 'night':
-                return '夜静静';
-            default:
-                return '未知资源';
-        }
-    }
-    
-    // 获取士兵名称函数（PHP版本）
-    function getSoldierName($type) {
-        switch ($type) {
-            case 'pawn':
-                return '兵卒';
-            case 'knight':
-                return '骑士';
-            case 'rook':
-                return '城壁';
-            case 'bishop':
-                return '主教';
-            case 'golem':
-                return '锤子兵';
-            case 'scout':
-                return '侦察兵';
-            default:
-                return '未知士兵';
-        }
-    }
-    ?>
 </body>
 </html>

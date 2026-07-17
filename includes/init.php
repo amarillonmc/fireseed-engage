@@ -26,6 +26,19 @@ require_once 'includes/classes/Army.php';
 require_once 'includes/classes/Battle.php';
 require_once 'includes/classes/AdminManager.php';
 require_once 'includes/classes/GameConfig.php';
+require_once 'includes/classes/GameRules.php';
+require_once 'includes/classes/EconomyService.php';
+require_once 'includes/classes/ProgressService.php';
+require_once 'includes/classes/RecruitmentService.php';
+require_once 'includes/classes/SkillCardService.php';
+require_once 'includes/classes/GeneralProgression.php';
+require_once 'includes/classes/AllianceService.php';
+require_once 'includes/classes/SocialService.php';
+require_once 'includes/classes/ChallengeService.php';
+require_once 'includes/classes/SeasonService.php';
+require_once 'includes/classes/TerritoryGarrisonService.php';
+require_once 'includes/classes/ScoutingService.php';
+require_once 'includes/classes/SubBaseService.php';
 
 // 包含辅助函数
 require_once 'includes/functions.php';

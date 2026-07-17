@@ -352,10 +352,16 @@ class Map {
             case 'npc_fort':
                 return 'NPC城池 (Lv.' . $this->npcLevel . ')';
             case 'player_city':
-                // 获取城池名称
-                $city = new City($this->ownerId);
-                if ($city->isValid()) {
-                    return $city->getName();
+                // 按坐标查找城池，拥有者ID并不是城池ID / Resolve the city by coordinates because an owner ID is not a city ID
+                $query = "SELECT name FROM cities WHERE x = ? AND y = ? LIMIT 1";
+                $stmt = $this->db->prepare($query);
+                $stmt->bind_param('ii', $this->x, $this->y);
+                $stmt->execute();
+                $result = $stmt->get_result();
+                $row = $result ? $result->fetch_assoc() : null;
+                $stmt->close();
+                if ($row) {
+                    return $row['name'];
                 }
                 return '玩家城池';
             case 'special':
@@ -528,118 +534,668 @@ class Map {
     }
 
     /**
-     * 探索地图格子
-     * @param int $userId 用户ID
-     * @param int $x X坐标
-     * @param int $y Y坐标
-     * @param int $radius 探索半径
-     * @return array 新发现的地图格子数组
+     * 探索地图格子并在有新发现时原子扣除思考回路 / Explore tiles and atomically charge circuit points only for discoveries
+     * @param int $userId 用户ID / User ID
+     * @param int $x X坐标 / X coordinate
+     * @param int $y Y坐标 / Y coordinate
+     * @param int $armyId 可选的待命侦察军队ID / Optional idle scouting army ID
+     * @return array|string 新发现的格子，失败时返回错误信息 / Discovered tiles or an error message
      */
-    public static function exploreTiles($userId, $x, $y, $radius = 1) {
-        // 检查坐标是否在地图范围内
-        if ($x < 0 || $x >= MAP_WIDTH || $y < 0 || $y >= MAP_HEIGHT) {
-            return [];
+    public static function exploreTiles($userId, $x, $y, $armyId = 0) {
+        $userId = (int) $userId;
+        $x = (int) $x;
+        $y = (int) $y;
+        $armyId = (int) $armyId;
+        if ($userId <= 0 || $x < 0 || $x >= MAP_WIDTH || $y < 0 || $y >= MAP_HEIGHT) {
+            return '坐标超出地图范围';
+        }
+        if ($armyId < 0) {
+            return '侦察军队参数无效';
         }
 
-        $newlyDiscoveredTiles = [];
+        $db = Database::getInstance()->getConnection();
+        $db->begin_transaction();
 
-        // 获取指定范围内的地图格子
-        $startX = max(0, $x - $radius);
-        $startY = max(0, $y - $radius);
-        $endX = min(MAP_WIDTH - 1, $x + $radius);
-        $endY = min(MAP_HEIGHT - 1, $y + $radius);
+        try {
+            lockSeasonForWorldAction($db);
 
-        $tiles = self::getTilesInRange($startX, $startY, $endX, $endY, false);
-
-        foreach ($tiles as $tile) {
-            // 如果地图格子尚未被发现，设置为可见
-            if (!$tile->isVisible()) {
-                $tile->setVisible(true);
-                $newlyDiscoveredTiles[] = $tile;
+            $query = "SELECT circuit_points
+                      FROM users
+                      WHERE user_id = ?
+                      FOR UPDATE";
+            $stmt = $db->prepare($query);
+            $stmt->bind_param('i', $userId);
+            $stmt->execute();
+            $result = $stmt->get_result();
+            $userRow = $result ? $result->fetch_assoc() : null;
+            $stmt->close();
+            if (!$userRow) {
+                $db->rollback();
+                return '用户信息无效';
             }
-        }
 
-        return $newlyDiscoveredTiles;
+            // 浏览器不能指定半径；基础半径固定为3，侦察点每5点增加1且至多增加3 / The browser cannot set radius; base is 3, plus 1 per 5 scout points up to 3
+            $baseRadius = 3;
+            $bonusRadius = 0;
+            if ($armyId > 0) {
+                $query = "SELECT owner_id, status, current_x, current_y
+                          FROM armies
+                          WHERE army_id = ?
+                          FOR UPDATE";
+                $stmt = $db->prepare($query);
+                $stmt->bind_param('i', $armyId);
+                $stmt->execute();
+                $armyResult = $stmt->get_result();
+                $armyRow = $armyResult ? $armyResult->fetch_assoc() : null;
+                $stmt->close();
+                if (!$armyRow
+                    || (int) $armyRow['owner_id'] !== $userId
+                    || $armyRow['status'] !== 'idle') {
+                    $db->rollback();
+                    return '只能选择自己拥有的待命军队进行侦察';
+                }
+
+                $scoutingArmy = new Army($armyId);
+                if (!$scoutingArmy->isValid()) {
+                    $db->rollback();
+                    return '侦察军队已经失效';
+                }
+                $scoutPoints = max(
+                    0.0,
+                    min(15.0, (float) $scoutingArmy->getScoutRangeBonus())
+                );
+                $bonusRadius = min(3, (int) floor($scoutPoints / 5));
+                $effectiveRadius = $baseRadius + $bonusRadius;
+                $armyDistance = abs((int) $armyRow['current_x'] - $x)
+                    + abs((int) $armyRow['current_y'] - $y);
+                if ($armyDistance > $effectiveRadius) {
+                    $db->rollback();
+                    return '选定军队距离探索中心过远';
+                }
+            }
+            $radius = $baseRadius + $bonusRadius;
+
+            // 未选择军队时，探索中心必须能从自己的城池、待命军队或领地抵达 / Without a selected army, the center must be reachable from an owned city, idle army, or territory
+            if ($armyId === 0
+                && !self::hasReachableAnchor($db, $userId, $x, $y, $radius)) {
+                $db->rollback();
+                return '探索地点距离你的城池、待命军队或领地过远';
+            }
+
+            $startX = max(0, $x - $radius);
+            $startY = max(0, $y - $radius);
+            $endX = min(MAP_WIDTH - 1, $x + $radius);
+            $endY = min(MAP_HEIGHT - 1, $y + $radius);
+            $query = "SELECT tile_id
+                      FROM map_tiles
+                      WHERE x BETWEEN ? AND ? AND y BETWEEN ? AND ?
+                        AND is_visible = 0
+                      FOR UPDATE";
+            $stmt = $db->prepare($query);
+            $stmt->bind_param('iiii', $startX, $endX, $startY, $endY);
+            $stmt->execute();
+            $result = $stmt->get_result();
+            $tileIds = [];
+            while ($result && ($row = $result->fetch_assoc())) {
+                $tileIds[] = (int) $row['tile_id'];
+            }
+            $stmt->close();
+
+            if (empty($tileIds)) {
+                $db->commit();
+                return [];
+            }
+            if ((int) $userRow['circuit_points'] < 1) {
+                $db->rollback();
+                return '思考回路不足';
+            }
+
+            $query = "UPDATE map_tiles
+                      SET is_visible = 1
+                      WHERE x BETWEEN ? AND ? AND y BETWEEN ? AND ?
+                        AND is_visible = 0";
+            $stmt = $db->prepare($query);
+            $stmt->bind_param('iiii', $startX, $endX, $startY, $endY);
+            if (!$stmt->execute()) {
+                throw new RuntimeException('无法更新地图可见性 / Failed to reveal map tiles');
+            }
+            $stmt->close();
+
+            $query = "UPDATE users
+                      SET circuit_points = circuit_points - 1
+                      WHERE user_id = ? AND circuit_points >= 1";
+            $stmt = $db->prepare($query);
+            $stmt->bind_param('i', $userId);
+            $charged = $stmt->execute() && $stmt->affected_rows === 1;
+            $stmt->close();
+            if (!$charged) {
+                throw new RuntimeException('无法扣除思考回路 / Failed to charge circuit points');
+            }
+
+            $db->commit();
+            $tiles = [];
+            foreach ($tileIds as $tileId) {
+                $tile = new Map($tileId);
+                if ($tile->isValid()) {
+                    $tiles[] = $tile;
+                }
+            }
+            return $tiles;
+        } catch (Throwable $exception) {
+            $db->rollback();
+            error_log('Map exploration failed: ' . $exception->getMessage());
+            return '探索失败，请稍后再试';
+        }
     }
 
     /**
-     * 占领地图格子
-     * @param int $userId 用户ID
-     * @param int $x X坐标
-     * @param int $y Y坐标
-     * @return bool|string 成功返回true，失败返回错误信息
+     * 原子占领相邻格子并扣除两点思考回路 / Atomically occupy an adjacent tile and charge two circuit points
+     * @param int $userId 用户ID / User ID
+     * @param int $x X坐标 / X coordinate
+     * @param int $y Y坐标 / Y coordinate
+     * @return bool|string 成功返回true，失败返回错误信息 / True on success or an error message
      */
     public static function occupyTile($userId, $x, $y) {
-        // 检查坐标是否在地图范围内
-        if ($x < 0 || $x >= MAP_WIDTH || $y < 0 || $y >= MAP_HEIGHT) {
+        $userId = (int) $userId;
+        $x = (int) $x;
+        $y = (int) $y;
+        if ($userId <= 0 || $x < 0 || $x >= MAP_WIDTH || $y < 0 || $y >= MAP_HEIGHT) {
             return '坐标超出地图范围';
         }
 
-        // 获取地图格子
-        $tile = new Map();
-        if (!$tile->loadByCoordinates($x, $y)) {
-            return '地图格子不存在';
-        }
+        $db = Database::getInstance()->getConnection();
+        $db->begin_transaction();
 
-        // 检查地图格子是否可见
-        if (!$tile->isVisible()) {
-            return '地图格子尚未被发现';
-        }
+        try {
+            lockSeasonForWorldAction($db);
 
-        // 检查地图格子是否已被占领
-        if ($tile->getOwnerId() !== null) {
-            return '地图格子已被占领';
-        }
+            $query = "SELECT circuit_points
+                      FROM users
+                      WHERE user_id = ?
+                      FOR UPDATE";
+            $stmt = $db->prepare($query);
+            $stmt->bind_param('i', $userId);
+            $stmt->execute();
+            $result = $stmt->get_result();
+            $userRow = $result ? $result->fetch_assoc() : null;
+            $stmt->close();
+            if (!$userRow) {
+                $db->rollback();
+                return '用户信息无效';
+            }
+            $occupationCost = max(0, (int) TERRITORY_OCCUPATION_COST);
+            if ((int) $userRow['circuit_points'] < $occupationCost) {
+                $db->rollback();
+                return '思考回路不足';
+            }
 
-        // 检查地图格子类型是否可占领
-        $type = $tile->getType();
-        if ($type != 'empty' && $type != 'resource') {
-            return '该类型的地图格子不可占领';
-        }
+            $query = "SELECT tile_id, type, subtype, owner_id, is_visible
+                      FROM map_tiles
+                      WHERE x = ? AND y = ?
+                      FOR UPDATE";
+            $stmt = $db->prepare($query);
+            $stmt->bind_param('ii', $x, $y);
+            $stmt->execute();
+            $result = $stmt->get_result();
+            $tile = $result ? $result->fetch_assoc() : null;
+            $stmt->close();
+            if (!$tile) {
+                $db->rollback();
+                return '地图格子不存在';
+            }
+            if (!(bool) $tile['is_visible']) {
+                $db->rollback();
+                return '地图格子尚未被发现';
+            }
+            if ($tile['owner_id'] !== null) {
+                $db->rollback();
+                return '地图格子已被占领';
+            }
+            if (!in_array($tile['type'], ['empty', 'resource'], true)) {
+                $db->rollback();
+                return $tile['type'] === 'special'
+                    ? '特殊地点必须通过赛季战占领'
+                    : '该类型的地图格子不可直接占领';
+            }
+            if (!self::hasAdjacentTerritoryOrCity($db, $userId, $x, $y)) {
+                $db->rollback();
+                return '只能占领与你的领地或城池相邻的格子';
+            }
 
-        // 占领地图格子
-        if ($tile->setOwner($userId)) {
+            $query = "UPDATE map_tiles
+                      SET owner_id = ?,
+                          last_collection_time = CASE
+                            WHEN type = 'resource' THEN NOW()
+                            ELSE last_collection_time
+                          END
+                      WHERE tile_id = ? AND owner_id IS NULL";
+            $stmt = $db->prepare($query);
+            $tileId = (int) $tile['tile_id'];
+            $stmt->bind_param('ii', $userId, $tileId);
+            $occupied = $stmt->execute() && $stmt->affected_rows === 1;
+            $stmt->close();
+            if (!$occupied) {
+                throw new RuntimeException('地图格子已经变化 / Tile ownership changed');
+            }
+
+            if ($occupationCost > 0) {
+                $query = "UPDATE users
+                          SET circuit_points = circuit_points - ?
+                          WHERE user_id = ? AND circuit_points >= ?";
+                $stmt = $db->prepare($query);
+                $stmt->bind_param(
+                    'iii',
+                    $occupationCost,
+                    $userId,
+                    $occupationCost
+                );
+                $charged = $stmt->execute() && $stmt->affected_rows === 1;
+                $stmt->close();
+                if (!$charged) {
+                    throw new RuntimeException('无法扣除思考回路 / Failed to charge circuit points');
+                }
+            }
+
+            self::recordGameplayEvent(
+                $db,
+                $userId,
+                'territory_captured',
+                1,
+                'map_tile',
+                $tileId
+            );
+            self::adjustCurrentSeasonTerritoryScore($db, $userId, 1);
+
+            $db->commit();
             return true;
+        } catch (Throwable $exception) {
+            $db->rollback();
+            error_log('Tile occupation failed: ' . $exception->getMessage());
+            return '占领失败，地图状态可能已经变化';
         }
-
-        return '占领地图格子失败';
     }
 
     /**
-     * 放弃地图格子
-     * @param int $userId 用户ID
-     * @param int $x X坐标
-     * @param int $y Y坐标
-     * @return bool|string 成功返回true，失败返回错误信息
+     * 仅放弃自己拥有的普通领地 / Abandon only an owned ordinary territory
+     * @param int $userId 用户ID / User ID
+     * @param int $x X坐标 / X coordinate
+     * @param int $y Y坐标 / Y coordinate
+     * @return bool|string 成功返回true，失败返回错误信息 / True on success or an error message
      */
     public static function abandonTile($userId, $x, $y) {
-        // 检查坐标是否在地图范围内
-        if ($x < 0 || $x >= MAP_WIDTH || $y < 0 || $y >= MAP_HEIGHT) {
+        $userId = (int) $userId;
+        $x = (int) $x;
+        $y = (int) $y;
+        if ($userId <= 0 || $x < 0 || $x >= MAP_WIDTH || $y < 0 || $y >= MAP_HEIGHT) {
             return '坐标超出地图范围';
         }
 
-        // 获取地图格子
-        $tile = new Map();
-        if (!$tile->loadByCoordinates($x, $y)) {
-            return '地图格子不存在';
-        }
+        $db = Database::getInstance()->getConnection();
+        $db->begin_transaction();
 
-        // 检查地图格子是否属于该用户
-        if ($tile->getOwnerId() != $userId) {
-            return '地图格子不属于该用户';
-        }
+        try {
+            lockSeasonForWorldAction($db);
 
-        // 检查地图格子类型是否为玩家城池
-        if ($tile->getType() == 'player_city') {
-            return '玩家城池不能直接放弃，请先摧毁城池';
-        }
+            // 赛季锁后采用与占领相同的玩家优先锁序，串行化同一玩家的领地变更 / After the season lock, match occupation's user-first order to serialize territory changes
+            $query = "SELECT user_id, circuit_points, max_circuit_points
+                      FROM users
+                      WHERE user_id = ?
+                      FOR UPDATE";
+            $stmt = $db->prepare($query);
+            $stmt->bind_param('i', $userId);
+            $stmt->execute();
+            $userResult = $stmt->get_result();
+            $userExists = $userResult && $userResult->num_rows === 1;
+            $stmt->close();
+            if (!$userExists) {
+                $db->rollback();
+                return '用户信息无效';
+            }
 
-        // 放弃地图格子
-        if ($tile->setOwner(null)) {
+            $query = "SELECT tile_id, type, owner_id
+                      FROM map_tiles
+                      WHERE x = ? AND y = ?
+                      FOR UPDATE";
+            $stmt = $db->prepare($query);
+            $stmt->bind_param('ii', $x, $y);
+            $stmt->execute();
+            $tileResult = $stmt->get_result();
+            $tile = $tileResult ? $tileResult->fetch_assoc() : null;
+            $stmt->close();
+            if (!$tile
+                || $tile['owner_id'] === null
+                || (int) $tile['owner_id'] !== $userId
+                || !in_array($tile['type'], ['empty', 'resource'], true)) {
+                $db->rollback();
+                return '地图格子不存在、不属于你或不能直接放弃';
+            }
+
+            $tileId = (int) $tile['tile_id'];
+            $query = "SELECT garrison_id, owner_id, quantity
+                      FROM territory_garrisons
+                      WHERE tile_id = ?
+                      ORDER BY garrison_id
+                      FOR UPDATE";
+            $stmt = $db->prepare($query);
+            $stmt->bind_param('i', $tileId);
+            $stmt->execute();
+            $garrisonResult = $stmt->get_result();
+            $hasGarrison = false;
+            while ($garrisonResult && ($garrison = $garrisonResult->fetch_assoc())) {
+                if ((int) $garrison['owner_id'] !== $userId) {
+                    $stmt->close();
+                    throw new RuntimeException('驻军拥有权与领地不一致 / Garrison ownership does not match the tile');
+                }
+                if ((int) $garrison['quantity'] > 0) {
+                    $hasGarrison = true;
+                }
+            }
+            $stmt->close();
+            if ($hasGarrison) {
+                $db->rollback();
+                return '请先撤回全部驻军再放弃领地';
+            }
+
+            $query = "DELETE FROM territory_garrisons
+                      WHERE tile_id = ? AND quantity = 0";
+            $stmt = $db->prepare($query);
+            $stmt->bind_param('i', $tileId);
+            if (!$stmt->execute()) {
+                $stmt->close();
+                throw new RuntimeException('无法清理空驻军记录 / Failed to remove empty garrison rows');
+            }
+            $stmt->close();
+
+            $query = "UPDATE map_tiles
+                      SET owner_id = NULL,
+                          last_collection_time = CASE
+                            WHEN type = 'resource' THEN NULL
+                            ELSE last_collection_time
+                          END
+                      WHERE tile_id = ? AND owner_id = ?
+                        AND type IN ('empty', 'resource')";
+            $stmt = $db->prepare($query);
+            $stmt->bind_param('ii', $tileId, $userId);
+            $abandoned = $stmt->execute() && $stmt->affected_rows === 1;
+            $stmt->close();
+            if (!$abandoned) {
+                throw new RuntimeException('地图格子所有权已经变化 / Tile ownership changed');
+            }
+
+            // 普通领地成本随放弃原子返还，但余额仍受玩家上限约束 / Refund the ordinary-territory cost atomically while respecting the user's cap
+            $occupationCost = max(0, (int) TERRITORY_OCCUPATION_COST);
+            $query = "UPDATE users
+                      SET circuit_points = LEAST(
+                          max_circuit_points,
+                          circuit_points + ?
+                      )
+                      WHERE user_id = ?";
+            $stmt = $db->prepare($query);
+            $stmt->bind_param('ii', $occupationCost, $userId);
+            if (!$stmt->execute()) {
+                $stmt->close();
+                throw new RuntimeException('无法返还思考回路 / Failed to refund circuit points');
+            }
+            $stmt->close();
+
+            self::recordGameplayEvent(
+                $db,
+                $userId,
+                'territory_abandoned',
+                1,
+                'map_tile',
+                $tileId
+            );
+            // 放弃时扣回净领地分，避免占领后立刻放弃反复刷分 / Remove the net territory point on abandonment to prevent capture-abandon farming
+            self::adjustCurrentSeasonTerritoryScore($db, $userId, -1);
+
+            $db->commit();
+            return true;
+        } catch (Throwable $exception) {
+            $db->rollback();
+            error_log('Tile abandonment failed: ' . $exception->getMessage());
+            return '放弃失败，地图状态可能已经变化';
+        }
+    }
+
+    /**
+     * 检查探索中心是否靠近玩家控制点 / Check whether an exploration center is near a player-controlled anchor
+     */
+    private static function hasReachableAnchor($db, $userId, $x, $y, $radius) {
+        // 按地图、城池、军队的固定顺序锁定首个可达锚点 / Lock the first reachable anchor in a stable map-city-army order
+        $query = "SELECT tile_id
+                  FROM map_tiles
+                  WHERE owner_id = ? AND ABS(x - ?) + ABS(y - ?) <= ?
+                  ORDER BY tile_id
+                  LIMIT 1
+                  FOR UPDATE";
+        $stmt = $db->prepare($query);
+        $stmt->bind_param('iiii', $userId, $x, $y, $radius);
+        $stmt->execute();
+        $result = $stmt->get_result();
+        $reachable = $result && $result->num_rows > 0;
+        $stmt->close();
+        if ($reachable) {
             return true;
         }
 
-        return '放弃地图格子失败';
+        $query = "SELECT city_id
+                  FROM cities
+                  WHERE owner_id = ? AND ABS(x - ?) + ABS(y - ?) <= ?
+                  ORDER BY city_id
+                  LIMIT 1
+                  FOR UPDATE";
+        $stmt = $db->prepare($query);
+        $stmt->bind_param('iiii', $userId, $x, $y, $radius);
+        $stmt->execute();
+        $result = $stmt->get_result();
+        $reachable = $result && $result->num_rows > 0;
+        $stmt->close();
+        if ($reachable) {
+            return true;
+        }
+
+        $query = "SELECT army_id
+                  FROM armies
+                  WHERE owner_id = ? AND status = 'idle'
+                    AND ABS(current_x - ?) + ABS(current_y - ?) <= ?
+                  ORDER BY army_id
+                  LIMIT 1
+                  FOR UPDATE";
+        $stmt = $db->prepare($query);
+        $stmt->bind_param('iiii', $userId, $x, $y, $radius);
+        $stmt->execute();
+        $result = $stmt->get_result();
+        $reachable = $result && $result->num_rows > 0;
+        $stmt->close();
+
+        return $reachable;
+    }
+
+    /**
+     * 检查目标是否与玩家普通领地或城池曼哈顿相邻 / Check Manhattan adjacency to an owned ordinary territory or city
+     * @param int $userId 玩家ID / User ID
+     * @param int $x 目标X坐标 / Target X
+     * @param int $y 目标Y坐标 / Target Y
+     * @param bool $lockForUpdate 是否锁定锚点用于事务重验 / Whether to lock the anchor for transactional revalidation
+     * @return bool 是否相邻 / Whether adjacent
+     */
+    public static function isAdjacentToUserControl(
+        $userId,
+        $x,
+        $y,
+        $lockForUpdate = false
+    ) {
+        $userId = (int) $userId;
+        $x = (int) $x;
+        $y = (int) $y;
+        if ($userId <= 0
+            || $x < 0
+            || $x >= MAP_WIDTH
+            || $y < 0
+            || $y >= MAP_HEIGHT) {
+            return false;
+        }
+
+        $db = Database::getInstance()->getConnection();
+        return self::queryAdjacentTerritoryOrCity(
+            $db,
+            $userId,
+            $x,
+            $y,
+            (bool) $lockForUpdate
+        );
+    }
+
+    /**
+     * 在已有事务内检查并锁定相邻控制点 / Check and lock an adjacent control point in an existing transaction
+     */
+    private static function hasAdjacentTerritoryOrCity($db, $userId, $x, $y) {
+        return self::queryAdjacentTerritoryOrCity(
+            $db,
+            $userId,
+            $x,
+            $y,
+            true
+        );
+    }
+
+    /**
+     * 查询相邻的普通领地或城池 / Query an adjacent ordinary territory or city
+     */
+    private static function queryAdjacentTerritoryOrCity(
+        $db,
+        $userId,
+        $x,
+        $y,
+        $lockForUpdate
+    ) {
+        $query = "SELECT tile_id
+                  FROM map_tiles
+                  WHERE owner_id = ? AND type IN ('empty', 'resource')
+                    AND ABS(x - ?) + ABS(y - ?) = 1
+                  ORDER BY tile_id
+                  LIMIT 1";
+        if ($lockForUpdate) {
+            $query .= " FOR UPDATE";
+        }
+        $stmt = $db->prepare($query);
+        $stmt->bind_param('iii', $userId, $x, $y);
+        $stmt->execute();
+        $result = $stmt->get_result();
+        $adjacent = $result && $result->num_rows > 0;
+        $stmt->close();
+        if ($adjacent) {
+            return true;
+        }
+
+        $query = "SELECT city_id
+                  FROM cities
+                  WHERE owner_id = ? AND ABS(x - ?) + ABS(y - ?) = 1
+                  ORDER BY city_id
+                  LIMIT 1";
+        if ($lockForUpdate) {
+            $query .= " FOR UPDATE";
+        }
+        $stmt = $db->prepare($query);
+        $stmt->bind_param('iii', $userId, $x, $y);
+        $stmt->execute();
+        $result = $stmt->get_result();
+        $adjacent = $result && $result->num_rows > 0;
+        $stmt->close();
+
+        return $adjacent;
+    }
+
+    /**
+     * 在当前事务内记录玩法事件 / Record a gameplay event inside the current transaction
+     * @param mysqli $db 数据库连接 / Database connection
+     * @param int $userId 用户ID / User ID
+     * @param string $eventType 事件类型 / Event type
+     * @param int $eventValue 事件值 / Event value
+     * @param string $referenceType 引用类型 / Reference type
+     * @param int $referenceId 引用ID / Reference ID
+     * @return void
+     */
+    private static function recordGameplayEvent(
+        $db,
+        $userId,
+        $eventType,
+        $eventValue,
+        $referenceType,
+        $referenceId
+    ) {
+        $eventValue = max(1, min(2147483647, (int) $eventValue));
+        $query = "INSERT INTO gameplay_events
+                    (user_id, event_type, event_value, reference_type, reference_id)
+                  VALUES (?, ?, ?, ?, ?)";
+        $stmt = $db->prepare($query);
+        $stmt->bind_param(
+            'isisi',
+            $userId,
+            $eventType,
+            $eventValue,
+            $referenceType,
+            $referenceId
+        );
+        if (!$stmt->execute()) {
+            $stmt->close();
+            throw new RuntimeException('无法记录地图玩法事件 / Failed to record map gameplay event');
+        }
+        $stmt->close();
+    }
+
+    /**
+     * 对当前开放赛季的净领地分执行有界增减 / Apply a bounded delta to the current open season's net territory score
+     * @param mysqli $db 数据库连接 / Database connection
+     * @param int $userId 用户ID / User ID
+     * @param int $delta 分数增量 / Score delta
+     * @return void
+     */
+    private static function adjustCurrentSeasonTerritoryScore($db, $userId, $delta) {
+        $delta = max(-1, min(1, (int) $delta));
+        if ($delta === 0) {
+            return;
+        }
+
+        $query = "SELECT season_id
+                  FROM seasons
+                  WHERE ended_at IS NULL
+                    AND status IN ('active', 'victory_countdown')
+                  ORDER BY season_number DESC
+                  LIMIT 1";
+        $stmt = $db->prepare($query);
+        $stmt->execute();
+        $result = $stmt->get_result();
+        $season = $result ? $result->fetch_assoc() : null;
+        $stmt->close();
+        if (!$season) {
+            return;
+        }
+
+        $seasonId = (int) $season['season_id'];
+        $initialScore = max(0, $delta);
+        $query = "INSERT INTO season_scores
+                    (season_id, user_id, territory_score)
+                  VALUES (?, ?, ?)
+                  ON DUPLICATE KEY UPDATE
+                    territory_score = LEAST(
+                        2147483647,
+                        GREATEST(0, territory_score + ?)
+                    )";
+        $stmt = $db->prepare($query);
+        $stmt->bind_param(
+            'iiii',
+            $seasonId,
+            $userId,
+            $initialScore,
+            $delta
+        );
+        if (!$stmt->execute()) {
+            $stmt->close();
+            throw new RuntimeException('无法更新赛季领地分 / Failed to update season territory score');
+        }
+        $stmt->close();
     }
 
     /**
@@ -716,72 +1272,159 @@ class Map {
             return false;
         }
 
-        // 获取上次收集时间
-        $lastCollectionTime = $this->getLastCollectionTime();
-        if (!$lastCollectionTime) {
-            // 如果是首次收集，设置当前时间为上次收集时间
-            $this->setLastCollectionTime(date('Y-m-d H:i:s'));
-            return 0;
-        }
-
-        // 计算时间间隔（小时）
-        $now = time();
-        $lastCollection = strtotime($lastCollectionTime);
-        $hoursPassed = ($now - $lastCollection) / 3600;
-
-        // 如果时间间隔太短，不进行收集
-        if ($hoursPassed < 0.1) { // 至少6分钟
-            return 0;
-        }
-
-        // 计算应收集的资源量
-        $efficiency = $this->getCollectionEfficiency();
-        $resourceToCollect = floor($hoursPassed * $efficiency);
-
-        // 检查资源点剩余资源量
-        $remainingResource = $this->getResourceAmount();
-        if ($resourceToCollect > $remainingResource) {
-            $resourceToCollect = $remainingResource;
-        }
-
-        // 如果没有资源可收集，返回
-        if ($resourceToCollect <= 0) {
-            return 0;
-        }
-
-        // 获取资源类型
+        $resourceColumns = [
+            'bright' => 'bright_crystal',
+            'warm' => 'warm_crystal',
+            'cold' => 'cold_crystal',
+            'green' => 'green_crystal',
+            'day' => 'day_crystal',
+            'night' => 'night_crystal'
+        ];
         $resourceType = $this->getSubtype();
-
-        // 获取用户资源
-        $resource = new Resource($userId);
-        if (!$resource->isValid()) {
+        if (!isset($resourceColumns[$resourceType])) {
             return false;
         }
 
-        // 检查资源存储上限
-        $storageLimit = $resource->getStorageLimit($resourceType);
-        $currentResource = $resource->getResourceByType($resourceType);
+        $userId = (int) $userId;
+        $column = $resourceColumns[$resourceType];
+        $this->db->begin_transaction();
 
-        if ($currentResource >= $storageLimit) {
-            return 0; // 资源已满
+        try {
+            lockSeasonForWorldAction($this->db);
+
+            // 赛季锁后依次锁定玩家、资源点与余额，避免重复收集及跨操作锁序冲突 / After the season lock, lock user, tile, then wallet to prevent duplicate collection and lock-order conflicts
+            $query = "SELECT user_id FROM users WHERE user_id = ? FOR UPDATE";
+            $stmt = $this->db->prepare($query);
+            $stmt->bind_param('i', $userId);
+            $stmt->execute();
+            $userResult = $stmt->get_result();
+            $userExists = $userResult && $userResult->num_rows === 1;
+            $stmt->close();
+            if (!$userExists) {
+                $this->db->rollback();
+                return false;
+            }
+
+            $storageLimit = Resource::getUserResourceStorageCapacity($userId);
+            $query = "SELECT owner_id, type, subtype, resource_amount,
+                             last_collection_time, collection_efficiency
+                      FROM map_tiles
+                      WHERE tile_id = ?
+                      FOR UPDATE";
+            $stmt = $this->db->prepare($query);
+            $stmt->bind_param('i', $this->tileId);
+            $stmt->execute();
+            $result = $stmt->get_result();
+            $tile = $result ? $result->fetch_assoc() : null;
+            $stmt->close();
+            if (!$tile
+                || (int) $tile['owner_id'] !== $userId
+                || $tile['type'] !== 'resource'
+                || $tile['subtype'] !== $resourceType) {
+                $this->db->rollback();
+                return false;
+            }
+
+            $nowString = date('Y-m-d H:i:s');
+            if ($tile['last_collection_time'] === null) {
+                $query = "UPDATE map_tiles
+                          SET last_collection_time = ?
+                          WHERE tile_id = ?";
+                $stmt = $this->db->prepare($query);
+                $stmt->bind_param('si', $nowString, $this->tileId);
+                $stmt->execute();
+                $stmt->close();
+                $this->db->commit();
+                $this->lastCollectionTime = $nowString;
+                return 0;
+            }
+
+            $hoursPassed = (time() - strtotime($tile['last_collection_time'])) / 3600;
+            if ($hoursPassed < 0.1) {
+                $this->db->commit();
+                return 0;
+            }
+            $resourceToCollect = min(
+                max(0, (int) $tile['resource_amount']),
+                (int) floor($hoursPassed * max(0, (int) $tile['collection_efficiency']))
+            );
+            if ($resourceToCollect <= 0) {
+                $this->db->commit();
+                return 0;
+            }
+
+            $query = "SELECT {$column} AS amount
+                      FROM resources
+                      WHERE user_id = ?
+                      FOR UPDATE";
+            $stmt = $this->db->prepare($query);
+            $stmt->bind_param('i', $userId);
+            $stmt->execute();
+            $result = $stmt->get_result();
+            $wallet = $result ? $result->fetch_assoc() : null;
+            $stmt->close();
+            if (!$wallet) {
+                throw new RuntimeException('玩家资源记录不存在 / Resource wallet is missing');
+            }
+
+            $currentAmount = max(0, (int) $wallet['amount']);
+            $resourceToCollect = min(
+                $resourceToCollect,
+                max(0, $storageLimit - $currentAmount)
+            );
+            if ($resourceToCollect <= 0) {
+                $this->db->commit();
+                return 0;
+            }
+
+            $newAmount = $currentAmount + $resourceToCollect;
+            $query = "UPDATE resources
+                      SET {$column} = ?, last_update = NOW()
+                      WHERE user_id = ?";
+            $stmt = $this->db->prepare($query);
+            $stmt->bind_param('ii', $newAmount, $userId);
+            if (!$stmt->execute()) {
+                throw new RuntimeException('无法更新玩家资源 / Failed to update player resources');
+            }
+            $stmt->close();
+
+            $remainingResource = max(
+                0,
+                (int) $tile['resource_amount'] - $resourceToCollect
+            );
+            $query = "UPDATE map_tiles
+                      SET resource_amount = ?, last_collection_time = ?
+                      WHERE tile_id = ?";
+            $stmt = $this->db->prepare($query);
+            $stmt->bind_param(
+                'isi',
+                $remainingResource,
+                $nowString,
+                $this->tileId
+            );
+            if (!$stmt->execute()) {
+                throw new RuntimeException('无法更新资源点 / Failed to update resource tile');
+            }
+            $stmt->close();
+
+            self::recordGameplayEvent(
+                $this->db,
+                $userId,
+                'resource_collected',
+                $resourceToCollect,
+                'map_tile',
+                (int) $this->tileId
+            );
+
+            $this->db->commit();
+            $this->resourceAmount = $remainingResource;
+            $this->lastCollectionTime = $nowString;
+            return $resourceToCollect;
+        } catch (Throwable $exception) {
+            $this->db->rollback();
+            error_log('Resource collection failed: ' . $exception->getMessage());
+            return false;
         }
-
-        // 计算实际可添加的资源量
-        $canAdd = $storageLimit - $currentResource;
-        if ($resourceToCollect > $canAdd) {
-            $resourceToCollect = $canAdd;
-        }
-
-        // 添加资源
-        $resource->addResourceByType($resourceType, $resourceToCollect);
-
-        // 减少资源点的资源量
-        $this->setResourceAmount($remainingResource - $resourceToCollect);
-
-        // 更新上次收集时间
-        $this->setLastCollectionTime(date('Y-m-d H:i:s'));
-
-        return $resourceToCollect;
     }
 
 

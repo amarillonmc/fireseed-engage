@@ -143,7 +143,7 @@ class Technology {
      * @return array
      */
     public function getUpgradeCostAtLevel($level) {
-        if (!$this->isValid || $level < 1 || $level >= $this->maxLevel) {
+        if (!$this->isValid || $level < 0 || $level >= $this->maxLevel) {
             return [];
         }
         
