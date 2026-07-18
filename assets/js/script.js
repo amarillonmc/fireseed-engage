@@ -1,6 +1,78 @@
 // 种火集结号 - 主脚本文件
 
 document.addEventListener('DOMContentLoaded', function() {
+    const imageResourceConfig = window.FIRESEED_IMAGE_RESOURCES
+        && typeof window.FIRESEED_IMAGE_RESOURCES === 'object'
+        ? window.FIRESEED_IMAGE_RESOURCES
+        : { mode: 'emoji_fallback', assets: {} };
+
+    // 构建动态页面资源并逐项回退 Emoji / Build dynamic resources with per-item Emoji fallback
+    function createConfiguredImageResource(key, size, emoji, alt) {
+        const wrapper = document.createElement('span');
+        wrapper.className = `game-image-resource game-image-resource--${key}`;
+        wrapper.style.setProperty('--game-image-size', `${size}px`);
+        const fallback = document.createElement('span');
+        fallback.className = 'game-image-resource__fallback';
+        fallback.textContent = emoji;
+        fallback.setAttribute('role', 'img');
+        fallback.setAttribute('aria-label', alt);
+
+        const asset = imageResourceConfig.assets
+            && imageResourceConfig.assets[key]
+            ? imageResourceConfig.assets[key]
+            : null;
+        const variants = asset && Array.isArray(asset.variants)
+            ? asset.variants.filter(variant => (
+                variant
+                && Number.isInteger(Number(variant.width))
+                && typeof variant.png === 'string'
+                && variant.png !== ''
+            ))
+            : [];
+        if (imageResourceConfig.mode !== 'image' || variants.length === 0) {
+            wrapper.appendChild(fallback);
+            return wrapper;
+        }
+
+        const selected = variants.find(variant => (
+            Number(variant.width) >= size
+        )) || variants[variants.length - 1];
+        const picture = document.createElement('picture');
+        const webpVariants = variants.filter(variant => (
+            typeof variant.webp === 'string' && variant.webp !== ''
+        ));
+        if (webpVariants.length > 0) {
+            const source = document.createElement('source');
+            source.type = 'image/webp';
+            source.srcset = webpVariants
+                .map(variant => `${variant.webp} ${Number(variant.width)}w`)
+                .join(', ');
+            source.sizes = `${size}px`;
+            picture.appendChild(source);
+        }
+
+        const image = document.createElement('img');
+        image.src = selected.png;
+        image.srcset = variants
+            .map(variant => `${variant.png} ${Number(variant.width)}w`)
+            .join(', ');
+        image.sizes = `${size}px`;
+        image.width = size;
+        image.height = size;
+        image.alt = alt;
+        image.loading = 'lazy';
+        image.decoding = 'async';
+        image.addEventListener('error', function() {
+            picture.hidden = true;
+            fallback.hidden = false;
+        }, { once: true });
+        picture.appendChild(image);
+        wrapper.appendChild(picture);
+        fallback.hidden = true;
+        wrapper.appendChild(fallback);
+        return wrapper;
+    }
+
     // 设施点击事件
     const facilities = document.querySelectorAll('.city-cell.facility');
     facilities.forEach(facility => {
@@ -44,8 +116,11 @@ document.addEventListener('DOMContentLoaded', function() {
                     document.querySelector('.day-crystal .resource-value').textContent = numberFormat(data.resources.day_crystal);
                     document.querySelector('.night-crystal .resource-value').textContent = numberFormat(data.resources.night_crystal);
                     
-                    // 更新思考回路显示
-                    document.querySelector('.circuit-points').textContent = `思考回路: ${data.circuit_points} / ${data.max_circuit_points}`;
+                    // 只更新数值，保留图片或Emoji图标 / Update only values so the image or Emoji icon remains intact
+                    const circuitValue = document.querySelector('.circuit-value');
+                    if (circuitValue) {
+                        circuitValue.textContent = `${data.circuit_points} / ${data.max_circuit_points}`;
+                    }
                     
                     // 如果有城池产出了思考回路，显示通知
                     if (data.circuit_produced_cities && data.circuit_produced_cities.length > 0) {
@@ -163,11 +238,29 @@ document.addEventListener('DOMContentLoaded', function() {
                         const facilityName = document.createElement('span');
                         facilityName.className = 'facility-name';
                         facilityName.textContent = facility.name;
+
+                        const facilityFallbacks = {
+                            resource_production: '⚡',
+                            governor_office: '🏛️',
+                            barracks: '⚔️',
+                            research_lab: '🔬',
+                            dormitory: '🏠',
+                            storage: '📦',
+                            watchtower: '🗼',
+                            workshop: '🔧'
+                        };
+                        const facilityIcon = createConfiguredImageResource(
+                            `facility_${facility.type}`,
+                            32,
+                            facilityFallbacks[facility.type] || '🏢',
+                            facility.name || '设施'
+                        );
                         
                         const facilityLevel = document.createElement('span');
                         facilityLevel.className = 'facility-level';
                         facilityLevel.textContent = `Lv.${facility.level}`;
                         
+                        cell.appendChild(facilityIcon);
                         cell.appendChild(facilityName);
                         cell.appendChild(facilityLevel);
                         

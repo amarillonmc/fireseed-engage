@@ -183,6 +183,29 @@ assertCardPoolIntegration(
         ) !== false,
     'Starter, new-draw, and duplicate-draw payloads must expose template codes'
 );
+assertCardPoolIntegration(
+    substr_count(
+        $files['recruitment'],
+        'SELECT gs.skill_name'
+    ) >= 2
+        && strpos(
+            $files['recruitment'],
+            "\$ownedGeneral['skill_name']"
+        ) !== false
+        && strpos(
+            $files['recruitment'],
+            "'skill_name' => isset(\$template['skill_name'])"
+        ) !== false
+        && strpos(
+            $files['pool_service'],
+            'SELECT gs.skill_name'
+        ) !== false
+        && strpos(
+            $files['pool_service'],
+            "\$row['skill_name']"
+        ) !== false,
+    'Starter, draw, duplicate, and published-pool cards must expose inherent skill names'
+);
 
 assertCardPoolIntegration(
     strpos($files['general_skill'], 'LEFT JOIN equipped_skill_cards') !== false

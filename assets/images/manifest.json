@@ -1,0 +1,1137 @@
+{
+  "version": 1,
+  "assets": {
+    "resource_bright_crystal": {
+      "variants": [
+        {
+          "size": [
+            32,
+            32
+          ],
+          "png": "assets/images/resources/resource_bright_crystal_32x32.png",
+          "webp": "assets/images/resources/resource_bright_crystal_32x32.webp"
+        },
+        {
+          "size": [
+            64,
+            64
+          ],
+          "png": "assets/images/resources/resource_bright_crystal_64x64.png",
+          "webp": "assets/images/resources/resource_bright_crystal_64x64.webp"
+        }
+      ]
+    },
+    "resource_warm_crystal": {
+      "variants": [
+        {
+          "size": [
+            32,
+            32
+          ],
+          "png": "assets/images/resources/resource_warm_crystal_32x32.png",
+          "webp": "assets/images/resources/resource_warm_crystal_32x32.webp"
+        },
+        {
+          "size": [
+            64,
+            64
+          ],
+          "png": "assets/images/resources/resource_warm_crystal_64x64.png",
+          "webp": "assets/images/resources/resource_warm_crystal_64x64.webp"
+        }
+      ]
+    },
+    "resource_cold_crystal": {
+      "variants": [
+        {
+          "size": [
+            32,
+            32
+          ],
+          "png": "assets/images/resources/resource_cold_crystal_32x32.png",
+          "webp": "assets/images/resources/resource_cold_crystal_32x32.webp"
+        },
+        {
+          "size": [
+            64,
+            64
+          ],
+          "png": "assets/images/resources/resource_cold_crystal_64x64.png",
+          "webp": "assets/images/resources/resource_cold_crystal_64x64.webp"
+        }
+      ]
+    },
+    "resource_green_crystal": {
+      "variants": [
+        {
+          "size": [
+            32,
+            32
+          ],
+          "png": "assets/images/resources/resource_green_crystal_32x32.png",
+          "webp": "assets/images/resources/resource_green_crystal_32x32.webp"
+        },
+        {
+          "size": [
+            64,
+            64
+          ],
+          "png": "assets/images/resources/resource_green_crystal_64x64.png",
+          "webp": "assets/images/resources/resource_green_crystal_64x64.webp"
+        }
+      ]
+    },
+    "resource_day_crystal": {
+      "variants": [
+        {
+          "size": [
+            32,
+            32
+          ],
+          "png": "assets/images/resources/resource_day_crystal_32x32.png",
+          "webp": "assets/images/resources/resource_day_crystal_32x32.webp"
+        },
+        {
+          "size": [
+            64,
+            64
+          ],
+          "png": "assets/images/resources/resource_day_crystal_64x64.png",
+          "webp": "assets/images/resources/resource_day_crystal_64x64.webp"
+        }
+      ]
+    },
+    "resource_night_crystal": {
+      "variants": [
+        {
+          "size": [
+            32,
+            32
+          ],
+          "png": "assets/images/resources/resource_night_crystal_32x32.png",
+          "webp": "assets/images/resources/resource_night_crystal_32x32.webp"
+        },
+        {
+          "size": [
+            64,
+            64
+          ],
+          "png": "assets/images/resources/resource_night_crystal_64x64.png",
+          "webp": "assets/images/resources/resource_night_crystal_64x64.webp"
+        }
+      ]
+    },
+    "resource_circuit_points": {
+      "variants": [
+        {
+          "size": [
+            32,
+            32
+          ],
+          "png": "assets/images/resources/resource_circuit_points_32x32.png",
+          "webp": "assets/images/resources/resource_circuit_points_32x32.webp"
+        },
+        {
+          "size": [
+            64,
+            64
+          ],
+          "png": "assets/images/resources/resource_circuit_points_64x64.png",
+          "webp": "assets/images/resources/resource_circuit_points_64x64.webp"
+        }
+      ]
+    },
+    "facility_resource_production": {
+      "variants": [
+        {
+          "size": [
+            64,
+            64
+          ],
+          "png": "assets/images/facilities/facility_resource_production_64x64.png",
+          "webp": "assets/images/facilities/facility_resource_production_64x64.webp"
+        },
+        {
+          "size": [
+            128,
+            128
+          ],
+          "png": "assets/images/facilities/facility_resource_production_128x128.png",
+          "webp": "assets/images/facilities/facility_resource_production_128x128.webp"
+        }
+      ]
+    },
+    "facility_governor_office": {
+      "variants": [
+        {
+          "size": [
+            128,
+            128
+          ],
+          "png": "assets/images/facilities/facility_governor_office_128x128.png",
+          "webp": "assets/images/facilities/facility_governor_office_128x128.webp"
+        },
+        {
+          "size": [
+            256,
+            256
+          ],
+          "png": "assets/images/facilities/facility_governor_office_256x256.png",
+          "webp": "assets/images/facilities/facility_governor_office_256x256.webp"
+        }
+      ]
+    },
+    "facility_barracks": {
+      "variants": [
+        {
+          "size": [
+            64,
+            64
+          ],
+          "png": "assets/images/facilities/facility_barracks_64x64.png",
+          "webp": "assets/images/facilities/facility_barracks_64x64.webp"
+        },
+        {
+          "size": [
+            128,
+            128
+          ],
+          "png": "assets/images/facilities/facility_barracks_128x128.png",
+          "webp": "assets/images/facilities/facility_barracks_128x128.webp"
+        }
+      ]
+    },
+    "facility_research_lab": {
+      "variants": [
+        {
+          "size": [
+            64,
+            64
+          ],
+          "png": "assets/images/facilities/facility_research_lab_64x64.png",
+          "webp": "assets/images/facilities/facility_research_lab_64x64.webp"
+        },
+        {
+          "size": [
+            128,
+            128
+          ],
+          "png": "assets/images/facilities/facility_research_lab_128x128.png",
+          "webp": "assets/images/facilities/facility_research_lab_128x128.webp"
+        }
+      ]
+    },
+    "facility_dormitory": {
+      "variants": [
+        {
+          "size": [
+            64,
+            64
+          ],
+          "png": "assets/images/facilities/facility_dormitory_64x64.png",
+          "webp": "assets/images/facilities/facility_dormitory_64x64.webp"
+        },
+        {
+          "size": [
+            128,
+            128
+          ],
+          "png": "assets/images/facilities/facility_dormitory_128x128.png",
+          "webp": "assets/images/facilities/facility_dormitory_128x128.webp"
+        }
+      ]
+    },
+    "facility_storage": {
+      "variants": [
+        {
+          "size": [
+            64,
+            64
+          ],
+          "png": "assets/images/facilities/facility_storage_64x64.png",
+          "webp": "assets/images/facilities/facility_storage_64x64.webp"
+        },
+        {
+          "size": [
+            128,
+            128
+          ],
+          "png": "assets/images/facilities/facility_storage_128x128.png",
+          "webp": "assets/images/facilities/facility_storage_128x128.webp"
+        }
+      ]
+    },
+    "facility_watchtower": {
+      "variants": [
+        {
+          "size": [
+            64,
+            64
+          ],
+          "png": "assets/images/facilities/facility_watchtower_64x64.png",
+          "webp": "assets/images/facilities/facility_watchtower_64x64.webp"
+        },
+        {
+          "size": [
+            128,
+            128
+          ],
+          "png": "assets/images/facilities/facility_watchtower_128x128.png",
+          "webp": "assets/images/facilities/facility_watchtower_128x128.webp"
+        }
+      ]
+    },
+    "facility_workshop": {
+      "variants": [
+        {
+          "size": [
+            64,
+            64
+          ],
+          "png": "assets/images/facilities/facility_workshop_64x64.png",
+          "webp": "assets/images/facilities/facility_workshop_64x64.webp"
+        },
+        {
+          "size": [
+            128,
+            128
+          ],
+          "png": "assets/images/facilities/facility_workshop_128x128.png",
+          "webp": "assets/images/facilities/facility_workshop_128x128.webp"
+        }
+      ]
+    },
+    "soldier_pawn": {
+      "variants": [
+        {
+          "size": [
+            32,
+            32
+          ],
+          "png": "assets/images/soldiers/soldier_pawn_32x32.png",
+          "webp": "assets/images/soldiers/soldier_pawn_32x32.webp"
+        },
+        {
+          "size": [
+            64,
+            64
+          ],
+          "png": "assets/images/soldiers/soldier_pawn_64x64.png",
+          "webp": "assets/images/soldiers/soldier_pawn_64x64.webp"
+        }
+      ]
+    },
+    "soldier_knight": {
+      "variants": [
+        {
+          "size": [
+            32,
+            32
+          ],
+          "png": "assets/images/soldiers/soldier_knight_32x32.png",
+          "webp": "assets/images/soldiers/soldier_knight_32x32.webp"
+        },
+        {
+          "size": [
+            64,
+            64
+          ],
+          "png": "assets/images/soldiers/soldier_knight_64x64.png",
+          "webp": "assets/images/soldiers/soldier_knight_64x64.webp"
+        }
+      ]
+    },
+    "soldier_rook": {
+      "variants": [
+        {
+          "size": [
+            32,
+            32
+          ],
+          "png": "assets/images/soldiers/soldier_rook_32x32.png",
+          "webp": "assets/images/soldiers/soldier_rook_32x32.webp"
+        },
+        {
+          "size": [
+            64,
+            64
+          ],
+          "png": "assets/images/soldiers/soldier_rook_64x64.png",
+          "webp": "assets/images/soldiers/soldier_rook_64x64.webp"
+        }
+      ]
+    },
+    "soldier_bishop": {
+      "variants": [
+        {
+          "size": [
+            32,
+            32
+          ],
+          "png": "assets/images/soldiers/soldier_bishop_32x32.png",
+          "webp": "assets/images/soldiers/soldier_bishop_32x32.webp"
+        },
+        {
+          "size": [
+            64,
+            64
+          ],
+          "png": "assets/images/soldiers/soldier_bishop_64x64.png",
+          "webp": "assets/images/soldiers/soldier_bishop_64x64.webp"
+        }
+      ]
+    },
+    "soldier_golem": {
+      "variants": [
+        {
+          "size": [
+            32,
+            32
+          ],
+          "png": "assets/images/soldiers/soldier_golem_32x32.png",
+          "webp": "assets/images/soldiers/soldier_golem_32x32.webp"
+        },
+        {
+          "size": [
+            64,
+            64
+          ],
+          "png": "assets/images/soldiers/soldier_golem_64x64.png",
+          "webp": "assets/images/soldiers/soldier_golem_64x64.webp"
+        }
+      ]
+    },
+    "soldier_scout": {
+      "variants": [
+        {
+          "size": [
+            32,
+            32
+          ],
+          "png": "assets/images/soldiers/soldier_scout_32x32.png",
+          "webp": "assets/images/soldiers/soldier_scout_32x32.webp"
+        },
+        {
+          "size": [
+            64,
+            64
+          ],
+          "png": "assets/images/soldiers/soldier_scout_64x64.png",
+          "webp": "assets/images/soldiers/soldier_scout_64x64.webp"
+        }
+      ]
+    },
+    "map_empty": {
+      "variants": [
+        {
+          "size": [
+            32,
+            32
+          ],
+          "png": "assets/images/map/map_empty_32x32.png",
+          "webp": "assets/images/map/map_empty_32x32.webp"
+        }
+      ]
+    },
+    "map_resource": {
+      "variants": [
+        {
+          "size": [
+            32,
+            32
+          ],
+          "png": "assets/images/map/map_resource_32x32.png",
+          "webp": "assets/images/map/map_resource_32x32.webp"
+        }
+      ]
+    },
+    "map_npc_fort": {
+      "variants": [
+        {
+          "size": [
+            32,
+            32
+          ],
+          "png": "assets/images/map/map_npc_fort_32x32.png",
+          "webp": "assets/images/map/map_npc_fort_32x32.webp"
+        }
+      ]
+    },
+    "map_player_city": {
+      "variants": [
+        {
+          "size": [
+            32,
+            32
+          ],
+          "png": "assets/images/map/map_player_city_32x32.png",
+          "webp": "assets/images/map/map_player_city_32x32.webp"
+        }
+      ]
+    },
+    "map_silver_hole": {
+      "variants": [
+        {
+          "size": [
+            64,
+            64
+          ],
+          "png": "assets/images/map/map_silver_hole_64x64.png",
+          "webp": "assets/images/map/map_silver_hole_64x64.webp"
+        }
+      ]
+    },
+    "ui_build": {
+      "variants": [
+        {
+          "size": [
+            24,
+            24
+          ],
+          "png": "assets/images/ui/ui_build_24x24.png",
+          "webp": "assets/images/ui/ui_build_24x24.webp"
+        },
+        {
+          "size": [
+            32,
+            32
+          ],
+          "png": "assets/images/ui/ui_build_32x32.png",
+          "webp": "assets/images/ui/ui_build_32x32.webp"
+        }
+      ]
+    },
+    "ui_upgrade": {
+      "variants": [
+        {
+          "size": [
+            24,
+            24
+          ],
+          "png": "assets/images/ui/ui_upgrade_24x24.png",
+          "webp": "assets/images/ui/ui_upgrade_24x24.webp"
+        },
+        {
+          "size": [
+            32,
+            32
+          ],
+          "png": "assets/images/ui/ui_upgrade_32x32.png",
+          "webp": "assets/images/ui/ui_upgrade_32x32.webp"
+        }
+      ]
+    },
+    "ui_attack": {
+      "variants": [
+        {
+          "size": [
+            24,
+            24
+          ],
+          "png": "assets/images/ui/ui_attack_24x24.png",
+          "webp": "assets/images/ui/ui_attack_24x24.webp"
+        },
+        {
+          "size": [
+            32,
+            32
+          ],
+          "png": "assets/images/ui/ui_attack_32x32.png",
+          "webp": "assets/images/ui/ui_attack_32x32.webp"
+        }
+      ]
+    },
+    "ui_defense": {
+      "variants": [
+        {
+          "size": [
+            24,
+            24
+          ],
+          "png": "assets/images/ui/ui_defense_24x24.png",
+          "webp": "assets/images/ui/ui_defense_24x24.webp"
+        },
+        {
+          "size": [
+            32,
+            32
+          ],
+          "png": "assets/images/ui/ui_defense_32x32.png",
+          "webp": "assets/images/ui/ui_defense_32x32.webp"
+        }
+      ]
+    },
+    "status_constructing": {
+      "variants": [
+        {
+          "size": [
+            16,
+            16
+          ],
+          "png": "assets/images/ui/status_constructing_16x16.png",
+          "webp": "assets/images/ui/status_constructing_16x16.webp"
+        }
+      ]
+    },
+    "status_upgrading": {
+      "variants": [
+        {
+          "size": [
+            16,
+            16
+          ],
+          "png": "assets/images/ui/status_upgrading_16x16.png",
+          "webp": "assets/images/ui/status_upgrading_16x16.webp"
+        }
+      ]
+    },
+    "status_training": {
+      "variants": [
+        {
+          "size": [
+            16,
+            16
+          ],
+          "png": "assets/images/ui/status_training_16x16.png",
+          "webp": "assets/images/ui/status_training_16x16.webp"
+        }
+      ]
+    },
+    "status_researching": {
+      "variants": [
+        {
+          "size": [
+            16,
+            16
+          ],
+          "png": "assets/images/ui/status_researching_16x16.png",
+          "webp": "assets/images/ui/status_researching_16x16.webp"
+        }
+      ]
+    },
+    "rarity_b": {
+      "variants": [
+        {
+          "size": [
+            24,
+            24
+          ],
+          "png": "assets/images/generals/rarity_b_24x24.png",
+          "webp": "assets/images/generals/rarity_b_24x24.webp"
+        }
+      ]
+    },
+    "rarity_a": {
+      "variants": [
+        {
+          "size": [
+            24,
+            24
+          ],
+          "png": "assets/images/generals/rarity_a_24x24.png",
+          "webp": "assets/images/generals/rarity_a_24x24.webp"
+        }
+      ]
+    },
+    "rarity_s": {
+      "variants": [
+        {
+          "size": [
+            24,
+            24
+          ],
+          "png": "assets/images/generals/rarity_s_24x24.png",
+          "webp": "assets/images/generals/rarity_s_24x24.webp"
+        }
+      ]
+    },
+    "rarity_ss": {
+      "variants": [
+        {
+          "size": [
+            24,
+            24
+          ],
+          "png": "assets/images/generals/rarity_ss_24x24.png",
+          "webp": "assets/images/generals/rarity_ss_24x24.webp"
+        }
+      ]
+    },
+    "rarity_p": {
+      "variants": [
+        {
+          "size": [
+            24,
+            24
+          ],
+          "png": "assets/images/generals/rarity_p_24x24.png",
+          "webp": "assets/images/generals/rarity_p_24x24.webp"
+        }
+      ]
+    },
+    "element_bright": {
+      "variants": [
+        {
+          "size": [
+            20,
+            20
+          ],
+          "png": "assets/images/generals/element_bright_20x20.png",
+          "webp": "assets/images/generals/element_bright_20x20.webp"
+        }
+      ]
+    },
+    "element_warm": {
+      "variants": [
+        {
+          "size": [
+            20,
+            20
+          ],
+          "png": "assets/images/generals/element_warm_20x20.png",
+          "webp": "assets/images/generals/element_warm_20x20.webp"
+        }
+      ]
+    },
+    "element_cold": {
+      "variants": [
+        {
+          "size": [
+            20,
+            20
+          ],
+          "png": "assets/images/generals/element_cold_20x20.png",
+          "webp": "assets/images/generals/element_cold_20x20.webp"
+        }
+      ]
+    },
+    "element_green": {
+      "variants": [
+        {
+          "size": [
+            20,
+            20
+          ],
+          "png": "assets/images/generals/element_green_20x20.png",
+          "webp": "assets/images/generals/element_green_20x20.webp"
+        }
+      ]
+    },
+    "element_day": {
+      "variants": [
+        {
+          "size": [
+            20,
+            20
+          ],
+          "png": "assets/images/generals/element_day_20x20.png",
+          "webp": "assets/images/generals/element_day_20x20.webp"
+        }
+      ]
+    },
+    "element_night": {
+      "variants": [
+        {
+          "size": [
+            20,
+            20
+          ],
+          "png": "assets/images/generals/element_night_20x20.png",
+          "webp": "assets/images/generals/element_night_20x20.webp"
+        }
+      ]
+    },
+    "card_frame_b": {
+      "variants": [
+        {
+          "size": [
+            400,
+            600
+          ],
+          "png": "assets/images/generals/cards/card_frame_b_400x600.png",
+          "webp": "assets/images/generals/cards/card_frame_b_400x600.webp"
+        },
+        {
+          "size": [
+            800,
+            1200
+          ],
+          "png": "assets/images/generals/cards/card_frame_b_800x1200.png",
+          "webp": "assets/images/generals/cards/card_frame_b_800x1200.webp"
+        }
+      ]
+    },
+    "card_frame_a": {
+      "variants": [
+        {
+          "size": [
+            400,
+            600
+          ],
+          "png": "assets/images/generals/cards/card_frame_a_400x600.png",
+          "webp": "assets/images/generals/cards/card_frame_a_400x600.webp"
+        },
+        {
+          "size": [
+            800,
+            1200
+          ],
+          "png": "assets/images/generals/cards/card_frame_a_800x1200.png",
+          "webp": "assets/images/generals/cards/card_frame_a_800x1200.webp"
+        }
+      ]
+    },
+    "card_frame_s": {
+      "variants": [
+        {
+          "size": [
+            400,
+            600
+          ],
+          "png": "assets/images/generals/cards/card_frame_s_400x600.png",
+          "webp": "assets/images/generals/cards/card_frame_s_400x600.webp"
+        },
+        {
+          "size": [
+            800,
+            1200
+          ],
+          "png": "assets/images/generals/cards/card_frame_s_800x1200.png",
+          "webp": "assets/images/generals/cards/card_frame_s_800x1200.webp"
+        }
+      ]
+    },
+    "card_frame_ss": {
+      "variants": [
+        {
+          "size": [
+            400,
+            600
+          ],
+          "png": "assets/images/generals/cards/card_frame_ss_400x600.png",
+          "webp": "assets/images/generals/cards/card_frame_ss_400x600.webp"
+        },
+        {
+          "size": [
+            800,
+            1200
+          ],
+          "png": "assets/images/generals/cards/card_frame_ss_800x1200.png",
+          "webp": "assets/images/generals/cards/card_frame_ss_800x1200.webp"
+        }
+      ]
+    },
+    "card_frame_p": {
+      "variants": [
+        {
+          "size": [
+            400,
+            600
+          ],
+          "png": "assets/images/generals/cards/card_frame_p_400x600.png",
+          "webp": "assets/images/generals/cards/card_frame_p_400x600.webp"
+        },
+        {
+          "size": [
+            800,
+            1200
+          ],
+          "png": "assets/images/generals/cards/card_frame_p_800x1200.png",
+          "webp": "assets/images/generals/cards/card_frame_p_800x1200.webp"
+        }
+      ]
+    },
+    "general_g001_portrait": {
+      "variants": [
+        {
+          "size": [
+            512,
+            768
+          ],
+          "png": "assets/images/generals/portraits/general_g001_portrait_512x768.png",
+          "webp": "assets/images/generals/portraits/general_g001_portrait_512x768.webp"
+        },
+        {
+          "size": [
+            1024,
+            1536
+          ],
+          "png": "assets/images/generals/portraits/general_g001_portrait_1024x1536.png",
+          "webp": "assets/images/generals/portraits/general_g001_portrait_1024x1536.webp"
+        }
+      ]
+    },
+    "general_g002_portrait": {
+      "variants": [
+        {
+          "size": [
+            512,
+            768
+          ],
+          "png": "assets/images/generals/portraits/general_g002_portrait_512x768.png",
+          "webp": "assets/images/generals/portraits/general_g002_portrait_512x768.webp"
+        },
+        {
+          "size": [
+            1024,
+            1536
+          ],
+          "png": "assets/images/generals/portraits/general_g002_portrait_1024x1536.png",
+          "webp": "assets/images/generals/portraits/general_g002_portrait_1024x1536.webp"
+        }
+      ]
+    },
+    "general_g003_portrait": {
+      "variants": [
+        {
+          "size": [
+            512,
+            768
+          ],
+          "png": "assets/images/generals/portraits/general_g003_portrait_512x768.png",
+          "webp": "assets/images/generals/portraits/general_g003_portrait_512x768.webp"
+        },
+        {
+          "size": [
+            1024,
+            1536
+          ],
+          "png": "assets/images/generals/portraits/general_g003_portrait_1024x1536.png",
+          "webp": "assets/images/generals/portraits/general_g003_portrait_1024x1536.webp"
+        }
+      ]
+    },
+    "general_g004_portrait": {
+      "variants": [
+        {
+          "size": [
+            512,
+            768
+          ],
+          "png": "assets/images/generals/portraits/general_g004_portrait_512x768.png",
+          "webp": "assets/images/generals/portraits/general_g004_portrait_512x768.webp"
+        },
+        {
+          "size": [
+            1024,
+            1536
+          ],
+          "png": "assets/images/generals/portraits/general_g004_portrait_1024x1536.png",
+          "webp": "assets/images/generals/portraits/general_g004_portrait_1024x1536.webp"
+        }
+      ]
+    },
+    "general_g005_portrait": {
+      "variants": [
+        {
+          "size": [
+            512,
+            768
+          ],
+          "png": "assets/images/generals/portraits/general_g005_portrait_512x768.png",
+          "webp": "assets/images/generals/portraits/general_g005_portrait_512x768.webp"
+        },
+        {
+          "size": [
+            1024,
+            1536
+          ],
+          "png": "assets/images/generals/portraits/general_g005_portrait_1024x1536.png",
+          "webp": "assets/images/generals/portraits/general_g005_portrait_1024x1536.webp"
+        }
+      ]
+    },
+    "general_g006_portrait": {
+      "variants": [
+        {
+          "size": [
+            512,
+            768
+          ],
+          "png": "assets/images/generals/portraits/general_g006_portrait_512x768.png",
+          "webp": "assets/images/generals/portraits/general_g006_portrait_512x768.webp"
+        },
+        {
+          "size": [
+            1024,
+            1536
+          ],
+          "png": "assets/images/generals/portraits/general_g006_portrait_1024x1536.png",
+          "webp": "assets/images/generals/portraits/general_g006_portrait_1024x1536.webp"
+        }
+      ]
+    },
+    "general_g007_portrait": {
+      "variants": [
+        {
+          "size": [
+            512,
+            768
+          ],
+          "png": "assets/images/generals/portraits/general_g007_portrait_512x768.png",
+          "webp": "assets/images/generals/portraits/general_g007_portrait_512x768.webp"
+        },
+        {
+          "size": [
+            1024,
+            1536
+          ],
+          "png": "assets/images/generals/portraits/general_g007_portrait_1024x1536.png",
+          "webp": "assets/images/generals/portraits/general_g007_portrait_1024x1536.webp"
+        }
+      ]
+    },
+    "general_g008_portrait": {
+      "variants": [
+        {
+          "size": [
+            512,
+            768
+          ],
+          "png": "assets/images/generals/portraits/general_g008_portrait_512x768.png",
+          "webp": "assets/images/generals/portraits/general_g008_portrait_512x768.webp"
+        },
+        {
+          "size": [
+            1024,
+            1536
+          ],
+          "png": "assets/images/generals/portraits/general_g008_portrait_1024x1536.png",
+          "webp": "assets/images/generals/portraits/general_g008_portrait_1024x1536.webp"
+        }
+      ]
+    },
+    "general_g009_portrait": {
+      "variants": [
+        {
+          "size": [
+            512,
+            768
+          ],
+          "png": "assets/images/generals/portraits/general_g009_portrait_512x768.png",
+          "webp": "assets/images/generals/portraits/general_g009_portrait_512x768.webp"
+        },
+        {
+          "size": [
+            1024,
+            1536
+          ],
+          "png": "assets/images/generals/portraits/general_g009_portrait_1024x1536.png",
+          "webp": "assets/images/generals/portraits/general_g009_portrait_1024x1536.webp"
+        }
+      ]
+    },
+    "general_g010_portrait": {
+      "variants": [
+        {
+          "size": [
+            512,
+            768
+          ],
+          "png": "assets/images/generals/portraits/general_g010_portrait_512x768.png",
+          "webp": "assets/images/generals/portraits/general_g010_portrait_512x768.webp"
+        },
+        {
+          "size": [
+            1024,
+            1536
+          ],
+          "png": "assets/images/generals/portraits/general_g010_portrait_1024x1536.png",
+          "webp": "assets/images/generals/portraits/general_g010_portrait_1024x1536.webp"
+        }
+      ]
+    },
+    "general_g011_portrait": {
+      "variants": [
+        {
+          "size": [
+            512,
+            768
+          ],
+          "png": "assets/images/generals/portraits/general_g011_portrait_512x768.png",
+          "webp": "assets/images/generals/portraits/general_g011_portrait_512x768.webp"
+        },
+        {
+          "size": [
+            1024,
+            1536
+          ],
+          "png": "assets/images/generals/portraits/general_g011_portrait_1024x1536.png",
+          "webp": "assets/images/generals/portraits/general_g011_portrait_1024x1536.webp"
+        }
+      ]
+    },
+    "general_g012_portrait": {
+      "variants": [
+        {
+          "size": [
+            512,
+            768
+          ],
+          "png": "assets/images/generals/portraits/general_g012_portrait_512x768.png",
+          "webp": "assets/images/generals/portraits/general_g012_portrait_512x768.webp"
+        },
+        {
+          "size": [
+            1024,
+            1536
+          ],
+          "png": "assets/images/generals/portraits/general_g012_portrait_1024x1536.png",
+          "webp": "assets/images/generals/portraits/general_g012_portrait_1024x1536.webp"
+        }
+      ]
+    },
+    "general_g013_portrait": {
+      "variants": [
+        {
+          "size": [
+            512,
+            768
+          ],
+          "png": "assets/images/generals/portraits/general_g013_portrait_512x768.png",
+          "webp": "assets/images/generals/portraits/general_g013_portrait_512x768.webp"
+        },
+        {
+          "size": [
+            1024,
+            1536
+          ],
+          "png": "assets/images/generals/portraits/general_g013_portrait_1024x1536.png",
+          "webp": "assets/images/generals/portraits/general_g013_portrait_1024x1536.webp"
+        }
+      ]
+    },
+    "general_g014_portrait": {
+      "variants": [
+        {
+          "size": [
+            512,
+            768
+          ],
+          "png": "assets/images/generals/portraits/general_g014_portrait_512x768.png",
+          "webp": "assets/images/generals/portraits/general_g014_portrait_512x768.webp"
+        },
+        {
+          "size": [
+            1024,
+            1536
+          ],
+          "png": "assets/images/generals/portraits/general_g014_portrait_1024x1536.png",
+          "webp": "assets/images/generals/portraits/general_g014_portrait_1024x1536.webp"
+        }
+      ]
+    }
+  },
+  "generated_from": "doc/etc/image_resources_specification.txt",
+  "card_canvas": {
+    "aspect_ratio": "2:3",
+    "runtime_size": [
+      400,
+      600
+    ],
+    "high_dpi_size": [
+      800,
+      1200
+    ]
+  }
+}

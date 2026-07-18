@@ -292,6 +292,15 @@ $pageTitle = '武将详情 - ' . $general->getName();
             gap: 10px;
             align-items: center;
         }
+        .detail-hero {
+            display: grid;
+            grid-template-columns: minmax(240px, 340px) minmax(0, 1fr);
+            gap: 24px;
+            align-items: start;
+        }
+        .detail-card-visual {
+            width: 100%;
+        }
         .rarity {
             display: inline-block;
             border-radius: 3px;
@@ -345,6 +354,11 @@ $pageTitle = '武将详情 - ' . $general->getName();
         .muted {
             color: #666;
         }
+        @media (max-width: 760px) {
+            .detail-hero {
+                grid-template-columns: 1fr;
+            }
+        }
     </style>
 </head>
 <body>
@@ -358,59 +372,66 @@ $pageTitle = '武将详情 - ' . $general->getName();
         <?php endif; ?>
 
         <section class="detail-panel">
-            <div class="detail-heading">
-                <h3>
-                    <?php echo escapeHtml($general->getName()); ?>
-                    <span class="rarity"><?php echo escapeHtml($general->getRarity()); ?></span>
-                </h3>
-                <a href="generals.php">返回武将列表</a>
-            </div>
-            <p>
-                来源：<?php echo escapeHtml($general->getSource()); ?> /
-                元素：<?php echo escapeHtml($general->getElement()); ?> /
-                COST：<?php echo escapeHtml($general->getCost()); ?>
-            </p>
-            <div class="stat-grid">
-                <div class="stat-card">
-                    等级
-                    <span class="stat-value">
-                        <?php echo number_format((int) $general->getLevel()); ?>
-                        /
-                        <?php echo isset($progression['current_level_cap'])
-                            ? number_format((int) $progression['current_level_cap'])
-                            : '—'; ?>
-                    </span>
+            <div class="detail-hero">
+                <div class="detail-card-visual">
+                    <?php echo renderGeneralCardVisual($general); ?>
                 </div>
-                <div class="stat-card">
-                    BREAK
-                    <span class="stat-value">
-                        <?php echo isset($progression['break_level'])
-                            ? number_format((int) $progression['break_level'])
-                            : '—'; ?>
-                    </span>
-                </div>
-                <div class="stat-card">
-                    HP
-                    <span class="stat-value">
-                        <?php echo number_format((int) $general->getHp()); ?>
-                        / <?php echo number_format((int) $general->getMaxHp()); ?>
-                    </span>
-                </div>
-                <div class="stat-card">
-                    攻击
-                    <span class="stat-value"><?php echo number_format((int) $general->getAttack()); ?></span>
-                </div>
-                <div class="stat-card">
-                    守备
-                    <span class="stat-value"><?php echo number_format((int) $general->getDefense()); ?></span>
-                </div>
-                <div class="stat-card">
-                    速度
-                    <span class="stat-value"><?php echo number_format((int) $general->getSpeed()); ?></span>
-                </div>
-                <div class="stat-card">
-                    智力
-                    <span class="stat-value"><?php echo number_format((int) $general->getIntelligence()); ?></span>
+                <div>
+                    <div class="detail-heading">
+                        <h3>
+                            <?php echo escapeHtml($general->getName()); ?>
+                            <span class="rarity"><?php echo escapeHtml($general->getRarity()); ?></span>
+                        </h3>
+                        <a href="generals.php">返回武将列表</a>
+                    </div>
+                    <p>
+                        来源：<?php echo escapeHtml($general->getSource()); ?> /
+                        元素：<?php echo escapeHtml($general->getElement()); ?> /
+                        COST：<?php echo escapeHtml($general->getCost()); ?>
+                    </p>
+                    <div class="stat-grid">
+                        <div class="stat-card">
+                            等级
+                            <span class="stat-value">
+                                <?php echo number_format((int) $general->getLevel()); ?>
+                                /
+                                <?php echo isset($progression['current_level_cap'])
+                                    ? number_format((int) $progression['current_level_cap'])
+                                    : '—'; ?>
+                            </span>
+                        </div>
+                        <div class="stat-card">
+                            BREAK
+                            <span class="stat-value">
+                                <?php echo isset($progression['break_level'])
+                                    ? number_format((int) $progression['break_level'])
+                                    : '—'; ?>
+                            </span>
+                        </div>
+                        <div class="stat-card">
+                            HP
+                            <span class="stat-value">
+                                <?php echo number_format((int) $general->getHp()); ?>
+                                / <?php echo number_format((int) $general->getMaxHp()); ?>
+                            </span>
+                        </div>
+                        <div class="stat-card">
+                            攻击
+                            <span class="stat-value"><?php echo number_format((int) $general->getAttack()); ?></span>
+                        </div>
+                        <div class="stat-card">
+                            守备
+                            <span class="stat-value"><?php echo number_format((int) $general->getDefense()); ?></span>
+                        </div>
+                        <div class="stat-card">
+                            速度
+                            <span class="stat-value"><?php echo number_format((int) $general->getSpeed()); ?></span>
+                        </div>
+                        <div class="stat-card">
+                            智力
+                            <span class="stat-value"><?php echo number_format((int) $general->getIntelligence()); ?></span>
+                        </div>
+                    </div>
                 </div>
             </div>
         </section>

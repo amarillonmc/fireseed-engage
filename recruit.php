@@ -258,6 +258,10 @@ $pageTitle = '武将招募';
                 <div class="result-grid">
                     <?php foreach ($operationResult['generals'] as $recruited): ?>
                         <article class="result-card">
+                            <?php echo renderGeneralCardVisual(
+                                $recruited,
+                                ['compact' => true]
+                            ); ?>
                             <h4>
                                 <?php echo escapeHtml($recruited['name']); ?>
                                 <span class="rarity"><?php echo escapeHtml($recruited['rarity']); ?></span>
@@ -301,6 +305,10 @@ $pageTitle = '武将招募';
                 <div class="starter-grid">
                     <?php foreach ($starterTemplates as $template): ?>
                         <article class="starter-card">
+                            <?php echo renderGeneralCardVisual(
+                                $template,
+                                ['compact' => true]
+                            ); ?>
                             <h4>
                                 <?php echo escapeHtml($template['name']); ?>
                                 <span class="rarity"><?php echo escapeHtml($template['rarity']); ?></span>
@@ -382,10 +390,7 @@ $pageTitle = '武将招募';
                                 <?php foreach ($entries as $entry): ?>
                                     <li>
                                         <span>
-                                            <?php echo escapeHtml((string) ($entry['name'] ?? '未知武将')); ?>
-                                            <span class="rarity">
-                                                <?php echo escapeHtml((string) ($entry['rarity'] ?? '')); ?>
-                                            </span>
+                                            <?php echo renderGeneralCompactIdentity($entry); ?>
                                             <?php if (!empty($entry['is_featured'])): ?>
                                                 <span class="featured">UP</span>
                                             <?php endif; ?>

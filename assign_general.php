@@ -290,7 +290,18 @@ $pageTitle = '分配武将 - ' . $general->getName();
                     <li><a href="territory.php">领地</a></li>
                     <li><a href="internal.php">内政</a></li>
                     <li><a href="ranking.php">排名</a></li>
-                    <li class="circuit-points">思考回路: <?php echo $user->getCircuitPoints(); ?> / <?php echo $user->getMaxCircuitPoints(); ?></li>
+                    <li class="circuit-points">
+                        <?php echo renderImageResource(
+                            'resource_circuit_points',
+                            24,
+                            ['alt' => '思考回路 / Circuit Points']
+                        ); ?>
+                        <span class="circuit-label">思考回路:</span>
+                        <span class="circuit-value">
+                            <?php echo number_format($user->getCircuitPoints()); ?> /
+                            <?php echo number_format($user->getMaxCircuitPoints()); ?>
+                        </span>
+                    </li>
                 </ul>
             </nav>
         </header>

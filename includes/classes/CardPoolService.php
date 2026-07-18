@@ -681,6 +681,11 @@ class CardPoolService {
             $query = "SELECT entry.general_id AS resource_id, entry.weight,
                              entry.is_featured, g.general_id,
                              catalog.template_code,
+                             (SELECT gs.skill_name
+                                FROM general_skills gs
+                               WHERE gs.general_id = g.general_id
+                               ORDER BY gs.slot, gs.skill_id
+                               LIMIT 1) AS skill_name,
                              g.owner_id, g.name, g.source,
                              g.rarity, g.cost, g.element,
                              g.level, g.hp, g.max_hp,
@@ -776,6 +781,9 @@ class CardPoolService {
                 }
                 $row['cost'] = (float) $row['cost'];
                 $row['template_code'] = (string) $row['template_code'];
+                $row['skill_name'] = isset($row['skill_name'])
+                    ? (string) $row['skill_name']
+                    : '';
             } else {
                 foreach ([
                     'card_id',

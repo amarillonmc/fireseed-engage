@@ -638,3 +638,515 @@ footer {
         overflow-x: auto;
     }
 }
+
+/* 图像资源与逐项回退 / Image resources and per-item fallback */
+.game-image-resource {
+    --game-image-size: 32px;
+    display: inline-flex;
+    width: var(--game-image-size);
+    height: var(--game-image-size);
+    flex: 0 0 var(--game-image-size);
+    align-items: center;
+    justify-content: center;
+    vertical-align: middle;
+    line-height: 1;
+}
+
+.game-image-resource picture,
+.game-image-resource img {
+    display: block;
+    width: 100%;
+    height: 100%;
+}
+
+.game-image-resource [hidden],
+.general-identity [hidden] {
+    display: none !important;
+}
+
+.game-image-resource img {
+    object-fit: contain;
+}
+
+.game-image-resource__fallback {
+    font-size: calc(var(--game-image-size) * 0.72);
+    line-height: 1;
+}
+
+.resource-name {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+}
+
+.resource-name .game-image-resource {
+    margin-right: 2px;
+}
+
+.circuit-points {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+}
+
+.status-constructing .game-image-resource,
+.status-upgrading .game-image-resource,
+.status-training .game-image-resource,
+.status-researching .game-image-resource,
+.game-image-resource--status_constructing,
+.game-image-resource--status_upgrading,
+.game-image-resource--status_training,
+.game-image-resource--status_researching {
+    animation: game-status-pulse 1.25s ease-in-out infinite;
+}
+
+@keyframes game-status-pulse {
+    0%,
+    100% {
+        transform: scale(0.92);
+        opacity: 0.72;
+    }
+    50% {
+        transform: scale(1.08);
+        opacity: 1;
+    }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .game-image-resource--status_constructing,
+    .game-image-resource--status_upgrading,
+    .game-image-resource--status_training,
+    .game-image-resource--status_researching {
+        animation: none;
+    }
+}
+
+/* 可拼装武将卡 / Composable general cards */
+.general-card-composite {
+    position: relative;
+    width: min(100%, 320px);
+    aspect-ratio: 2 / 3;
+    container-type: inline-size;
+    overflow: hidden;
+    margin: 0 auto;
+    border-radius: 4.5%;
+    isolation: isolate;
+    background: #18202a;
+    box-shadow:
+        0 10px 24px rgba(20, 25, 38, 0.28),
+        inset 0 0 0 1px rgba(255, 255, 255, 0.18);
+}
+
+.general-card-composite__visual,
+.general-card-composite__portrait,
+.general-card-composite__portrait img,
+.general-card-composite__frame,
+.general-card-composite__frame img,
+.general-card-composite__aura {
+    position: absolute;
+    inset: 0;
+    display: block;
+    width: 100%;
+    height: 100%;
+}
+
+.general-card-composite__portrait img {
+    object-fit: cover;
+    transform: scale(1.08) translateY(4%);
+    transform-origin: 50% 50%;
+}
+
+.general-card-composite__aura {
+    z-index: 1;
+    opacity: 0.42;
+    pointer-events: none;
+    mix-blend-mode: screen;
+}
+
+.general-card-composite.element-bright .general-card-composite__aura {
+    background: radial-gradient(circle at 50% 30%, rgba(240, 252, 255, 0.55), transparent 58%);
+}
+
+.general-card-composite.element-warm .general-card-composite__aura {
+    background: radial-gradient(circle at 50% 34%, rgba(255, 81, 37, 0.48), transparent 60%);
+}
+
+.general-card-composite.element-cold .general-card-composite__aura {
+    background: radial-gradient(circle at 50% 32%, rgba(80, 174, 255, 0.52), transparent 62%);
+}
+
+.general-card-composite.element-green .general-card-composite__aura {
+    background: radial-gradient(circle at 50% 35%, rgba(80, 214, 101, 0.48), transparent 60%);
+}
+
+.general-card-composite.element-day .general-card-composite__aura {
+    background: radial-gradient(circle at 50% 30%, rgba(255, 220, 72, 0.52), transparent 62%);
+}
+
+.general-card-composite.element-night .general-card-composite__aura {
+    background: radial-gradient(circle at 50% 32%, rgba(112, 73, 204, 0.54), transparent 60%);
+}
+
+.general-card-composite__frame {
+    z-index: 3;
+    pointer-events: none;
+}
+
+.general-card-composite__frame img {
+    object-fit: fill;
+}
+
+.general-card-composite__name,
+.general-card-composite__element,
+.general-card-composite__rarity,
+.general-card-composite__level,
+.general-card-composite__stats,
+.general-card-composite__skill {
+    position: absolute;
+    z-index: 4;
+}
+
+.general-card-composite__name {
+    top: 5.1%;
+    left: 23%;
+    width: 54%;
+    overflow: hidden;
+    color: #202737;
+    font-size: 16px;
+    font-size: clamp(11px, 5.2cqi, 19px);
+    font-weight: 800;
+    line-height: 1.2;
+    text-align: center;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    text-shadow: 0 1px rgba(255, 255, 255, 0.72);
+}
+
+.general-card-composite__element,
+.general-card-composite__rarity {
+    top: 4.3%;
+    display: flex;
+    width: 12%;
+    height: 8%;
+    align-items: center;
+    justify-content: center;
+}
+
+.general-card-composite__element {
+    left: 5.5%;
+}
+
+.general-card-composite__rarity {
+    right: 5.5%;
+}
+
+.general-card-composite__element .game-image-resource,
+.general-card-composite__rarity .game-image-resource {
+    width: 100%;
+    height: 100%;
+    --game-image-size: 100%;
+}
+
+.general-card-composite__level {
+    top: 77.8%;
+    left: 12%;
+    display: flex;
+    width: 76%;
+    justify-content: space-between;
+    color: #fff;
+    font-size: 13px;
+    font-size: clamp(9px, 4.1cqi, 15px);
+    font-weight: 800;
+    text-shadow: 0 1px 3px #000;
+}
+
+.general-card-composite.rarity-b .general-card-composite__level,
+.general-card-composite.rarity-p .general-card-composite__level {
+    color: #252535;
+    text-shadow: 0 1px rgba(255, 255, 255, 0.7);
+}
+
+.general-card-composite__stats {
+    top: 85.6%;
+    left: 9%;
+    display: grid;
+    width: 82%;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 1.2%;
+    color: #fff;
+    font-size: 10px;
+    font-size: clamp(7px, 3.1cqi, 11px);
+    text-align: center;
+    text-shadow: 0 1px 2px #000;
+}
+
+.general-card-composite__stats span {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.general-card-composite__skill {
+    right: 12%;
+    bottom: 3.2%;
+    left: 12%;
+    overflow: hidden;
+    color: #fff;
+    font-size: 10px;
+    font-size: clamp(7px, 3.2cqi, 11px);
+    font-weight: 700;
+    text-align: center;
+    text-overflow: ellipsis;
+    text-shadow: 0 1px 2px #000;
+    white-space: nowrap;
+}
+
+.general-card-composite.rarity-b .general-card-composite__skill,
+.general-card-composite.rarity-p .general-card-composite__skill {
+    color: #252535;
+    text-shadow: 0 1px rgba(255, 255, 255, 0.7);
+}
+
+.general-card-composite__fallback {
+    position: absolute;
+    inset: 0;
+    display: none;
+    box-sizing: border-box;
+    flex-direction: column;
+    gap: 7px;
+    align-items: center;
+    justify-content: center;
+    padding: 12%;
+    background:
+        radial-gradient(circle at 50% 22%, rgba(255, 255, 255, 0.22), transparent 34%),
+        linear-gradient(155deg, #34495e, #18202a);
+    color: #fff;
+    text-align: center;
+}
+
+.general-card-composite__fallback-avatar {
+    font-size: 72px;
+    font-size: clamp(36px, 28cqi, 88px);
+}
+
+.general-card-composite__fallback strong {
+    font-size: 20px;
+    font-size: clamp(14px, 7cqi, 23px);
+}
+
+.general-card-composite__fallback span {
+    font-size: 13px;
+    font-size: clamp(9px, 4.5cqi, 14px);
+}
+
+.general-card-composite.image-failed .general-card-composite__visual {
+    display: none;
+}
+
+.general-card-composite.image-failed .general-card-composite__fallback {
+    display: flex;
+}
+
+.general-card-composite.is-compact {
+    width: min(100%, 240px);
+}
+
+.general-identity {
+    display: inline-flex;
+    min-width: 0;
+    gap: 8px;
+    align-items: center;
+}
+
+.general-identity__portrait-picture,
+.general-identity__portrait,
+.general-identity__emoji {
+    display: inline-flex;
+    width: 38px;
+    height: 46px;
+    flex: 0 0 38px;
+    align-items: center;
+    justify-content: center;
+    border-radius: 5px;
+    background: #eceff1;
+}
+
+.general-identity__portrait-picture {
+    overflow: hidden;
+}
+
+.general-identity__portrait {
+    object-fit: cover;
+    object-position: 50% 22%;
+}
+
+.general-identity__emoji {
+    font-size: 24px;
+}
+
+.general-identity__text {
+    display: flex;
+    min-width: 0;
+    flex-direction: column;
+}
+
+.general-identity__text strong,
+.general-identity__text small {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+/* 可选CSS图集工具 / Optional CSS sprite utilities */
+.game-sprite {
+    display: inline-block;
+    overflow: hidden;
+    background-repeat: no-repeat;
+    vertical-align: middle;
+}
+
+.game-sprite.resources {
+    width: 64px;
+    height: 64px;
+    background-image: url("../images/sprites/resources_64x64.png");
+    background-size: 448px 64px;
+}
+
+.game-sprite.resources.bright { background-position: 0 0; }
+.game-sprite.resources.warm { background-position: -64px 0; }
+.game-sprite.resources.cold { background-position: -128px 0; }
+.game-sprite.resources.green { background-position: -192px 0; }
+.game-sprite.resources.day { background-position: -256px 0; }
+.game-sprite.resources.night { background-position: -320px 0; }
+.game-sprite.resources.circuit { background-position: -384px 0; }
+
+.game-sprite.soldiers {
+    width: 64px;
+    height: 64px;
+    background-image: url("../images/sprites/soldiers_64x64.png");
+    background-size: 384px 64px;
+}
+
+.game-sprite.soldiers.pawn { background-position: 0 0; }
+.game-sprite.soldiers.knight { background-position: -64px 0; }
+.game-sprite.soldiers.rook { background-position: -128px 0; }
+.game-sprite.soldiers.bishop { background-position: -192px 0; }
+.game-sprite.soldiers.golem { background-position: -256px 0; }
+.game-sprite.soldiers.scout { background-position: -320px 0; }
+
+.game-sprite.facilities {
+    width: 128px;
+    height: 128px;
+    background-image: url("../images/sprites/facilities_128x128.png");
+    background-size: 1024px 128px;
+}
+
+.game-sprite.facilities.resource-production { background-position: 0 0; }
+.game-sprite.facilities.governor-office { background-position: -128px 0; }
+.game-sprite.facilities.barracks { background-position: -256px 0; }
+.game-sprite.facilities.research-lab { background-position: -384px 0; }
+.game-sprite.facilities.dormitory { background-position: -512px 0; }
+.game-sprite.facilities.storage { background-position: -640px 0; }
+.game-sprite.facilities.watchtower { background-position: -768px 0; }
+.game-sprite.facilities.workshop { background-position: -896px 0; }
+
+.game-sprite.map {
+    width: 64px;
+    height: 64px;
+    background-image: url("../images/sprites/map_64x64.png");
+    background-size: 320px 64px;
+}
+
+.game-sprite.map.empty { background-position: 0 0; }
+.game-sprite.map.resource { background-position: -64px 0; }
+.game-sprite.map.npc-fort { background-position: -128px 0; }
+.game-sprite.map.player-city { background-position: -192px 0; }
+.game-sprite.map.silver-hole { background-position: -256px 0; }
+
+.game-sprite.ui {
+    width: 32px;
+    height: 32px;
+    background-image: url("../images/sprites/ui_32x32.png");
+    background-size: 256px 32px;
+}
+
+.game-sprite.ui.build { background-position: 0 0; }
+.game-sprite.ui.upgrade { background-position: -32px 0; }
+.game-sprite.ui.attack { background-position: -64px 0; }
+.game-sprite.ui.defense { background-position: -96px 0; }
+.game-sprite.ui.constructing { background-position: -128px 0; }
+.game-sprite.ui.upgrading { background-position: -160px 0; }
+.game-sprite.ui.training { background-position: -192px 0; }
+.game-sprite.ui.researching { background-position: -224px 0; }
+
+.game-sprite.general-badges {
+    width: 24px;
+    height: 24px;
+    background-image: url("../images/sprites/general_badges_24x24.png");
+    background-size: 264px 24px;
+}
+
+.game-sprite.general-badges.rarity-b { background-position: 0 0; }
+.game-sprite.general-badges.rarity-a { background-position: -24px 0; }
+.game-sprite.general-badges.rarity-s { background-position: -48px 0; }
+.game-sprite.general-badges.rarity-ss { background-position: -72px 0; }
+.game-sprite.general-badges.rarity-p { background-position: -96px 0; }
+.game-sprite.general-badges.element-bright { background-position: -120px 0; }
+.game-sprite.general-badges.element-warm { background-position: -144px 0; }
+.game-sprite.general-badges.element-cold { background-position: -168px 0; }
+.game-sprite.general-badges.element-green { background-position: -192px 0; }
+.game-sprite.general-badges.element-day { background-position: -216px 0; }
+.game-sprite.general-badges.element-night { background-position: -240px 0; }
+
+@supports (
+    background-image:
+        image-set(url("../images/sprites/resources_64x64.webp") type("image/webp"))
+) {
+    .game-sprite.resources {
+        background-image: image-set(
+            url("../images/sprites/resources_64x64.webp") type("image/webp"),
+            url("../images/sprites/resources_64x64.png") type("image/png")
+        );
+    }
+
+    .game-sprite.soldiers {
+        background-image: image-set(
+            url("../images/sprites/soldiers_64x64.webp") type("image/webp"),
+            url("../images/sprites/soldiers_64x64.png") type("image/png")
+        );
+    }
+
+    .game-sprite.facilities {
+        background-image: image-set(
+            url("../images/sprites/facilities_128x128.webp") type("image/webp"),
+            url("../images/sprites/facilities_128x128.png") type("image/png")
+        );
+    }
+
+    .game-sprite.map {
+        background-image: image-set(
+            url("../images/sprites/map_64x64.webp") type("image/webp"),
+            url("../images/sprites/map_64x64.png") type("image/png")
+        );
+    }
+
+    .game-sprite.ui {
+        background-image: image-set(
+            url("../images/sprites/ui_32x32.webp") type("image/webp"),
+            url("../images/sprites/ui_32x32.png") type("image/png")
+        );
+    }
+
+    .game-sprite.general-badges {
+        background-image: image-set(
+            url("../images/sprites/general_badges_24x24.webp") type("image/webp"),
+            url("../images/sprites/general_badges_24x24.png") type("image/png")
+        );
+    }
+}
+
+@media (max-width: 720px) {
+    .general-card-composite {
+        width: min(100%, 280px);
+    }
+}

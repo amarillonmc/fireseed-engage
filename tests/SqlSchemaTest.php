@@ -5,12 +5,18 @@ $root = dirname(__DIR__);
 $freshPath = $root . '/sql/gameplay_expansion.sql';
 $upgradePath = $root . '/sql/upgrade_20260717_gameplay_expansion.sql';
 $cardPoolUpgradePath = $root . '/sql/upgrade_20260717_card_pool_resources.sql';
+$imageUpgradePath = $root . '/sql/upgrade_20260718_image_resources.sql';
+$gameConfigPath = $root . '/sql/game_config.sql';
 $freshSql = file_get_contents($freshPath);
 $baseUpgradeSql = file_get_contents($upgradePath);
 $cardPoolUpgradeSql = file_get_contents($cardPoolUpgradePath);
-$upgradeSql = $baseUpgradeSql === false || $cardPoolUpgradeSql === false
+$imageUpgradeSql = file_get_contents($imageUpgradePath);
+$gameConfigSql = file_get_contents($gameConfigPath);
+$upgradeSql = $baseUpgradeSql === false
+    || $cardPoolUpgradeSql === false
+    || $imageUpgradeSql === false
     ? false
-    : $baseUpgradeSql . "\n" . $cardPoolUpgradeSql;
+    : $baseUpgradeSql . "\n" . $cardPoolUpgradeSql . "\n" . $imageUpgradeSql;
 $assertions = 0;
 
 /**
@@ -98,12 +104,33 @@ function hasBalancedSqlParentheses($sql) {
 assertSql($freshSql !== false, 'Fresh expansion SQL must be readable');
 assertSql($baseUpgradeSql !== false, 'Base gameplay upgrade SQL must be readable');
 assertSql($cardPoolUpgradeSql !== false, 'Card-pool resource upgrade SQL must be readable');
+assertSql($imageUpgradeSql !== false, 'Image-resource upgrade SQL must be readable');
+assertSql($gameConfigSql !== false, 'Fresh game configuration SQL must be readable');
 assertSql($upgradeSql !== false, 'Complete upgrade chain must be readable');
 assertSql(hasBalancedSqlParentheses($freshSql), 'Fresh expansion SQL parentheses must balance');
 assertSql(hasBalancedSqlParentheses($upgradeSql), 'Upgrade SQL parentheses must balance');
 assertSql(
     !preg_match('/^\s*SOURCE\s+/mi', $upgradeSql),
     'Upgrade must not depend on a SOURCE statement'
+);
+assertSql(
+    strpos(
+        $gameConfigSql,
+        "('image_display_mode', 'image'"
+    ) !== false
+        && strpos($gameConfigSql, "'display')") !== false,
+    'Fresh configuration must default the global image mode to image'
+);
+assertSql(
+    strpos(
+        $imageUpgradeSql,
+        'INSERT IGNORE INTO `game_config`'
+    ) !== false
+        && strpos($imageUpgradeSql, "'image_display_mode'") !== false
+        && strpos($imageUpgradeSql, "'image'") !== false
+        && stripos($imageUpgradeSql, 'UPDATE `game_config`') === false
+        && stripos($imageUpgradeSql, 'ON DUPLICATE KEY UPDATE') === false,
+    'Image-mode upgrade must add a missing default without overwriting live selection'
 );
 
 $resourceSeedScripts = [

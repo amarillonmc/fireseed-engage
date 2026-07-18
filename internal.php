@@ -396,7 +396,18 @@ $pageTitle = '内政管理';
                     <li><a href="territory.php">领地</a></li>
                     <li><a href="internal.php">内政</a></li>
                     <li><a href="ranking.php">排名</a></li>
-                    <li class="circuit-points">思考回路: <?php echo $user->getCircuitPoints(); ?> / <?php echo $user->getMaxCircuitPoints(); ?></li>
+                    <li class="circuit-points">
+                        <?php echo renderImageResource(
+                            'resource_circuit_points',
+                            24,
+                            ['alt' => '思考回路 / Circuit Points']
+                        ); ?>
+                        <span class="circuit-label">思考回路:</span>
+                        <span class="circuit-value">
+                            <?php echo number_format($user->getCircuitPoints()); ?> /
+                            <?php echo number_format($user->getMaxCircuitPoints()); ?>
+                        </span>
+                    </li>
                 </ul>
             </nav>
         </header>
@@ -406,7 +417,14 @@ $pageTitle = '内政管理';
             <div class="internal-container">
                 <!-- 内政管理头部 -->
                 <div class="internal-header">
-                    <h3>🏛️ 内政管理中心</h3>
+                    <h3>
+                        <?php echo renderImageResource(
+                            'facility_governor_office',
+                            32,
+                            ['decorative' => true]
+                        ); ?>
+                        内政管理中心
+                    </h3>
                     <p>管理您的城池、设施、资源和军队</p>
                 </div>
 
@@ -455,7 +473,13 @@ $pageTitle = '内政管理';
                     <!-- 设施管理 -->
                     <div class="internal-section">
                         <div class="section-title">
-                            <span class="section-icon">🏗️</span>
+                            <span class="section-icon">
+                                <?php echo renderImageResource(
+                                    'ui_build',
+                                    32,
+                                    ['alt' => '设施管理']
+                                ); ?>
+                            </span>
                             设施管理
                         </div>
                         
@@ -480,20 +504,14 @@ $pageTitle = '内政管理';
                                         if ($isConstructing) $slotClass = 'constructing';
                                         if ($isUpgrading) $slotClass = 'upgrading';
                                         
-                                        // 设施图标映射
-                                        $facilityIcons = [
-                                            'resource_production' => '⚡',
-                                            'governor_office' => '🏛️',
-                                            'barracks' => '⚔️',
-                                            'research_lab' => '🔬',
-                                            'dormitory' => '🏠',
-                                            'storage' => '📦',
-                                            'watchtower' => '🗼',
-                                            'workshop' => '🔧'
-                                        ];
-                                        
-                                        $icon = isset($facilityIcons[$facility->getType()]) ? 
-                                               $facilityIcons[$facility->getType()] : '🏢';
+                                        // 设施类型只能进入统一资源键 / Facility types map only to controlled resource keys
+                                        $facilityType = $facility->getType();
+                                        $facilityKey = 'facility_' . $facilityType;
+                                        $icon = renderImageResource(
+                                            $facilityKey,
+                                            64,
+                                            ['alt' => $facility->getName()]
+                                        );
                                         
                                         echo '<div class="facility-slot ' . $slotClass . '" onclick="manageFacility(' . $facility->getFacilityId() . ')">';
                                         echo '<div>';
@@ -505,6 +523,16 @@ $pageTitle = '内政管理';
                                         echo '</div>';
                                         
                                         if ($isConstructing || $isUpgrading) {
+                                            $statusKey = $isUpgrading
+                                                ? 'status_upgrading'
+                                                : 'status_constructing';
+                                            echo '<div class="facility-status">'
+                                                . renderImageResource(
+                                                    $statusKey,
+                                                    16,
+                                                    ['decorative' => true]
+                                                )
+                                                . '</div>';
                                             echo '<div class="facility-progress">';
                                             echo '<div class="facility-progress-bar" style="width: 60%;"></div>';
                                             echo '</div>';
@@ -525,43 +553,49 @@ $pageTitle = '内政管理';
                     <!-- 资源概览 -->
                     <div class="internal-section">
                         <div class="section-title">
-                            <span class="section-icon">💎</span>
+                            <span class="section-icon">
+                                <?php echo renderImageResource(
+                                    'resource_bright_crystal',
+                                    32,
+                                    ['alt' => '资源概览']
+                                ); ?>
+                            </span>
                             资源概览
                         </div>
                         
                         <div class="resource-summary">
                             <div class="resource-item">
-                                <div class="resource-icon">⚪</div>
+                                <div class="resource-icon"><?php echo renderImageResource('resource_bright_crystal', 64); ?></div>
                                 <div class="resource-name">亮晶晶</div>
                                 <div class="resource-amount"><?php echo number_format($resource->getBrightCrystal()); ?></div>
                                 <div class="resource-production">+100/小时</div>
                             </div>
                             <div class="resource-item">
-                                <div class="resource-icon">🔴</div>
+                                <div class="resource-icon"><?php echo renderImageResource('resource_warm_crystal', 64); ?></div>
                                 <div class="resource-name">暖洋洋</div>
                                 <div class="resource-amount"><?php echo number_format($resource->getWarmCrystal()); ?></div>
                                 <div class="resource-production">+80/小时</div>
                             </div>
                             <div class="resource-item">
-                                <div class="resource-icon">🔵</div>
+                                <div class="resource-icon"><?php echo renderImageResource('resource_cold_crystal', 64); ?></div>
                                 <div class="resource-name">冷冰冰</div>
                                 <div class="resource-amount"><?php echo number_format($resource->getColdCrystal()); ?></div>
                                 <div class="resource-production">+90/小时</div>
                             </div>
                             <div class="resource-item">
-                                <div class="resource-icon">🟢</div>
+                                <div class="resource-icon"><?php echo renderImageResource('resource_green_crystal', 64); ?></div>
                                 <div class="resource-name">郁萌萌</div>
                                 <div class="resource-amount"><?php echo number_format($resource->getGreenCrystal()); ?></div>
                                 <div class="resource-production">+85/小时</div>
                             </div>
                             <div class="resource-item">
-                                <div class="resource-icon">🟡</div>
+                                <div class="resource-icon"><?php echo renderImageResource('resource_day_crystal', 64); ?></div>
                                 <div class="resource-name">昼闪闪</div>
                                 <div class="resource-amount"><?php echo number_format($resource->getDayCrystal()); ?></div>
                                 <div class="resource-production">+75/小时</div>
                             </div>
                             <div class="resource-item">
-                                <div class="resource-icon">⚫</div>
+                                <div class="resource-icon"><?php echo renderImageResource('resource_night_crystal', 64); ?></div>
                                 <div class="resource-name">夜静静</div>
                                 <div class="resource-amount"><?php echo number_format($resource->getNightCrystal()); ?></div>
                                 <div class="resource-production">+5/小时</div>
@@ -575,7 +609,13 @@ $pageTitle = '内政管理';
                     <!-- 驻军概览 -->
                     <div class="internal-section">
                         <div class="section-title">
-                            <span class="section-icon">⚔️</span>
+                            <span class="section-icon">
+                                <?php echo renderImageResource(
+                                    'ui_defense',
+                                    32,
+                                    ['alt' => '驻军概览']
+                                ); ?>
+                            </span>
                             驻军概览
                         </div>
                         
@@ -586,16 +626,11 @@ $pageTitle = '内政管理';
                                 <div class="soldier-info">
                                     <span class="soldier-icon">
                                         <?php
-                                        $soldierIcons = [
-                                            'pawn' => '♟️',
-                                            'knight' => '♞',
-                                            'rook' => '♜',
-                                            'bishop' => '♝',
-                                            'golem' => '🗿',
-                                            'scout' => '👁️'
-                                        ];
-                                        echo isset($soldierIcons[$soldier->getType()]) ? 
-                                             $soldierIcons[$soldier->getType()] : '⚔️';
+                                        echo renderImageResource(
+                                            'soldier_' . $soldier->getType(),
+                                            32,
+                                            ['alt' => $soldier->getName()]
+                                        );
                                         ?>
                                     </span>
                                     <div>
@@ -621,10 +656,20 @@ $pageTitle = '内政管理';
                         
                         <div class="quick-actions">
                             <a href="barracks.php?city_id=<?php echo $selectedCityId; ?>" class="action-button">
-                                ⚔️ 训练士兵
+                                <?php echo renderImageResource(
+                                    'facility_barracks',
+                                    24,
+                                    ['decorative' => true]
+                                ); ?>
+                                训练士兵
                             </a>
                             <a href="research.php" class="action-button secondary">
-                                🔬 科技研究
+                                <?php echo renderImageResource(
+                                    'facility_research_lab',
+                                    24,
+                                    ['decorative' => true]
+                                ); ?>
+                                科技研究
                             </a>
                             <a href="generals.php" class="action-button success">
                                 👥 武将管理

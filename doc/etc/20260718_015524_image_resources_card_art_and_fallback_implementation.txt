@@ -1,0 +1,128 @@
+种火集结号 - 图像资源、武将卡视觉与 Emoji 回退实施记录
+时间：2026-07-18 01:55:24 -04:00
+
+一、实施范围
+
+1. 根据 doc/etc/image_resources_specification.txt 制作并导出全部 45 类规范图标：
+   - 7 类资源图标；
+   - 8 类设施图标；
+   - 6 类兵种图标；
+   - 5 类稀有度徽章与 6 类元素徽章；
+   - 5 类地图图标；
+   - 4 类 UI 操作图标与 4 类状态图标。
+2. 所有规范图标均提供 PNG 与 WebP；需要多密度的资源按文档导出两档尺寸。
+3. 生成 7 套 PNG/WebP CSS Sprite，并在主样式表提供资源、设施、兵种、地图、UI 与武将徽章定位类。
+4. 生成 B、A、S、SS、P 五套透明 2:3 卡框，分别提供 400×600 与 800×1200 版本。
+5. 根据 doc/example-general-design.txt 为 G001–G014 生成 14 张原创角色立绘，分别提供 512×768 与 1024×1536 的 PNG/WebP。
+6. 新增可拼装武将卡组件：元素光效、立绘、稀有度卡框、动态名称、等级、COST、属性、技能与回退信息卡均为独立图层。
+7. 公共模板、玩家武将克隆、初始武将、抽取结果及公开卡池条目均传递 template_code；G001B 等重复版本在显示层安全归一到 G001 立绘。
+
+二、全局显示模式
+
+1. 新增 game_config.image_display_mode：
+   - image：输出 WebP/PNG picture，单个文件失败时仅该资源回退 Emoji；
+   - emoji_fallback：不输出正式图像请求，直接显示 Emoji。
+2. 新安装默认使用 image 模式。
+3. 提供 sql/upgrade_20260718_image_resources.sql 供现有安装幂等补充配置。
+4. 后台 config.php 新增专用下拉选择、即时当前模式预览和保存入口。
+5. 图像模式配置使用严格枚举验证；后台所有相关 POST 表单补齐 CSRF，开关关闭值可正确提交。
+
+三、运行时接入
+
+1. includes/image_resources.php：
+   - 统一管理资源键、Emoji、替代文本和 manifest；
+   - 校验 manifest 路径、扩展名、真实文件与资源根目录边界；
+   - 根据显示尺寸选择资源，并输出 WebP 优先、PNG 兼容的 picture；
+   - 为动态 JavaScript 页面仅输出服务器白名单内的安全资源配置。
+2. includes/general_card_ui.php：
+   - 归一武将模板码、稀有度和元素；
+   - 支持 General 对象及招募/卡池数组；
+   - 输出完整卡片、紧凑身份以及逐卡回退。
+3. 武将列表、武将详情、招募结果、初始选择与卡池内容已接入立绘/卡片组件。
+4. 主城设施、地图格、内政设施/兵种/状态、档案统计、研究页面及所有主要玩法页资源栏已接入统一图像组件。
+5. 异步城池刷新和动态地图使用受控客户端配置，并在加载失败时逐项回退。
+
+四、构建与维护
+
+1. assets/images/manifest.json 记录 64 个语义资源：
+   - 45 类规范图标；
+   - 5 套卡框；
+   - 14 名武将立绘。
+2. tools/build_image_assets.py 可从透明图集和现有高分辨率立绘重建全部尺寸、格式、Sprite 与 manifest。
+3. tools/validate_image_assets.py 只读验证：
+   - 清单键与总数；
+   - PNG/WebP 文件存在及实际尺寸；
+   - 规范图标和卡框的 RGBA 透明通道；
+   - 卡框 2:3 比例；
+   - 14 名武将的双分辨率双格式；
+   - 7 套 Sprite 的尺寸与双格式。
+4. assets/images/README.md 记录目录、卡片叠加顺序、角色映射、显示模式及重建命令。
+
+五、验证结果
+
+1. 图像像素级验证通过：
+   - 64 项语义资源；
+   - 45 类规范图标；
+   - 5 套透明 2:3 卡框；
+   - 14 名双分辨率 PNG/WebP 立绘；
+   - 7 套 PNG/WebP Sprite。
+2. 13 个 PHP 测试脚本共 689 项断言全部通过。
+3. 全仓库 PHP 语法检查通过。
+4. assets/js/script.js 与 assets/js/map.js JavaScript 语法检查通过。
+5. 两个 Python 工具编译检查通过。
+6. git diff --check 通过。
+
+六、美术说明
+
+视觉布局参考了用户提供的《メガミエンゲイジ！》截图所体现的日式网页策略卡牌层级、明亮水晶城市与华丽卡框语言。所有角色、卡框、图标和建筑均为本企划重新生成的原创资源，不复用原作 IP 角色、标志或素材。
+
+========================================================================
+
+Fireseed Engage - Image Resources, General Card Visuals, and Emoji Fallback
+Implementation time: 2026-07-18 01:55:24 -04:00
+
+1. Scope
+
+- Implemented every one of the 45 icon families specified by
+  doc/etc/image_resources_specification.txt.
+- Added PNG and WebP variants, required density variants, and seven CSS
+  sprite sets.
+- Added five transparent rarity frames at 400×600 and 800×1200.
+- Added original portraits for all G001–G014 generals at 512×768 and
+  1024×1536 in PNG and WebP.
+- Added a layered 2:3 general-card renderer with dynamic identity, level,
+  cost, stats, skill, element treatment, rarity frame, and complete fallback.
+- Propagated authoritative template_code values through public templates,
+  cloned player generals, starter choices, draw results, and public pool data.
+
+2. Display modes
+
+- Added the strict image_display_mode enum:
+  - image: WebP-first picture output with PNG and per-item Emoji fallback;
+  - emoji_fallback: Emoji-only output with no formal image requests.
+- New installations default to image mode; existing installations receive an
+  idempotent SQL upgrade.
+- Added the global admin selector and preview, with CSRF protection.
+
+3. Runtime integration
+
+- Added a confined manifest resolver and renderer for server-rendered pages.
+- Added allowlisted client configuration for dynamic city and map rendering.
+- Integrated the resource system into general/recruitment views, city,
+  internal affairs, map, profile, research, and shared gameplay resource bars.
+
+4. Build and validation
+
+- assets/images/manifest.json exposes exactly 64 semantic assets.
+- The reproducible builder and read-only pixel validator live under tools/.
+- All 13 PHP test scripts pass: 689 assertions.
+- Repository-wide PHP lint, JavaScript checks, Python compile checks, image
+  validation, and git diff --check all pass.
+
+5. Art note
+
+The hierarchy and presentation adapt the bright crystal-city and ornate
+Japanese browser-strategy card language visible in the user-provided Megami
+Engage screenshots. All characters, frames, icons, and buildings are newly
+generated original assets; no original IP character, logo, or source asset is
+reused.

@@ -1,6 +1,7 @@
 <?php
 // 包含初始化文件
 require_once 'includes/init.php';
+require_once 'includes/gameplay_ui.php';
 
 // 检查用户是否已登录
 if (!isset($_SESSION['user_id'])) {
@@ -265,40 +266,26 @@ $pageTitle = '战斗报告';
                     <li><a href="territory.php">领地</a></li>
                     <li><a href="internal.php">内政</a></li>
                     <li><a href="ranking.php">排名</a></li>
-                    <li class="circuit-points">思考回路: <?php echo $user->getCircuitPoints(); ?> / <?php echo $user->getMaxCircuitPoints(); ?></li>
+                    <li class="circuit-points">
+                        <?php echo renderImageResource(
+                            'resource_circuit_points',
+                            24,
+                            ['alt' => '思考回路 / Circuit Points']
+                        ); ?>
+                        <span class="circuit-label">思考回路:</span>
+                        <span class="circuit-value">
+                            <?php echo number_format($user->getCircuitPoints()); ?> /
+                            <?php echo number_format($user->getMaxCircuitPoints()); ?>
+                        </span>
+                    </li>
                 </ul>
             </nav>
         </header>
         
         <!-- 主内容 -->
         <main>
-            <!-- 资源显示 -->
-            <div class="resource-bar">
-                <div class="resource bright-crystal">
-                    <span class="resource-name">亮晶晶</span>
-                    <span class="resource-value"><?php echo number_format($resource->getBrightCrystal()); ?></span>
-                </div>
-                <div class="resource warm-crystal">
-                    <span class="resource-name">暖洋洋</span>
-                    <span class="resource-value"><?php echo number_format($resource->getWarmCrystal()); ?></span>
-                </div>
-                <div class="resource cold-crystal">
-                    <span class="resource-name">冷冰冰</span>
-                    <span class="resource-value"><?php echo number_format($resource->getColdCrystal()); ?></span>
-                </div>
-                <div class="resource green-crystal">
-                    <span class="resource-name">郁萌萌</span>
-                    <span class="resource-value"><?php echo number_format($resource->getGreenCrystal()); ?></span>
-                </div>
-                <div class="resource day-crystal">
-                    <span class="resource-name">昼闪闪</span>
-                    <span class="resource-value"><?php echo number_format($resource->getDayCrystal()); ?></span>
-                </div>
-                <div class="resource night-crystal">
-                    <span class="resource-name">夜静静</span>
-                    <span class="resource-value"><?php echo number_format($resource->getNightCrystal()); ?></span>
-                </div>
-            </div>
+            <!-- 资源栏 / Resource bar -->
+            <?php renderGameplayResourceBar($resource); ?>
             
             <!-- 战斗报告容器 -->
             <div class="battle-report-container">

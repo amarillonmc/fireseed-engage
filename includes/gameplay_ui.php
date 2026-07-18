@@ -35,9 +35,19 @@ function renderGameplayHeader($pageTitle, $user, $activePage = '') {
         echo '<li><a' . $class . ' href="' . escapeHtml($link[0]) . '">'
             . escapeHtml($link[1]) . '</a></li>';
     }
-    echo '<li class="circuit-points">思考回路: '
+    $circuitIcon = function_exists('renderImageResource')
+        ? renderImageResource(
+            'resource_circuit_points',
+            24,
+            ['alt' => '思考回路 / Circuit Points']
+        )
+        : '<span aria-hidden="true">🧠</span>';
+    echo '<li class="circuit-points">' . $circuitIcon
+        . '<span class="circuit-label">思考回路:</span> '
+        . '<span class="circuit-value">'
         . number_format($user->getCircuitPoints()) . ' / '
-        . number_format($user->getMaxCircuitPoints()) . '</li>';
+        . number_format($user->getMaxCircuitPoints())
+        . '</span></li>';
     echo '</ul></nav>';
     echo '</header>';
 
@@ -71,18 +81,62 @@ function renderGameplayHeader($pageTitle, $user, $activePage = '') {
  */
 function renderGameplayResourceBar($resource) {
     $resources = [
-        ['bright-crystal', '亮晶晶', $resource->getBrightCrystal()],
-        ['warm-crystal', '暖洋洋', $resource->getWarmCrystal()],
-        ['cold-crystal', '冷冰冰', $resource->getColdCrystal()],
-        ['green-crystal', '郁萌萌', $resource->getGreenCrystal()],
-        ['day-crystal', '昼闪闪', $resource->getDayCrystal()],
-        ['night-crystal', '夜静静', $resource->getNightCrystal()]
+        [
+            'bright-crystal',
+            '亮晶晶',
+            $resource->getBrightCrystal(),
+            'resource_bright_crystal',
+            '💎'
+        ],
+        [
+            'warm-crystal',
+            '暖洋洋',
+            $resource->getWarmCrystal(),
+            'resource_warm_crystal',
+            '🔥'
+        ],
+        [
+            'cold-crystal',
+            '冷冰冰',
+            $resource->getColdCrystal(),
+            'resource_cold_crystal',
+            '❄️'
+        ],
+        [
+            'green-crystal',
+            '郁萌萌',
+            $resource->getGreenCrystal(),
+            'resource_green_crystal',
+            '🌿'
+        ],
+        [
+            'day-crystal',
+            '昼闪闪',
+            $resource->getDayCrystal(),
+            'resource_day_crystal',
+            '☀️'
+        ],
+        [
+            'night-crystal',
+            '夜静静',
+            $resource->getNightCrystal(),
+            'resource_night_crystal',
+            '🌙'
+        ]
     ];
 
     echo '<div class="resource-bar">';
     foreach ($resources as $entry) {
+        $icon = function_exists('renderImageResource')
+            ? renderImageResource(
+                $entry[3],
+                32,
+                ['alt' => $entry[1]]
+            )
+            : '<span aria-hidden="true">' . $entry[4] . '</span>';
         echo '<div class="resource ' . escapeHtml($entry[0]) . '">';
-        echo '<span class="resource-name">' . escapeHtml($entry[1]) . '</span>';
+        echo '<span class="resource-name">' . $icon
+            . '<span>' . escapeHtml($entry[1]) . '</span></span>';
         echo '<span class="resource-value">' . number_format((int) $entry[2]) . '</span>';
         echo '</div>';
     }

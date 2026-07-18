@@ -2,6 +2,7 @@
 // 种火集结号 - 邮件、聊天与好友页面 / Fireseed Engage - Mail, chat, and friendship page
 
 require_once 'includes/init.php';
+require_once 'includes/gameplay_ui.php';
 require_once 'includes/classes/SocialService.php';
 require_once 'includes/classes/AllianceService.php';
 
@@ -160,20 +161,25 @@ $pageTitle = '邮件、聊天与好友';
                 <li><a href="map.php">地图</a></li>
                 <li><a href="alliance.php">联盟</a></li>
                 <li><a href="ranking.php">排名</a></li>
-                <li class="circuit-points">思考回路: <?php echo number_format($user->getCircuitPoints()); ?></li>
+                <li class="circuit-points">
+                    <?php echo renderImageResource(
+                        'resource_circuit_points',
+                        24,
+                        ['alt' => '思考回路 / Circuit Points']
+                    ); ?>
+                    <span class="circuit-label">思考回路:</span>
+                    <span class="circuit-value">
+                        <?php echo number_format($user->getCircuitPoints()); ?> /
+                        <?php echo number_format($user->getMaxCircuitPoints()); ?>
+                    </span>
+                </li>
             </ul>
         </nav>
     </header>
 
     <main>
-        <div class="resource-bar">
-            <div class="resource bright-crystal"><span class="resource-name">亮晶晶</span><span class="resource-value"><?php echo number_format($resource->getBrightCrystal()); ?></span></div>
-            <div class="resource warm-crystal"><span class="resource-name">暖洋洋</span><span class="resource-value"><?php echo number_format($resource->getWarmCrystal()); ?></span></div>
-            <div class="resource cold-crystal"><span class="resource-name">冷冰冰</span><span class="resource-value"><?php echo number_format($resource->getColdCrystal()); ?></span></div>
-            <div class="resource green-crystal"><span class="resource-name">郁萌萌</span><span class="resource-value"><?php echo number_format($resource->getGreenCrystal()); ?></span></div>
-            <div class="resource day-crystal"><span class="resource-name">昼闪闪</span><span class="resource-value"><?php echo number_format($resource->getDayCrystal()); ?></span></div>
-            <div class="resource night-crystal"><span class="resource-name">夜静静</span><span class="resource-value"><?php echo number_format($resource->getNightCrystal()); ?></span></div>
-        </div>
+        <!-- 资源栏 / Resource bar -->
+        <?php renderGameplayResourceBar($resource); ?>
 
         <?php if ($actionResult !== null): ?>
             <div class="message <?php echo $actionResult['success'] ? 'success' : 'error'; ?>">

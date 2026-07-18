@@ -13,6 +13,10 @@ document.addEventListener('DOMContentLoaded', function() {
     let centerX = Number.isInteger(requestedX) ? requestedX : Math.floor(MAP_WIDTH / 2);
     let centerY = Number.isInteger(requestedY) ? requestedY : Math.floor(MAP_HEIGHT / 2);
     const explorationArmySelect = document.getElementById('explore-army');
+    const imageResourceConfig = window.FIRESEED_IMAGE_RESOURCES
+        && typeof window.FIRESEED_IMAGE_RESOURCES === 'object'
+        ? window.FIRESEED_IMAGE_RESOURCES
+        : { mode: 'emoji_fallback', assets: {} };
     
     // 确保坐标在地图范围内
     centerX = Math.max(0, Math.min(MAP_WIDTH - 1, centerX));
@@ -104,6 +108,113 @@ document.addEventListener('DOMContentLoaded', function() {
             })
             .catch(error => console.error('Error loading map:', error));
     }
+
+    // 将地图类型映射到受控资源键和 Emoji / Map tile types to controlled keys and Emoji
+    function getMapIconDefinition(tile) {
+        if (tile.type === 'empty') {
+            return { key: 'map_empty', emoji: '🏞️', alt: '空白地块', size: 34 };
+        }
+        if (tile.type === 'resource') {
+            const resourceEmoji = {
+                bright: '💎',
+                warm: '🔥',
+                cold: '❄️',
+                green: '🌿',
+                day: '☀️',
+                night: '🌙'
+            };
+            return {
+                key: 'map_resource',
+                emoji: resourceEmoji[tile.subtype] || '💎',
+                alt: '资源地块',
+                size: 34
+            };
+        }
+        if (tile.type === 'npc_fort') {
+            return { key: 'map_npc_fort', emoji: '🏰', alt: 'NPC城池', size: 36 };
+        }
+        if (tile.type === 'player_city') {
+            return { key: 'map_player_city', emoji: '🏙️', alt: '玩家城池', size: 36 };
+        }
+        if (tile.type === 'special' && tile.subtype === 'silver_hole') {
+            return { key: 'map_silver_hole', emoji: '🌟', alt: '银白之孔', size: 46 };
+        }
+        if (tile.type === 'special') {
+            return { key: null, emoji: '🔮', alt: '特殊地点', size: 34 };
+        }
+
+        return { key: null, emoji: '❓', alt: '未知地块', size: 34 };
+    }
+
+    // 创建图片并在失败时逐项回退 Emoji / Create an image with per-item Emoji fallback
+    function createMapIconNode(tile) {
+        const definition = getMapIconDefinition(tile);
+        const wrapper = document.createElement('span');
+        wrapper.className = 'game-image-resource map-image-resource';
+        wrapper.style.setProperty('--game-image-size', `${definition.size}px`);
+
+        const fallback = document.createElement('span');
+        fallback.className = 'game-image-resource__fallback';
+        fallback.setAttribute('role', 'img');
+        fallback.setAttribute('aria-label', definition.alt);
+        fallback.textContent = definition.emoji;
+
+        const asset = definition.key
+            && imageResourceConfig.assets
+            && imageResourceConfig.assets[definition.key]
+            ? imageResourceConfig.assets[definition.key]
+            : null;
+        const variants = asset && Array.isArray(asset.variants)
+            ? asset.variants.filter(variant => (
+                variant
+                && Number.isInteger(Number(variant.width))
+                && typeof variant.png === 'string'
+                && variant.png !== ''
+            ))
+            : [];
+        if (imageResourceConfig.mode !== 'image' || variants.length === 0) {
+            wrapper.appendChild(fallback);
+            return wrapper;
+        }
+
+        const selected = variants.find(variant => (
+            Number(variant.width) >= definition.size
+        )) || variants[variants.length - 1];
+        const picture = document.createElement('picture');
+        const webpVariants = variants.filter(variant => (
+            typeof variant.webp === 'string' && variant.webp !== ''
+        ));
+        if (webpVariants.length > 0) {
+            const source = document.createElement('source');
+            source.type = 'image/webp';
+            source.srcset = webpVariants
+                .map(variant => `${variant.webp} ${Number(variant.width)}w`)
+                .join(', ');
+            source.sizes = `${definition.size}px`;
+            picture.appendChild(source);
+        }
+
+        const image = document.createElement('img');
+        image.src = selected.png;
+        image.srcset = variants
+            .map(variant => `${variant.png} ${Number(variant.width)}w`)
+            .join(', ');
+        image.sizes = `${definition.size}px`;
+        image.width = definition.size;
+        image.height = definition.size;
+        image.alt = definition.alt;
+        image.loading = 'lazy';
+        image.decoding = 'async';
+        image.addEventListener('error', function() {
+            picture.hidden = true;
+            fallback.hidden = false;
+        }, { once: true });
+        picture.appendChild(image);
+        wrapper.appendChild(picture);
+        fallback.hidden = true;
+        wrapper.appendChild(fallback);
+        return wrapper;
+    }
     
     // 渲染地图
     function renderMap(tiles, centerX, centerY) {
@@ -167,50 +278,7 @@ document.addEventListener('DOMContentLoaded', function() {
                     const icon = document.createElement('div');
                     icon.className = 'map-cell-icon';
                     
-                    switch (tile.type) {
-                        case 'empty':
-                            icon.textContent = '🏞️';
-                            break;
-                        case 'resource':
-                            switch (tile.subtype) {
-                                case 'bright':
-                                    icon.textContent = '💎';
-                                    break;
-                                case 'warm':
-                                    icon.textContent = '🔥';
-                                    break;
-                                case 'cold':
-                                    icon.textContent = '❄️';
-                                    break;
-                                case 'green':
-                                    icon.textContent = '🌿';
-                                    break;
-                                case 'day':
-                                    icon.textContent = '☀️';
-                                    break;
-                                case 'night':
-                                    icon.textContent = '🌙';
-                                    break;
-                                default:
-                                    icon.textContent = '💎';
-                            }
-                            break;
-                        case 'npc_fort':
-                            icon.textContent = '🏰';
-                            break;
-                        case 'player_city':
-                            icon.textContent = '🏙️';
-                            break;
-                        case 'special':
-                            if (tile.subtype === 'silver_hole') {
-                                icon.textContent = '🌟';
-                            } else {
-                                icon.textContent = '🔮';
-                            }
-                            break;
-                        default:
-                            icon.textContent = '❓';
-                    }
+                    icon.appendChild(createMapIconNode(tile));
                     
                     cell.appendChild(icon);
                     

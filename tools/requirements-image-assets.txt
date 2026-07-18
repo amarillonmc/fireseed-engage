@@ -1,0 +1,2 @@
+# 图像资源构建依赖 / Image-asset build dependency
+Pillow==12.2.0

@@ -289,7 +289,18 @@ $pageTitle = '用户档案';
                     <li><a href="territory.php">领地</a></li>
                     <li><a href="internal.php">内政</a></li>
                     <li><a href="ranking.php">排名</a></li>
-                    <li class="circuit-points">思考回路: <?php echo $user->getCircuitPoints(); ?> / <?php echo $user->getMaxCircuitPoints(); ?></li>
+                    <li class="circuit-points">
+                        <?php echo renderImageResource(
+                            'resource_circuit_points',
+                            24,
+                            ['alt' => '思考回路 / Circuit Points']
+                        ); ?>
+                        <span class="circuit-label">思考回路:</span>
+                        <span class="circuit-value">
+                            <?php echo number_format($user->getCircuitPoints()); ?> /
+                            <?php echo number_format($user->getMaxCircuitPoints()); ?>
+                        </span>
+                    </li>
                 </ul>
             </nav>
         </header>
@@ -341,37 +352,43 @@ $pageTitle = '用户档案';
                     <!-- 资源统计 -->
                     <div class="stats-card">
                         <div class="stats-title">
-                            <span class="stats-icon">💎</span>
+                            <span class="stats-icon">
+                                <?php echo renderImageResource(
+                                    'resource_bright_crystal',
+                                    32,
+                                    ['decorative' => true]
+                                ); ?>
+                            </span>
                             资源统计
                         </div>
                         <div class="resources-grid">
                             <div class="resource-item">
-                                <div class="resource-icon">⚪</div>
+                                <div class="resource-icon"><?php echo renderImageResource('resource_bright_crystal', 64); ?></div>
                                 <div class="resource-name">亮晶晶</div>
                                 <div class="resource-amount"><?php echo number_format($resource->getBrightCrystal()); ?></div>
                             </div>
                             <div class="resource-item">
-                                <div class="resource-icon">🔴</div>
+                                <div class="resource-icon"><?php echo renderImageResource('resource_warm_crystal', 64); ?></div>
                                 <div class="resource-name">暖洋洋</div>
                                 <div class="resource-amount"><?php echo number_format($resource->getWarmCrystal()); ?></div>
                             </div>
                             <div class="resource-item">
-                                <div class="resource-icon">🔵</div>
+                                <div class="resource-icon"><?php echo renderImageResource('resource_cold_crystal', 64); ?></div>
                                 <div class="resource-name">冷冰冰</div>
                                 <div class="resource-amount"><?php echo number_format($resource->getColdCrystal()); ?></div>
                             </div>
                             <div class="resource-item">
-                                <div class="resource-icon">🟢</div>
+                                <div class="resource-icon"><?php echo renderImageResource('resource_green_crystal', 64); ?></div>
                                 <div class="resource-name">郁萌萌</div>
                                 <div class="resource-amount"><?php echo number_format($resource->getGreenCrystal()); ?></div>
                             </div>
                             <div class="resource-item">
-                                <div class="resource-icon">🟡</div>
+                                <div class="resource-icon"><?php echo renderImageResource('resource_day_crystal', 64); ?></div>
                                 <div class="resource-name">昼闪闪</div>
                                 <div class="resource-amount"><?php echo number_format($resource->getDayCrystal()); ?></div>
                             </div>
                             <div class="resource-item">
-                                <div class="resource-icon">⚫</div>
+                                <div class="resource-icon"><?php echo renderImageResource('resource_night_crystal', 64); ?></div>
                                 <div class="resource-name">夜静静</div>
                                 <div class="resource-amount"><?php echo number_format($resource->getNightCrystal()); ?></div>
                             </div>
@@ -381,7 +398,13 @@ $pageTitle = '用户档案';
                     <!-- 武将统计 -->
                     <div class="stats-card">
                         <div class="stats-title">
-                            <span class="stats-icon">⚔️</span>
+                            <span class="stats-icon">
+                                <?php echo renderImageResource(
+                                    'ui_attack',
+                                    32,
+                                    ['decorative' => true]
+                                ); ?>
+                            </span>
                             武将统计
                         </div>
                         <?php if (!empty($generals)): ?>
@@ -397,7 +420,14 @@ $pageTitle = '用户档案';
                         <div class="generals-summary">
                             <?php foreach ($rarityCounts as $rarity => $count): ?>
                             <div class="rarity-count">
-                                <div class="rarity-label"><?php echo $rarity; ?>级</div>
+                                <div class="rarity-label">
+                                    <?php echo renderImageResource(
+                                        'rarity_' . strtolower($rarity),
+                                        24,
+                                        ['alt' => $rarity . '级']
+                                    ); ?>
+                                    <?php echo escapeHtml($rarity); ?>级
+                                </div>
                                 <div class="rarity-number rarity-<?php echo $rarity; ?>"><?php echo $count; ?></div>
                             </div>
                             <?php endforeach; ?>
@@ -410,7 +440,13 @@ $pageTitle = '用户档案';
                     <!-- 科技效果 -->
                     <div class="stats-card">
                         <div class="stats-title">
-                            <span class="stats-icon">🔬</span>
+                            <span class="stats-icon">
+                                <?php echo renderImageResource(
+                                    'facility_research_lab',
+                                    32,
+                                    ['decorative' => true]
+                                ); ?>
+                            </span>
                             科技效果
                         </div>
                         <?php if (!empty($technologyEffects)): ?>
@@ -430,7 +466,13 @@ $pageTitle = '用户档案';
                     <!-- 城池列表 -->
                     <div class="stats-card">
                         <div class="stats-title">
-                            <span class="stats-icon">🏰</span>
+                            <span class="stats-icon">
+                                <?php echo renderImageResource(
+                                    'map_player_city',
+                                    32,
+                                    ['decorative' => true]
+                                ); ?>
+                            </span>
                             城池列表
                         </div>
                         <?php if (!empty($cities)): ?>

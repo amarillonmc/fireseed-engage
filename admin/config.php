@@ -26,9 +26,11 @@ $gameConfig = new GameConfig();
 $error = '';
 $success = '';
 
-// 处理配置更新
+// 处理配置更新 / Process configuration updates
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
-    if (isset($_POST['action'])) {
+    if (!validateCsrfToken()) {
+        $error = '请求验证失败，请刷新页面后重试 / Request validation failed; refresh and try again';
+    } elseif (isset($_POST['action'])) {
         switch ($_POST['action']) {
             case 'update_config':
                 $configKey = $_POST['config_key'] ?? '';
@@ -39,7 +41,16 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 } else {
                     // 验证配置值
                     if ($gameConfig->validateConfig($configKey, $configValue)) {
-                        if ($gameConfig->set($configKey, $configValue)) {
+                        // 缺少升级SQL时也将新图像项归入显示分类 / Keep the new image setting in the display category even before the upgrade SQL runs
+                        $configCategory = $configKey === 'image_display_mode'
+                            ? 'display'
+                            : null;
+                        if ($gameConfig->set(
+                            $configKey,
+                            $configValue,
+                            null,
+                            $configCategory
+                        )) {
                             $success = '配置更新成功';
                             $user->logAdminAction('update_config', 'config', null, "$configKey = $configValue");
                         } else {
@@ -95,6 +106,7 @@ $selectedCategory = $_GET['category'] ?? 'basic';
 
 // 获取当前分类的配置
 $configs = $gameConfig->getAll($selectedCategory);
+$imageDisplayMode = getImageDisplayMode();
 
 $pageTitle = '系统配置';
 ?>
@@ -323,6 +335,36 @@ $pageTitle = '系统配置';
             font-size: 14px;
             margin-bottom: 15px;
         }
+
+        .image-mode-form {
+            display: grid;
+            gap: 12px;
+        }
+
+        .image-mode-select {
+            width: 100%;
+            padding: 8px;
+            border: 1px solid #ccc;
+            border-radius: 4px;
+            background: #fff;
+        }
+
+        .image-mode-preview {
+            display: flex;
+            align-items: center;
+            gap: 14px;
+            min-height: 72px;
+            padding: 10px;
+            border: 1px dashed #b0bec5;
+            border-radius: 6px;
+            background: #fff;
+        }
+
+        .image-mode-preview .image-resource,
+        .image-mode-preview picture,
+        .image-mode-preview img {
+            display: inline-flex;
+        }
         
         .toggle-switch {
             position: relative;
@@ -414,8 +456,10 @@ $pageTitle = '系统配置';
                         <div class="quick-config-title">维护模式</div>
                         <div class="quick-config-desc">开启后将阻止普通用户访问游戏</div>
                         <form method="post" style="display: inline;">
+                            <?php echo csrfField(); ?>
                             <input type="hidden" name="action" value="update_config">
                             <input type="hidden" name="config_key" value="maintenance_mode">
+                            <input type="hidden" name="config_value" value="0">
                             <label class="toggle-switch">
                                 <input type="checkbox" name="config_value" value="1" 
                                        <?php echo GameConfig::get('maintenance_mode', 0) ? 'checked' : ''; ?>
@@ -429,14 +473,69 @@ $pageTitle = '系统配置';
                         <div class="quick-config-title">新用户注册</div>
                         <div class="quick-config-desc">控制是否允许新用户注册</div>
                         <form method="post" style="display: inline;">
+                            <?php echo csrfField(); ?>
                             <input type="hidden" name="action" value="update_config">
                             <input type="hidden" name="config_key" value="new_player_registration">
+                            <input type="hidden" name="config_value" value="0">
                             <label class="toggle-switch">
                                 <input type="checkbox" name="config_value" value="1" 
                                        <?php echo GameConfig::get('new_player_registration', 1) ? 'checked' : ''; ?>
                                        onchange="this.form.submit()">
                                 <span class="slider"></span>
                             </label>
+                        </form>
+                    </div>
+
+                    <div class="quick-config-item">
+                        <div class="quick-config-title">图像资源显示 / Image resources</div>
+                        <div class="quick-config-desc">
+                            正式图像优先使用 WebP 并以 PNG 兼容；文件缺失或加载失败时逐项回退到 Emoji。
+                            / Formal images prefer WebP with PNG compatibility and fall back per item.
+                        </div>
+                        <form method="post" class="image-mode-form">
+                            <?php echo csrfField(); ?>
+                            <input type="hidden" name="action" value="update_config">
+                            <input type="hidden" name="config_key" value="image_display_mode">
+                            <label for="image-display-mode">全局显示模式 / Global display mode</label>
+                            <select
+                                id="image-display-mode"
+                                class="image-mode-select"
+                                name="config_value"
+                            >
+                                <option value="image" <?php echo $imageDisplayMode === 'image' ? 'selected' : ''; ?>>
+                                    正式图像 / Image resources
+                                </option>
+                                <option value="emoji_fallback" <?php echo $imageDisplayMode === 'emoji_fallback' ? 'selected' : ''; ?>>
+                                    Emoji 回退 / Emoji fallback
+                                </option>
+                            </select>
+                            <div class="image-mode-preview" aria-label="当前图像模式预览">
+                                <?php
+                                echo renderImageResource(
+                                    'resource_bright_crystal',
+                                    48,
+                                    ['loading' => 'eager']
+                                );
+                                echo renderImageResource(
+                                    'facility_barracks',
+                                    56,
+                                    ['loading' => 'eager']
+                                );
+                                echo renderImageResource(
+                                    'soldier_knight',
+                                    48,
+                                    ['loading' => 'eager']
+                                );
+                                ?>
+                                <span>
+                                    当前：<?php echo $imageDisplayMode === 'image'
+                                        ? '正式图像 / Image resources'
+                                        : 'Emoji 回退 / Emoji fallback'; ?>
+                                </span>
+                            </div>
+                            <button type="submit" class="btn btn-primary">
+                                保存显示模式 / Save display mode
+                            </button>
                         </form>
                     </div>
                 </div>
@@ -447,17 +546,18 @@ $pageTitle = '系统配置';
                 <?php foreach ($categories as $category): ?>
                 <a href="config.php?category=<?php echo urlencode($category); ?>" 
                    class="category-tab <?php echo $selectedCategory == $category ? 'active' : ''; ?>">
-                    <?php echo ucfirst($category); ?>
+                    <?php echo escapeHtml(ucfirst($category)); ?>
                 </a>
                 <?php endforeach; ?>
             </div>
 
             <!-- 配置列表 -->
             <div class="config-section">
-                <h3><?php echo ucfirst($selectedCategory); ?> 配置</h3>
+                <h3><?php echo escapeHtml(ucfirst($selectedCategory)); ?> 配置</h3>
                 
                 <?php if (!empty($configs)): ?>
                 <form method="post">
+                    <?php echo csrfField(); ?>
                     <input type="hidden" name="action" value="batch_update">
                     
                     <table class="config-table">
@@ -480,6 +580,18 @@ $pageTitle = '系统配置';
                                     <input type="text" class="config-input" 
                                            value="<?php echo htmlspecialchars($config['value']); ?>" 
                                            disabled>
+                                    <?php elseif ($config['key'] === 'image_display_mode'): ?>
+                                    <select
+                                        class="config-input"
+                                        name="config_image_display_mode"
+                                    >
+                                        <option value="image" <?php echo $config['value'] === 'image' ? 'selected' : ''; ?>>
+                                            正式图像 / Image resources
+                                        </option>
+                                        <option value="emoji_fallback" <?php echo $config['value'] === 'emoji_fallback' ? 'selected' : ''; ?>>
+                                            Emoji 回退 / Emoji fallback
+                                        </option>
+                                    </select>
                                     <?php else: ?>
                                     <input type="text" class="config-input" 
                                            name="config_<?php echo htmlspecialchars($config['key']); ?>"
@@ -506,7 +618,12 @@ $pageTitle = '系统配置';
                     <div class="action-buttons">
                         <button type="submit" class="btn btn-primary">保存所有更改</button>
                         <button type="button" class="btn btn-warning" 
-                                onclick="resetCategory('<?php echo $selectedCategory; ?>')">
+                                onclick="resetCategory(<?php echo escapeHtml(
+                                    json_encode(
+                                        (string) $selectedCategory,
+                                        JSON_UNESCAPED_UNICODE
+                                    )
+                                ); ?>)">
                             重置为默认值
                         </button>
                     </div>
@@ -525,16 +642,26 @@ $pageTitle = '系统配置';
             if (confirm('确定要重置 ' + category + ' 分类的所有配置到默认值吗？此操作不可撤销。')) {
                 const form = document.createElement('form');
                 form.method = 'post';
-                form.innerHTML = `
-                    <input type="hidden" name="action" value="reset_category">
-                    <input type="hidden" name="category" value="${category}">
-                `;
+
+                // 使用 DOM 属性写入受控字段并携带 CSRF / Write controlled fields through DOM properties and include CSRF
+                const fields = {
+                    action: 'reset_category',
+                    category: category,
+                    csrf_token: <?php echo json_encode(getCsrfToken()); ?>
+                };
+                Object.keys(fields).forEach(name => {
+                    const input = document.createElement('input');
+                    input.type = 'hidden';
+                    input.name = name;
+                    input.value = fields[name];
+                    form.appendChild(input);
+                });
                 document.body.appendChild(form);
                 form.submit();
             }
         }
         
-        // 自动保存提示
+        // 自动保存提示 / Warn about unsaved changes
         let hasChanges = false;
         document.querySelectorAll('.config-input').forEach(input => {
             input.addEventListener('input', function() {
@@ -549,9 +676,11 @@ $pageTitle = '系统配置';
             }
         });
         
-        // 表单提交后重置更改标记
-        document.querySelector('form').addEventListener('submit', function() {
-            hasChanges = false;
+        // 任意表单提交后重置更改标记 / Reset the dirty flag after any form submission
+        document.querySelectorAll('form').forEach(form => {
+            form.addEventListener('submit', function() {
+                hasChanges = false;
+            });
         });
     </script>
 </body>

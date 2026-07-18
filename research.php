@@ -276,7 +276,18 @@ $categoryNames = [
                     <li><a href="territory.php">领地</a></li>
                     <li><a href="internal.php">内政</a></li>
                     <li><a href="ranking.php">排名</a></li>
-                    <li class="circuit-points">思考回路: <?php echo $user->getCircuitPoints(); ?> / <?php echo $user->getMaxCircuitPoints(); ?></li>
+                    <li class="circuit-points">
+                        <?php echo renderImageResource(
+                            'resource_circuit_points',
+                            24,
+                            ['alt' => '思考回路 / Circuit Points']
+                        ); ?>
+                        <span class="circuit-label">思考回路:</span>
+                        <span class="circuit-value">
+                            <?php echo number_format($user->getCircuitPoints()); ?> /
+                            <?php echo number_format($user->getMaxCircuitPoints()); ?>
+                        </span>
+                    </li>
                 </ul>
             </nav>
         </header>
@@ -286,7 +297,16 @@ $categoryNames = [
             <div class="research-container">
                 <!-- 研究所信息 -->
                 <div class="research-header">
-                    <h3><span class="emoji-icon">🔬</span>科技研究中心</h3>
+                    <h3>
+                        <span class="emoji-icon">
+                            <?php echo renderImageResource(
+                                'facility_research_lab',
+                                32,
+                                ['decorative' => true]
+                            ); ?>
+                        </span>
+                        科技研究中心
+                    </h3>
                     <div class="research-lab-info">
                         <?php if ($researchLabLevel > 0): ?>
                             <p><strong>研究所等级:</strong> <?php echo $researchLabLevel; ?></p>

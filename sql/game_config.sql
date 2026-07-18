@@ -21,6 +21,9 @@ INSERT INTO `game_config` (`key`, `value`, `description`, `is_constant`, `catego
 ('new_player_registration', '1', '是否允许新玩家注册 (0=关闭, 1=开启)', 0, 'basic'),
 ('maintenance_mode', '0', '维护模式 (0=关闭, 1=开启)', 0, 'basic'),
 
+-- 图像资源显示设置 / Image-resource display settings
+('image_display_mode', 'image', '全局图像显示模式：image=正式图像，emoji_fallback=仅显示Emoji回退 / Global image mode: image or emoji_fallback', 0, 'display'),
+
 -- 资源相关设置
 ('initial_bright_crystal', '1000', '新玩家初始亮晶晶数量', 0, 'resources'),
 ('initial_warm_crystal', '1000', '新玩家初始暖洋洋数量', 0, 'resources'),

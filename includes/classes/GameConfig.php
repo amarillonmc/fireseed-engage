@@ -270,7 +270,8 @@ class GameConfig {
             'vassal_release_resource_rate' => 0.70,
             'vassal_release_relocation_mode' => 'outer',
             'vassal_release_lose_all_territory' => 1,
-            'vassal_release_refund_circuit' => 1
+            'vassal_release_refund_circuit' => 1,
+            'image_display_mode' => 'image'
         ];
         
         $success = true;
@@ -334,7 +335,11 @@ class GameConfig {
                 'values' => ['outer', 'middle', 'subbase']
             ],
             'vassal_release_lose_all_territory' => ['type' => 'bool'],
-            'vassal_release_refund_circuit' => ['type' => 'bool']
+            'vassal_release_refund_circuit' => ['type' => 'bool'],
+            'image_display_mode' => [
+                'type' => 'enum',
+                'values' => ['image', 'emoji_fallback']
+            ]
         ];
         
         if (!isset($validationRules[$key])) {

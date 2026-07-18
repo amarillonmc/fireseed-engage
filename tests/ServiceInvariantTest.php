@@ -60,6 +60,10 @@ $getMap = file_get_contents($root . '/api/get_map.php');
 $attackTarget = file_get_contents($root . '/api/attack_target.php');
 $battleReportPage = file_get_contents($root . '/battle_report.php');
 $battleReportApi = file_get_contents($root . '/api/get_battle_report.php');
+$imageResources = file_get_contents($root . '/includes/image_resources.php');
+$gameConfig = file_get_contents($root . '/includes/classes/GameConfig.php');
+$adminConfig = file_get_contents($root . '/admin/config.php');
+$init = file_get_contents($root . '/includes/init.php');
 
 assertServiceInvariant(
     strpos($progress, 'IF(progress + ? >= ?') === false,
@@ -272,6 +276,44 @@ assertServiceInvariant(
         && strpos($adminSkills, 'DELETE FROM skill_card_catalog') === false
         && strpos($getSkillApi, "hasPermission('manage_skills')") !== false,
     'Catalog removal must be non-destructive and its detail API permission-gated'
+);
+assertServiceInvariant(
+    strpos($imageResources, 'function getImageDisplayMode()') !== false
+        && strpos($imageResources, 'function isImageDisplayEnabled()') !== false
+        && strpos($imageResources, 'function getImageResourceManifest()') !== false
+        && strpos($imageResources, 'function renderImageResource(') !== false
+        && strpos($imageResources, 'function getImageResourceClientConfig(') !== false,
+    'Image resources must expose one shared server and client helper API'
+);
+assertServiceInvariant(
+    strpos($imageResources, 'isImageResourceFileAvailable(') !== false
+        && strpos($imageResources, '<source type="image/webp"') !== false
+        && strpos($imageResources, 'onerror="this.parentElement.hidden=true;') !== false,
+    'Each formal image must be server-verified and retain browser Emoji fallback'
+);
+assertServiceInvariant(
+    strpos($gameConfig, "'image_display_mode' => 'image'") !== false
+        && strpos($gameConfig, "'values' => ['image', 'emoji_fallback']") !== false,
+    'Image display configuration must use a strict enum with image as default'
+);
+assertServiceInvariant(
+    strpos($adminConfig, 'validateCsrfToken()') !== false
+        && substr_count($adminConfig, 'csrfField()') >= 4
+        && strpos($adminConfig, 'csrf_token:') !== false
+        && strpos($adminConfig, 'name="config_key" value="image_display_mode"') !== false
+        && strpos($adminConfig, 'image-mode-preview') !== false,
+    'Every configuration form and reset must use CSRF while exposing a mode preview'
+);
+$functionsLoad = strpos($init, "require_once 'includes/functions.php';");
+$imageResourcesLoad = strpos(
+    $init,
+    "require_once 'includes/image_resources.php';"
+);
+assertServiceInvariant(
+    $functionsLoad !== false
+        && $imageResourcesLoad !== false
+        && $functionsLoad < $imageResourcesLoad,
+    'Image rendering helpers must load after the shared escaping helpers'
 );
 
 assertServiceInvariant(

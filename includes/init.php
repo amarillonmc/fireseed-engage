@@ -45,6 +45,12 @@ require_once 'includes/classes/SubBaseService.php';
 // 包含辅助函数
 require_once 'includes/functions.php';
 
+// 包含统一图像资源与 Emoji 回退辅助函数 / Include unified image-resource and Emoji-fallback helpers
+require_once 'includes/image_resources.php';
+
+// 包含可拼装武将卡界面辅助函数 / Include composable general-card UI helpers
+require_once 'includes/general_card_ui.php';
+
 // 获取数据库连接
 $db = Database::getInstance()->getConnection();
 

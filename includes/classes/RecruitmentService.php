@@ -47,6 +47,11 @@ class RecruitmentService {
 
         try {
             $query = "SELECT g.general_id, catalog.template_code,
+                             (SELECT gs.skill_name
+                                FROM general_skills gs
+                               WHERE gs.general_id = g.general_id
+                               ORDER BY gs.slot, gs.skill_id
+                               LIMIT 1) AS skill_name,
                              g.name, g.source, g.rarity,
                              g.cost, g.element, g.level,
                              g.hp, g.max_hp, g.attack,
@@ -497,6 +502,11 @@ class RecruitmentService {
      */
     private function getTemplate($templateGeneralId) {
         $query = "SELECT g.general_id, catalog.template_code,
+                         (SELECT gs.skill_name
+                            FROM general_skills gs
+                           WHERE gs.general_id = g.general_id
+                           ORDER BY gs.slot, gs.skill_id
+                           LIMIT 1) AS skill_name,
                          g.name, g.source, g.rarity,
                          g.cost, g.element, g.level,
                          g.hp, g.max_hp, g.attack,
@@ -635,6 +645,9 @@ class RecruitmentService {
 
         $ownedGeneral['template_general_id'] = (int) $template['general_id'];
         $ownedGeneral['template_code'] = (string) $template['template_code'];
+        $ownedGeneral['skill_name'] = isset($template['skill_name'])
+            ? (string) $template['skill_name']
+            : '';
         $ownedGeneral['recruit_type'] = $recruitType;
         $ownedGeneral['duplicate'] = true;
         $ownedGeneral['duplicate_skill_points'] = $skillPoints;
@@ -746,6 +759,9 @@ class RecruitmentService {
             'defense' => $defense,
             'speed' => $speed,
             'intelligence' => $intelligence,
+            'skill_name' => isset($template['skill_name'])
+                ? (string) $template['skill_name']
+                : '',
             'recruit_type' => $recruitType
         ];
     }
@@ -988,6 +1004,9 @@ class RecruitmentService {
 
         $row['cost'] = (float) $row['cost'];
         $row['template_code'] = (string) $row['template_code'];
+        $row['skill_name'] = isset($row['skill_name'])
+            ? (string) $row['skill_name']
+            : '';
 
         return $row;
     }

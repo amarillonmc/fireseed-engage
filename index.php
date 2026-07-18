@@ -1,6 +1,7 @@
 <?php
 // 包含初始化文件
 require_once 'includes/init.php';
+require_once 'includes/gameplay_ui.php';
 
 // 检查用户是否已登录
 if (!isset($_SESSION['user_id'])) {
@@ -65,7 +66,19 @@ $pageTitle = '主页';
                     <li><a href="internal.php">内政</a></li>
                     <li><a href="ranking.php">排名</a></li>
                     <li><a href="vassal.php">附属</a></li>
-                    <li class="circuit-points">思考回路: <?php echo $user->getCircuitPoints(); ?> / <?php echo $user->getMaxCircuitPoints(); ?></li>
+                    <li class="circuit-points">
+                        <?php echo renderImageResource(
+                            'resource_circuit_points',
+                            24,
+                            ['alt' => '思考回路 / Circuit Points']
+                        ); ?>
+                        <span class="circuit-label">思考回路:</span>
+                        <span class="circuit-value">
+                            <?php echo number_format($user->getCircuitPoints()); ?>
+                            /
+                            <?php echo number_format($user->getMaxCircuitPoints()); ?>
+                        </span>
+                    </li>
                 </ul>
             </nav>
         </header>
@@ -82,33 +95,7 @@ $pageTitle = '主页';
             </div>
             <?php endif; ?>
 
-            <!-- 资源显示 -->
-            <div class="resource-bar">
-                <div class="resource bright-crystal">
-                    <span class="resource-name">亮晶晶</span>
-                    <span class="resource-value"><?php echo number_format($resource->getBrightCrystal()); ?></span>
-                </div>
-                <div class="resource warm-crystal">
-                    <span class="resource-name">暖洋洋</span>
-                    <span class="resource-value"><?php echo number_format($resource->getWarmCrystal()); ?></span>
-                </div>
-                <div class="resource cold-crystal">
-                    <span class="resource-name">冷冰冰</span>
-                    <span class="resource-value"><?php echo number_format($resource->getColdCrystal()); ?></span>
-                </div>
-                <div class="resource green-crystal">
-                    <span class="resource-name">郁萌萌</span>
-                    <span class="resource-value"><?php echo number_format($resource->getGreenCrystal()); ?></span>
-                </div>
-                <div class="resource day-crystal">
-                    <span class="resource-name">昼闪闪</span>
-                    <span class="resource-value"><?php echo number_format($resource->getDayCrystal()); ?></span>
-                </div>
-                <div class="resource night-crystal">
-                    <span class="resource-name">夜静静</span>
-                    <span class="resource-value"><?php echo number_format($resource->getNightCrystal()); ?></span>
-                </div>
-            </div>
+            <?php renderGameplayResourceBar($resource); ?>
             
             <?php if ($mainCity): ?>
             <!-- 城池视图 -->
@@ -130,7 +117,17 @@ $pageTitle = '主页';
                             foreach ($facilities as $facility) {
                                 if ($facility->getXPos() == $x && $facility->getYPos() == $y) {
                                     echo '<div class="city-cell facility ' . $facility->getType() . '" data-facility-id="' . $facility->getFacilityId() . '">';
-                                    echo '<span class="facility-name">' . $facility->getName() . '</span>';
+                                    echo renderImageResource(
+                                        'facility_' . $facility->getType(),
+                                        32,
+                                        [
+                                            'alt' => $facility->getName(),
+                                            'class' => 'city-facility-icon'
+                                        ]
+                                    );
+                                    echo '<span class="facility-name">'
+                                        . escapeHtml($facility->getName())
+                                        . '</span>';
                                     echo '<span class="facility-level">Lv.' . $facility->getLevel() . '</span>';
                                     echo '</div>';
                                     $facilityFound = true;
@@ -167,6 +164,27 @@ $pageTitle = '主页';
         </footer>
     </div>
     
+    <script>
+        // 城池异步刷新复用服务器资源白名单 / Async city refresh reuses the server asset allowlist
+        window.FIRESEED_IMAGE_RESOURCES = <?php echo json_encode(
+            getImageResourceClientConfig([
+                'facility_resource_production',
+                'facility_governor_office',
+                'facility_barracks',
+                'facility_research_lab',
+                'facility_dormitory',
+                'facility_storage',
+                'facility_watchtower',
+                'facility_workshop'
+            ]),
+            JSON_UNESCAPED_UNICODE
+            | JSON_UNESCAPED_SLASHES
+            | JSON_HEX_TAG
+            | JSON_HEX_AMP
+            | JSON_HEX_APOS
+            | JSON_HEX_QUOT
+        ); ?>;
+    </script>
     <script src="assets/js/script.js"></script>
 </body>
 </html>

@@ -2,6 +2,7 @@
 // 种火集结号 - 设施建造页面 / Fireseed Engage - facility construction page
 
 require_once 'includes/init.php';
+require_once 'includes/gameplay_ui.php';
 
 // 登录校验 / Authentication check
 if (!isset($_SESSION['user_id'])) {
@@ -272,21 +273,25 @@ $pageTitle = $city->getName() . ' - 建造设施';
                     <li><a href="map.php">地图</a></li>
                     <li><a href="internal.php?city_id=<?php echo $cityId; ?>">内政</a></li>
                     <li><a href="ranking.php">排名</a></li>
-                    <li class="circuit-points">思考回路: <?php echo $user->getCircuitPoints(); ?> / <?php echo $user->getMaxCircuitPoints(); ?></li>
+                    <li class="circuit-points">
+                        <?php echo renderImageResource(
+                            'resource_circuit_points',
+                            24,
+                            ['alt' => '思考回路 / Circuit Points']
+                        ); ?>
+                        <span class="circuit-label">思考回路:</span>
+                        <span class="circuit-value">
+                            <?php echo number_format($user->getCircuitPoints()); ?> /
+                            <?php echo number_format($user->getMaxCircuitPoints()); ?>
+                        </span>
+                    </li>
                 </ul>
             </nav>
         </header>
 
         <main>
             <!-- 资源栏 / Resource bar -->
-            <div class="resource-bar">
-                <?php foreach ($resourceTypes as $resourceType): ?>
-                    <div class="resource <?php echo escapeHtml($resourceType); ?>-crystal">
-                        <span class="resource-name"><?php echo escapeHtml(getResourceName($resourceType)); ?></span>
-                        <span class="resource-value"><?php echo number_format($resource->getResourceByType($resourceType)); ?></span>
-                    </div>
-                <?php endforeach; ?>
-            </div>
+            <?php renderGameplayResourceBar($resource); ?>
 
             <?php if ($message !== ''): ?>
                 <div class="message <?php echo escapeHtml($messageType); ?>">

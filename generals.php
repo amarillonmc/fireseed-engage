@@ -1,6 +1,7 @@
 <?php
 // 包含初始化文件
 require_once 'includes/init.php';
+require_once 'includes/gameplay_ui.php';
 
 // 检查用户是否已登录
 if (!isset($_SESSION['user_id'])) {
@@ -316,53 +317,11 @@ $pageTitle = '武将管理';
 </head>
 <body>
     <div class="container">
-        <!-- 页首 -->
-        <header>
-            <h1 class="site-title"><?php echo SITE_NAME; ?></h1>
-            <h2 class="page-title"><?php echo $pageTitle; ?></h2>
-            <nav class="main-nav">
-                <ul>
-                    <li><a href="index.php">主基地</a></li>
-                    <li><a href="profile.php">档案</a></li>
-                    <li><a href="armies.php">军队</a></li>
-                    <li><a href="map.php">地图</a></li>
-                    <li><a href="territory.php">领地</a></li>
-                    <li><a href="internal.php">内政</a></li>
-                    <li><a href="ranking.php">排名</a></li>
-                    <li class="circuit-points">思考回路: <?php echo $user->getCircuitPoints(); ?> / <?php echo $user->getMaxCircuitPoints(); ?></li>
-                </ul>
-            </nav>
-        </header>
+        <?php renderGameplayHeader($pageTitle, $user, 'generals'); ?>
 
         <!-- 主内容 -->
         <main>
-            <!-- 资源显示 -->
-            <div class="resource-bar">
-                <div class="resource bright-crystal">
-                    <span class="resource-name">亮晶晶</span>
-                    <span class="resource-value"><?php echo number_format($resource->getBrightCrystal()); ?></span>
-                </div>
-                <div class="resource warm-crystal">
-                    <span class="resource-name">暖洋洋</span>
-                    <span class="resource-value"><?php echo number_format($resource->getWarmCrystal()); ?></span>
-                </div>
-                <div class="resource cold-crystal">
-                    <span class="resource-name">冷冰冰</span>
-                    <span class="resource-value"><?php echo number_format($resource->getColdCrystal()); ?></span>
-                </div>
-                <div class="resource green-crystal">
-                    <span class="resource-name">郁萌萌</span>
-                    <span class="resource-value"><?php echo number_format($resource->getGreenCrystal()); ?></span>
-                </div>
-                <div class="resource day-crystal">
-                    <span class="resource-name">昼闪闪</span>
-                    <span class="resource-value"><?php echo number_format($resource->getDayCrystal()); ?></span>
-                </div>
-                <div class="resource night-crystal">
-                    <span class="resource-name">夜静静</span>
-                    <span class="resource-value"><?php echo number_format($resource->getNightCrystal()); ?></span>
-                </div>
-            </div>
+            <?php renderGameplayResourceBar($resource); ?>
 
             <!-- 武将容器 -->
             <div class="generals-container">
@@ -403,38 +362,12 @@ $pageTitle = '武将管理';
                 <div class="generals-list">
                     <?php foreach ($generals as $general): ?>
                     <div class="general-card">
-                        <h4>
-                            <?php echo $general->getName(); ?>
-                            <span class="rarity <?php echo $general->getRarity(); ?>">
-                                <?php echo $general->getRarity(); ?>
-                            </span>
-                        </h4>
-
-                        <div class="level">等级: <?php echo $general->getLevel(); ?> | COST: <?php echo $general->getCost(); ?></div>
-                        <div class="element">元素: <?php echo $general->getElement(); ?></div>
-                        <div class="source">来源: <?php echo $general->getSource(); ?></div>
-
-                        <div class="attributes">
-                            <div class="attribute">
-                                <span class="name">攻击力</span>
-                                <span class="value"><?php echo $general->getAttack(); ?></span>
-                            </div>
-                            <div class="attribute">
-                                <span class="name">守备力</span>
-                                <span class="value"><?php echo $general->getDefense(); ?></span>
-                            </div>
-                            <div class="attribute">
-                                <span class="name">速度</span>
-                                <span class="value"><?php echo $general->getSpeed(); ?></span>
-                            </div>
-                            <div class="attribute">
-                                <span class="name">智力</span>
-                                <span class="value"><?php echo $general->getIntelligence(); ?></span>
-                            </div>
-                            <div class="attribute">
-                                <span class="name">HP</span>
-                                <span class="value"><?php echo $general->getHp(); ?> / <?php echo $general->getMaxHp(); ?></span>
-                            </div>
+                        <?php echo renderGeneralCardVisual(
+                            $general,
+                            ['compact' => true]
+                        ); ?>
+                        <div class="source">
+                            来源: <?php echo escapeHtml($general->getSource()); ?>
                         </div>
 
                         <div class="skills">
@@ -471,7 +404,8 @@ $pageTitle = '武将管理';
                             }
 
                             if ($assignmentText) {
-                                echo '<div class="assignment">' . $assignmentText . '</div>';
+                                echo '<div class="assignment">'
+                                    . escapeHtml($assignmentText) . '</div>';
                             }
                         }
                         ?>
