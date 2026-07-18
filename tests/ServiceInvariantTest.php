@@ -103,6 +103,20 @@ assertServiceInvariant(
     'Special skill-effect keys must have a bounded consumer API'
 );
 assertServiceInvariant(
+    strpos($general, 'private $templateCode;') !== false
+        && strpos($general, 'public function getTemplateCode()') !== false,
+    'General objects must expose their authoritative template code'
+);
+assertServiceInvariant(
+    strpos($general, 'LEFT JOIN general_template_catalog direct_catalog') !== false
+        && strpos($general, 'FROM recruitment_history history') !== false
+        && strpos(
+            $general,
+            'source_catalog.general_id = history.template_general_id'
+        ) !== false,
+    'Owned generals must resolve template codes through recruitment history'
+);
+assertServiceInvariant(
     preg_match(
         '/\\$stmt = \\$this->db->prepare\\(\\$query\\);\\s+if \\(!\\$stmt\\) \\{\\s+return \\[\\];/s',
         $general
@@ -366,6 +380,18 @@ assertServiceInvariant(
         && strpos($recruitment, "\$ownedGeneral['duplicate'] = true;") !== false
         && strpos($recruitment, "\$ownedGeneral['duplicate_skill_points'] = \$skillPoints;") !== false,
     'Duplicate recruitment must retain history and expose its conversion result'
+);
+assertServiceInvariant(
+    substr_count($recruitment, 'catalog.template_code') >= 2
+        && strpos(
+            $recruitment,
+            "\$ownedGeneral['template_code'] = (string) \$template['template_code'];"
+        ) !== false
+        && strpos(
+            $recruitment,
+            "'template_code' => (string) \$template['template_code']"
+        ) !== false,
+    'Starter and draw results must preserve catalog template codes'
 );
 
 foreach ([

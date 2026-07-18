@@ -46,16 +46,24 @@ class RecruitmentService {
         }
 
         try {
-            $query = "SELECT general_id, name, source, rarity, cost, element, level,
-                             hp, max_hp, attack, defense, speed, intelligence, is_active
-                      FROM generals
-                      WHERE owner_id = 0 AND is_active = 1";
+            $query = "SELECT g.general_id, catalog.template_code,
+                             g.name, g.source, g.rarity,
+                             g.cost, g.element, g.level,
+                             g.hp, g.max_hp, g.attack,
+                             g.defense, g.speed,
+                             g.intelligence, g.is_active
+                      FROM generals g
+                      INNER JOIN general_template_catalog catalog
+                        ON catalog.general_id = g.general_id
+                      WHERE g.owner_id = 0
+                        AND g.is_active = 1";
 
             if ($normalizedRarity !== null) {
-                $query .= " AND rarity = ?";
+                $query .= " AND g.rarity = ?";
             }
 
-            $query .= " ORDER BY FIELD(rarity, 'P', 'SS', 'S', 'A', 'B'), name, general_id";
+            $query .= " ORDER BY FIELD(g.rarity, 'P', 'SS', 'S', 'A', 'B'),
+                                g.name, g.general_id";
             $stmt = $this->db->prepare($query);
 
             if (!$stmt) {
@@ -488,10 +496,18 @@ class RecruitmentService {
      * @return array|null 模板行 / Template row
      */
     private function getTemplate($templateGeneralId) {
-        $query = "SELECT general_id, name, source, rarity, cost, element, level,
-                         hp, max_hp, attack, defense, speed, intelligence, is_active
-                  FROM generals
-                  WHERE general_id = ? AND owner_id = 0 AND is_active = 1";
+        $query = "SELECT g.general_id, catalog.template_code,
+                         g.name, g.source, g.rarity,
+                         g.cost, g.element, g.level,
+                         g.hp, g.max_hp, g.attack,
+                         g.defense, g.speed,
+                         g.intelligence, g.is_active
+                  FROM generals g
+                  INNER JOIN general_template_catalog catalog
+                    ON catalog.general_id = g.general_id
+                  WHERE g.general_id = ?
+                    AND g.owner_id = 0
+                    AND g.is_active = 1";
         $stmt = $this->db->prepare($query);
 
         if (!$stmt) {
@@ -618,6 +634,7 @@ class RecruitmentService {
         );
 
         $ownedGeneral['template_general_id'] = (int) $template['general_id'];
+        $ownedGeneral['template_code'] = (string) $template['template_code'];
         $ownedGeneral['recruit_type'] = $recruitType;
         $ownedGeneral['duplicate'] = true;
         $ownedGeneral['duplicate_skill_points'] = $skillPoints;
@@ -716,6 +733,7 @@ class RecruitmentService {
         return [
             'general_id' => $generalId,
             'template_general_id' => (int) $template['general_id'],
+            'template_code' => (string) $template['template_code'],
             'name' => $name,
             'source' => $source,
             'rarity' => $rarity,
@@ -969,6 +987,7 @@ class RecruitmentService {
         }
 
         $row['cost'] = (float) $row['cost'];
+        $row['template_code'] = (string) $row['template_code'];
 
         return $row;
     }

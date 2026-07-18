@@ -680,6 +680,7 @@ class CardPoolService {
         if ($poolType === 'general') {
             $query = "SELECT entry.general_id AS resource_id, entry.weight,
                              entry.is_featured, g.general_id,
+                             catalog.template_code,
                              g.owner_id, g.name, g.source,
                              g.rarity, g.cost, g.element,
                              g.level, g.hp, g.max_hp,
@@ -688,6 +689,8 @@ class CardPoolService {
                       FROM general_pool_entries entry
                       LEFT JOIN generals g
                         ON g.general_id = entry.general_id
+                      LEFT JOIN general_template_catalog catalog
+                        ON catalog.general_id = g.general_id
                       WHERE entry.pool_id = ?
                       ORDER BY entry.is_featured DESC,
                                FIELD(g.rarity, 'P', 'SS', 'S', 'A', 'B'),
@@ -736,11 +739,14 @@ class CardPoolService {
             }
             if (empty($row['resource_id'])
                 || (int) $row['is_active'] !== 1
-                || ($poolType === 'general' && (int) $row['owner_id'] !== 0)) {
+                || ($poolType === 'general'
+                    && ((int) $row['owner_id'] !== 0
+                        || empty($row['template_code'])))) {
                 $stmt->close();
                 throw new DomainException(
-                    '卡池包含不存在、停用或非公共的资源'
-                    . ' / Pool contains a missing, inactive, or non-public resource'
+                    '卡池包含不存在、停用、非公共或未登记模板代码的资源'
+                    . ' / Pool contains a missing, inactive, non-public,'
+                    . ' or uncatalogued resource'
                 );
             }
             if ($totalWeight > PHP_INT_MAX - $weight) {
@@ -769,6 +775,7 @@ class CardPoolService {
                     $row[$field] = (int) $row[$field];
                 }
                 $row['cost'] = (float) $row['cost'];
+                $row['template_code'] = (string) $row['template_code'];
             } else {
                 foreach ([
                     'card_id',

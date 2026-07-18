@@ -7,6 +7,7 @@ class General {
     private $ownerId;
     private $name;
     private $source;
+    private $templateCode;
     private $rarity;
     private $cost;
     private $element;
@@ -40,7 +41,23 @@ class General {
      * 加载武将数据
      */
     private function loadGeneralData() {
-        $query = "SELECT * FROM generals WHERE general_id = ?";
+        $query = "SELECT g.*,
+                         COALESCE(
+                           direct_catalog.template_code,
+                           (
+                             SELECT source_catalog.template_code
+                             FROM recruitment_history history
+                             INNER JOIN general_template_catalog source_catalog
+                               ON source_catalog.general_id = history.template_general_id
+                             WHERE history.general_id = g.general_id
+                             ORDER BY history.recruitment_id
+                             LIMIT 1
+                           )
+                         ) AS template_code
+                  FROM generals g
+                  LEFT JOIN general_template_catalog direct_catalog
+                    ON direct_catalog.general_id = g.general_id
+                  WHERE g.general_id = ?";
         $stmt = $this->db->prepare($query);
         $stmt->bind_param('i', $this->generalId);
         $stmt->execute();
@@ -51,6 +68,10 @@ class General {
             $this->ownerId = $generalData['owner_id'];
             $this->name = $generalData['name'];
             $this->source = $generalData['source'];
+            $this->templateCode = isset($generalData['template_code'])
+                && trim((string) $generalData['template_code']) !== ''
+                ? (string) $generalData['template_code']
+                : null;
             $this->rarity = $generalData['rarity'];
             $this->cost = $generalData['cost'];
             $this->element = $generalData['element'];
@@ -173,6 +194,7 @@ class General {
         $this->ownerId = $ownerId;
         $this->name = $name;
         $this->source = $source;
+        $this->templateCode = null;
         $this->rarity = $rarity;
         $this->cost = $cost;
         $this->element = $element;
@@ -754,6 +776,14 @@ class General {
      */
     public function getSource() {
         return $this->source;
+    }
+
+    /**
+     * 获取权威武将模板代码 / Gets the authoritative general template code
+     * @return string|null 模板代码或空值 / Template code or null
+     */
+    public function getTemplateCode() {
+        return $this->templateCode;
     }
 
     /**

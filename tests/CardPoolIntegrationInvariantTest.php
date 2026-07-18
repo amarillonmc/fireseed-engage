@@ -158,6 +158,33 @@ foreach (['recruitment', 'skill_service'] as $serviceName) {
 }
 
 assertCardPoolIntegration(
+    strpos(
+        $files['pool_service'],
+        'catalog.template_code'
+    ) !== false
+        && strpos(
+            $files['pool_service'],
+            'LEFT JOIN general_template_catalog catalog'
+        ) !== false
+        && strpos(
+            $files['pool_service'],
+            "empty(\$row['template_code'])"
+        ) !== false,
+    'Published general-pool entries must expose an authoritative template code'
+);
+assertCardPoolIntegration(
+    strpos(
+        $files['recruitment'],
+        "'template_code' => (string) \$template['template_code']"
+    ) !== false
+        && strpos(
+            $files['recruitment'],
+            "\$ownedGeneral['template_code'] = (string) \$template['template_code'];"
+        ) !== false,
+    'Starter, new-draw, and duplicate-draw payloads must expose template codes'
+);
+
+assertCardPoolIntegration(
     strpos($files['general_skill'], 'LEFT JOIN equipped_skill_cards') !== false
         && strpos($files['general_skill'], 'LEFT JOIN skill_card_catalog') !== false
         && strpos($files['general_skill'], 'catalog_name') !== false
