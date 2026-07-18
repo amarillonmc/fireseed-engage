@@ -157,10 +157,16 @@ Seed pools preserve this project's prior non-paid rates and remain editable:
   每抽：night 250
   Per draw: 250 night
 
-同一稀有度内的安装卡片初始等权；迁移使用 INSERT IGNORE，因此重跑不会覆盖
-管理员已调整的成员权重。
-Installation cards start equally weighted within a rarity. Migration uses
-INSERT IGNORE so reruns do not overwrite administrator-tuned entry weights.
+同一稀有度内的安装卡片初始等权。安装与升级脚本会在事务开始时快照本轮真正
+不存在的预设池，并只向这些新建池写入成员；常量完成标记
+resource_catalog_seed_20260717 使后续重跑完全跳过目录、模板、固有技能、
+卡池及成员种子，不会复活运营方删除或修改的内容。
+Installation cards start equally weighted within a rarity. At transaction
+start, install and upgrade scripts snapshot only seed pools that genuinely do
+not exist and populate members only for those newly created pools. The constant
+completion marker resource_catalog_seed_20260717 makes later reruns skip
+catalog, template, inherent-skill, pool, and member seeds, so operator changes
+or removals are never resurrected.
 
 六、原作数值模型适配 / Original-inspired numerical adaptation
 
@@ -185,10 +191,14 @@ only verifiable numerical structures:
 3. 原作势力豪击改为元素豪击 / Faction assault becomes elemental assault
    每名同队匹配元素武将提供
    [6,7,8,9,10,11,12,13,15,17]%，Lv1-Lv10；
-   默认最多计算三名存活参战武将。
+   默认最多计算三名存活参战武将。这里保留原作“匹配角色数决定层数、效果作用
+   于所属军队”的结构，只把势力条件替换为本项目元素条件。
    Each matching participating general grants
    [6,7,8,9,10,11,12,13,15,17]% from Lv1-Lv10,
-   capped at three living participating generals by default.
+   capped at three living participating generals by default. This preserves
+   the original shape—matching characters determine stacks and the effect
+   applies to their army—while replacing faction matching with project
+   elements.
 
 结构化效果JSON支持：
 Structured effect JSON supports:
@@ -206,11 +216,14 @@ Adds eighteen original-inspired skill templates and twelve non-IP general
 stat archetypes (G015-G026).
 
 映射到技能目录的被动技能以 skill_card_catalog.effect_json 为权威定义；
-后台修改后战斗计算与技能页面均读取新定义。无目录映射的旧技能继续使用
-general_skills.skill_effect 快照。
+后台修改后战斗计算、技能页、武将列表与武将详情均读取新定义；停用映射卡会
+明确标记且不生效。无目录映射的旧技能继续使用 general_skills.skill_effect
+快照。
 Mapped passive skills use skill_card_catalog.effect_json as the authoritative
-definition, so administration edits affect combat and display consistently.
-Unmapped legacy skills retain their general_skills.skill_effect snapshot.
+definition, so administration edits affect combat, the skill page, the general
+list, and general details consistently. Disabled mapped cards are labeled and
+do not apply. Unmapped legacy skills retain their general_skills.skill_effect
+snapshot.
 
 七、安装与升级 / Installation and upgrade
 
@@ -230,13 +243,69 @@ Back up the database, then run in order:
 mysql -u root -p fireseed_engage < sql/upgrade_20260717_gameplay_expansion.sql
 mysql -u root -p fireseed_engage < sql/upgrade_20260717_card_pool_resources.sql
 
-第二份迁移可重复执行，且会把旧系统中所有启用公共武将和启用技能卡按其稀有度
-加入对应预设池，从而保留升级前“启用内容均可抽”的行为。
-The second migration is rerunnable and places every active public general and
-active skill card from the legacy system into matching seed pools, preserving
-the prior behavior that all active catalog content was drawable.
+第二份迁移首次执行时，会把旧系统中所有启用公共武将和启用技能卡按其稀有度
+加入新建的对应预设池，从而保留升级前“启用内容均可抽”的行为。此后重复执行
+不会改变已有池的成员或概率。
+On its first run, the second migration places every active public general and
+active skill card from the legacy system into the newly created matching seed
+pools, preserving the prior behavior that all active catalog content was
+drawable. Later reruns do not change existing pool membership or odds.
 
-八、验证 / Validation
+八、审查修正 / Review fixes
+
+- 本次涉及的后台页会在用户记录失效时清理会话，再返回后台登录页。
+  Administration pages touched by this change clear invalid sessions before
+  returning to the administration login page.
+- 修改已发布池成员的目录稀有度需要卡池发布权限，并在同一事务中递增所有受
+  影响池的修订号；三级内容管理员不能绕过四级发布边界。
+  Changing the catalog rarity of a published-pool member requires pool-publish
+  permission and increments every affected pool revision in the same
+  transaction, so level-3 content editors cannot bypass the level-4 boundary.
+- 资源目录创建、编辑、停用及公共武将删除，与卡池创建、成员编辑、发布、归档
+  共用 resource_admin_locks 事务互斥行；所有包含目标卡片的池会先被锁定，
+  再筛选已发布池，避免并发请求遗漏修订号或绕过停用检查。
+  Catalog creation, editing, retirement, and public-general deletion share the
+  resource_admin_locks transaction mutex with pool creation, membership edits,
+  publishing, and archiving. Every containing pool is locked before published
+  pools are selected, preventing concurrent requests from missing revisions or
+  bypassing retirement checks.
+- 技能卡仍被已发布池引用时不得停用；必须先显式移除成员或归档卡池，避免整池
+  在玩家端突然消失。
+  A skill card referenced by a published pool cannot be disabled until the
+  member is explicitly removed or the pool is archived, preventing an entire
+  pool from disappearing at runtime.
+- 后台会校验 level_values/cost_level_values 的模式、有限非负数值与覆盖
+  max_level 的曲线长度，拒绝保存会在高等级静默失效的技能。
+  Administration validates descriptor mode, finite non-negative values, and
+  max_level coverage for level_values/cost_level_values, rejecting curves that
+  would silently stop working at higher levels.
+- 安装与升级资源种子由同一个 InnoDB 事务、缺失目标快照和常量完成标记保护；
+  重跑不会绕过后台修订与审计，亦不会复活删除的模板、映射或池成员。
+  One InnoDB transaction, absent-target snapshots, and a constant completion
+  marker protect install and upgrade seeds. Reruns cannot bypass revisions and
+  auditing or resurrect deleted templates, mappings, or pool members.
+- PHP安装器会把 START TRANSACTION/COMMIT/ROLLBACK 路由到 mysqli 事务API，
+  其余SQL继续使用预处理语句；事务内任一语句失败都会显式回滚。
+  The PHP installer routes START TRANSACTION/COMMIT/ROLLBACK through mysqli's
+  transaction APIs while continuing to prepare ordinary SQL; any statement
+  failure inside a transaction triggers an explicit rollback.
+- 安装器使用理解单/双/反引号及三类SQL注释的语句分割器，字符串或注释内的
+  分号不会再截断安装脚本。
+  The installer uses a statement splitter aware of single, double, and
+  backtick quotes plus all three SQL comment forms, so semicolons inside
+  strings or comments no longer truncate installation scripts.
+- 基础玩法升级中的旧 G001-G014 同步，在资源目录完成标记存在后会整体跳过；
+  管理员修改过的模板稀有度、固有技能与映射不会因误重跑旧迁移而被覆盖。
+  The legacy G001-G014 synchronization in the base gameplay upgrade is skipped
+  once the resource-catalog completion marker exists, so rerunning the older
+  migration cannot overwrite administrator-edited rarity, inherent skills, or
+  mappings.
+- 映射技能的旧页面展示改为目录权威定义，并补齐后台可编辑名称的HTML转义和
+  停用状态提示。
+  Legacy mapped-skill displays now use authoritative catalog definitions, with
+  HTML escaping for admin-editable names and explicit disabled-state labels.
+
+九、验证 / Validation
 
 - PHP语法检查覆盖全部修改PHP文件。
   PHP lint covers every changed PHP file.
@@ -254,6 +323,9 @@ the prior behavior that all active catalog content was drawable.
   unit targeting, mixed-army speed, and safety caps.
 - SqlSchemaTest 同时校验基础玩法迁移和新增卡池资源迁移组成的升级链。
   SqlSchemaTest validates the combined base-gameplay and card-pool migration chain.
+- 全套十一个测试脚本共639项断言通过，其中卡池集成不变量99项、SQL模式158项。
+  All eleven test scripts pass with 639 assertions, including 99 card-pool
+  integration invariants and 158 SQL-schema assertions.
 
 本机没有可用 mysql 客户端或已安装测试库，因此未执行真实数据库迁移或浏览器端
 登录态验收；SQL已通过仓库的模式一致性、括号与关键约束静态检查。

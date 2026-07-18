@@ -85,6 +85,15 @@ CREATE TABLE IF NOT EXISTS `skill_pool_entries` (
   CONSTRAINT `skill_pool_entries_ibfk_2` FOREIGN KEY (`card_id`) REFERENCES `skill_card_catalog` (`card_id`) ON DELETE RESTRICT
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
+-- 资源目录与卡池后台共享一把事务互斥锁，避免发布、成员和稀有度变更互相穿插。 / Catalog and pool administration share one transactional mutex so publishing, membership, and rarity changes cannot interleave.
+CREATE TABLE IF NOT EXISTS `resource_admin_locks` (
+  `lock_name` varchar(64) NOT NULL,
+  PRIMARY KEY (`lock_name`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+INSERT IGNORE INTO `resource_admin_locks` (`lock_name`)
+VALUES ('catalog_pools');
+
 CREATE TABLE IF NOT EXISTS `user_skill_cards` (
   `user_id` int(11) NOT NULL,
   `card_id` int(11) NOT NULL,
@@ -663,7 +672,32 @@ CREATE TABLE IF NOT EXISTS `friendships` (
   CONSTRAINT `friendships_ibfk_2` FOREIGN KEY (`addressee_id`) REFERENCES `users` (`user_id`) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
-INSERT IGNORE INTO `skill_card_catalog`
+-- 目录与默认池种子作为一个事务执行，完成标记确保重跑不会恢复运营方已移除或修改的资源。 / Catalog and default-pool seeds run in one transaction; the completion marker prevents reruns from restoring operator-managed resources.
+START TRANSACTION;
+
+SELECT `config_id`
+FROM `game_config`
+WHERE `key` = 'resource_catalog_seed_20260717'
+FOR UPDATE;
+
+DROP TEMPORARY TABLE IF EXISTS `fireseed_resource_seed_gate`;
+CREATE TEMPORARY TABLE `fireseed_resource_seed_gate` (
+  `allowed` tinyint(1) NOT NULL,
+  PRIMARY KEY (`allowed`)
+) ENGINE=InnoDB;
+
+INSERT INTO `fireseed_resource_seed_gate` (`allowed`)
+SELECT 1
+WHERE NOT EXISTS (
+  SELECT 1
+  FROM `game_config`
+  WHERE `key` = 'resource_catalog_seed_20260717'
+);
+
+DROP TEMPORARY TABLE IF EXISTS `fireseed_skill_card_seed`;
+CREATE TEMPORARY TABLE `fireseed_skill_card_seed` LIKE `skill_card_catalog`;
+
+INSERT INTO `fireseed_skill_card_seed`
 (`card_code`,`name`,`description`,`rarity`,`element`,`activation_type`,`category`,`effect_json`,`base_cooldown`,`max_level`) VALUES
 ('training_acceleration_basic','士兵训练加速・初','小幅缩短驻扎城池的士兵训练时间。','B','亮晶晶','passive','internal','{"training_speed":5}',0,5),
 ('lightning_march_basic','闪电行军・初','短时间提高所属军队的移动速度。','B','暖洋洋','active','march','{"speed":15,"duration":180}',7200,5),
@@ -704,6 +738,21 @@ INSERT IGNORE INTO `skill_card_catalog`
 ('green_resonance_assault','郁萌豪击','每名同队郁萌萌武将按技能等级提高全军攻击力，最多计算三名。','S','郁萌萌','passive','attack','{"element_attack_per_green":{"mode":"level_values","values":[6,7,8,9,10,11,12,13,15,17]}}',0,10),
 ('day_resonance_assault','昼闪豪击','每名同队昼闪闪武将按技能等级提高全军攻击力，最多计算三名。','S','昼闪闪','passive','attack','{"element_attack_per_day":{"mode":"level_values","values":[6,7,8,9,10,11,12,13,15,17]}}',0,10),
 ('night_resonance_assault','夜静豪击','每名同队夜静静武将按技能等级提高全军攻击力，最多计算三名。','S','夜静静','passive','attack','{"element_attack_per_night":{"mode":"level_values","values":[6,7,8,9,10,11,12,13,15,17]}}',0,10);
+
+INSERT INTO `skill_card_catalog`
+(`card_code`,`name`,`description`,`rarity`,`element`,`activation_type`,`category`,`effect_json`,`base_cooldown`,`max_level`)
+SELECT
+  seed.`card_code`, seed.`name`, seed.`description`, seed.`rarity`,
+  seed.`element`, seed.`activation_type`, seed.`category`,
+  seed.`effect_json`, seed.`base_cooldown`, seed.`max_level`
+FROM `fireseed_skill_card_seed` AS seed
+JOIN `fireseed_resource_seed_gate` AS seed_gate
+  ON seed_gate.`allowed` = 1
+LEFT JOIN `skill_card_catalog` AS existing
+  ON existing.`card_code` = seed.`card_code`
+WHERE existing.`card_id` IS NULL;
+
+DROP TEMPORARY TABLE `fireseed_skill_card_seed`;
 
 -- 从企划文档同步 G001-G014，并补充原作式COST与偏科数值范本及六张低罕贵版本。 / Synchronize G001-G014 and add original-inspired cost/stat archetypes plus six lower-rarity versions.
 DROP TEMPORARY TABLE IF EXISTS `fireseed_general_template_seed`;
@@ -756,72 +805,62 @@ INSERT INTO `fireseed_general_template_seed`
 ('G010B','光明祭司','B',1.0,'昼闪闪',10,30,45,60,'healing_basic'),
 ('G012B','夜行者','B',1.0,'夜静静',10,45,30,60,'scout_enhancement_basic');
 
+-- 只处理本轮种子开始前尚未映射的模板代码；完成标记存在时目标集为空。 / Process only template codes that were unmapped before this seed run; the target set is empty once the completion marker exists.
+DROP TEMPORARY TABLE IF EXISTS `fireseed_general_seed_targets`;
+CREATE TEMPORARY TABLE `fireseed_general_seed_targets` (
+  `template_code` varchar(64) NOT NULL,
+  PRIMARY KEY (`template_code`)
+) ENGINE=InnoDB;
+
+INSERT INTO `fireseed_general_seed_targets` (`template_code`)
+SELECT seed.`template_code`
+FROM `fireseed_general_template_seed` AS seed
+JOIN `fireseed_resource_seed_gate` AS seed_gate
+  ON seed_gate.`allowed` = 1
+LEFT JOIN `general_template_catalog` AS catalog
+  ON catalog.`template_code` = seed.`template_code`
+WHERE catalog.`template_code` IS NULL;
+
 INSERT INTO `generals`
 (`owner_id`,`name`,`source`,`rarity`,`cost`,`element`,`level`,`hp`,`max_hp`,`attack`,`defense`,`speed`,`intelligence`,`is_active`)
 SELECT
-  0, seed.`name`, '原创角色', seed.`rarity`, seed.`cost`, seed.`element`,
+  0, seed.`name`,
+  CONCAT('__resource_seed_20260717__:', seed.`template_code`),
+  seed.`rarity`, seed.`cost`, seed.`element`,
   1, 100, 100, seed.`attack`, seed.`defense`, seed.`speed`, seed.`intelligence`, 1
 FROM `fireseed_general_template_seed` AS seed
-LEFT JOIN `general_template_catalog` AS catalog
-  ON catalog.`template_code` = seed.`template_code`
-LEFT JOIN `generals` AS existing
-  ON existing.`owner_id` = 0
-  AND existing.`name` = seed.`name`
-  AND existing.`source` = '原创角色'
-  AND existing.`rarity` = seed.`rarity`
-WHERE catalog.`template_code` IS NULL
-  AND existing.`general_id` IS NULL;
+JOIN `fireseed_general_seed_targets` AS seed_target
+  ON seed_target.`template_code` = seed.`template_code`;
 
-INSERT IGNORE INTO `general_template_catalog` (`template_code`,`general_id`)
-SELECT seed.`template_code`, MIN(general.`general_id`)
+INSERT INTO `general_template_catalog` (`template_code`,`general_id`)
+SELECT seed.`template_code`, general.`general_id`
 FROM `fireseed_general_template_seed` AS seed
+JOIN `fireseed_general_seed_targets` AS seed_target
+  ON seed_target.`template_code` = seed.`template_code`
 JOIN `generals` AS general
   ON general.`owner_id` = 0
   AND general.`name` = seed.`name`
-  AND general.`source` = '原创角色'
+  AND general.`source` = CONCAT(
+    '__resource_seed_20260717__:',
+    seed.`template_code`
+  )
   AND general.`rarity` = seed.`rarity`
-GROUP BY seed.`template_code`;
+;
 
 UPDATE `generals` AS general
 JOIN `general_template_catalog` AS catalog
   ON catalog.`general_id` = general.`general_id`
-JOIN `fireseed_general_template_seed` AS seed
-  ON seed.`template_code` = catalog.`template_code`
-SET
-  general.`owner_id` = 0,
-  general.`name` = seed.`name`,
-  general.`source` = '原创角色',
-  general.`rarity` = seed.`rarity`,
-  general.`cost` = seed.`cost`,
-  general.`element` = seed.`element`,
-  general.`level` = 1,
-  general.`hp` = 100,
-  general.`max_hp` = 100,
-  general.`attack` = seed.`attack`,
-  general.`defense` = seed.`defense`,
-  general.`speed` = seed.`speed`,
-  general.`intelligence` = seed.`intelligence`,
-  general.`is_active` = 1;
-
-UPDATE `general_skills` AS skill
-JOIN `general_template_catalog` AS catalog
-  ON catalog.`general_id` = skill.`general_id`
-JOIN `fireseed_general_template_seed` AS seed
-  ON seed.`template_code` = catalog.`template_code`
-JOIN `skill_card_catalog` AS card
-  ON card.`card_code` = seed.`skill_card_code`
-SET
-  skill.`skill_type` = '自带',
-  skill.`skill_name` = card.`name`,
-  skill.`skill_level` = 1,
-  skill.`skill_effect` = card.`effect_json`
-WHERE skill.`slot` = 0;
+JOIN `fireseed_general_seed_targets` AS seed_target
+  ON seed_target.`template_code` = catalog.`template_code`
+SET general.`source` = '原创角色';
 
 INSERT INTO `general_skills`
 (`general_id`,`skill_type`,`skill_name`,`slot`,`skill_level`,`skill_effect`)
 SELECT
   catalog.`general_id`, '自带', card.`name`, 0, 1, card.`effect_json`
 FROM `general_template_catalog` AS catalog
+JOIN `fireseed_general_seed_targets` AS seed_target
+  ON seed_target.`template_code` = catalog.`template_code`
 JOIN `fireseed_general_template_seed` AS seed
   ON seed.`template_code` = catalog.`template_code`
 JOIN `skill_card_catalog` AS card
@@ -834,25 +873,59 @@ WHERE existing.`skill_id` IS NULL;
 INSERT INTO `equipped_skill_cards` (`skill_id`,`card_id`,`equipped_at`)
 SELECT skill.`skill_id`, card.`card_id`, NOW()
 FROM `general_template_catalog` AS catalog
+JOIN `fireseed_general_seed_targets` AS seed_target
+  ON seed_target.`template_code` = catalog.`template_code`
 JOIN `fireseed_general_template_seed` AS seed
   ON seed.`template_code` = catalog.`template_code`
 JOIN `skill_card_catalog` AS card
   ON card.`card_code` = seed.`skill_card_code`
 JOIN `general_skills` AS skill
   ON skill.`general_id` = catalog.`general_id`
-  AND skill.`slot` = 0
-ON DUPLICATE KEY UPDATE
-  `card_id` = VALUES(`card_id`);
+  AND skill.`slot` = 0;
 
+DROP TEMPORARY TABLE `fireseed_general_seed_targets`;
 DROP TEMPORARY TABLE `fireseed_general_template_seed`;
 
 -- 默认池沿用本项目原有非付费稀有度配置；资料站未公布抽取概率，因此这些只是可编辑的安装预设。 / Default pools preserve this project's existing non-paid rarity settings; the archive does not publish draw odds, so these are editable installation defaults.
-INSERT IGNORE INTO `card_pools`
+DROP TEMPORARY TABLE IF EXISTS `fireseed_card_pool_seed`;
+CREATE TEMPORARY TABLE `fireseed_card_pool_seed` LIKE `card_pools`;
+
+INSERT INTO `fireseed_card_pool_seed`
 (`pool_code`,`pool_type`,`name`,`description`,`cost_json`,`allowed_counts_json`,`status`,`sort_order`) VALUES
 ('general_normal','general','常规契约','以四色基础资源进行的常驻武将契约。','{"bright":100,"warm":100,"cold":100,"green":100}','[1,5,10]','published',10),
 ('general_advanced','general','高级契约','加入昼闪闪与夜静静资源的高级武将契约。','{"bright":500,"warm":500,"cold":500,"green":500,"day":100,"night":100}','[1,5,10]','published',20),
 ('general_resonance','general','回路共鸣','消耗思考回路的高阶武将契约。','{"circuit_points":5}','[1,5,10]','published',30),
 ('skill_standard','skill','夜静技能卡池','消耗夜静静抽取技能卡的常驻卡池。','{"night":250}','[1,5,10]','published',10);
+
+-- 在创建前快照本轮真正缺失的预设池；已有、归档或被运营调整过的同代码池均不属于种子目标。 / Snapshot seed pools that are genuinely absent before creation; existing, archived, or operator-managed pools with the same code are never seed targets.
+DROP TEMPORARY TABLE IF EXISTS `fireseed_pool_seed_targets`;
+CREATE TEMPORARY TABLE `fireseed_pool_seed_targets` (
+  `pool_code` varchar(64) NOT NULL,
+  `pool_type` enum('general','skill') NOT NULL,
+  PRIMARY KEY (`pool_code`)
+) ENGINE=InnoDB;
+
+INSERT INTO `fireseed_pool_seed_targets` (`pool_code`,`pool_type`)
+SELECT seed.`pool_code`, seed.`pool_type`
+FROM `fireseed_card_pool_seed` AS seed
+JOIN `fireseed_resource_seed_gate` AS seed_gate
+  ON seed_gate.`allowed` = 1
+LEFT JOIN `card_pools` AS existing
+  ON existing.`pool_code` = seed.`pool_code`
+WHERE existing.`pool_id` IS NULL;
+
+INSERT INTO `card_pools`
+(`pool_code`,`pool_type`,`name`,`description`,`cost_json`,`allowed_counts_json`,`status`,`sort_order`)
+SELECT
+  seed.`pool_code`, seed.`pool_type`, seed.`name`, seed.`description`,
+  seed.`cost_json`, seed.`allowed_counts_json`, seed.`status`,
+  seed.`sort_order`
+FROM `fireseed_card_pool_seed` AS seed
+JOIN `fireseed_pool_seed_targets` AS seed_target
+  ON seed_target.`pool_code` = seed.`pool_code`
+  AND seed_target.`pool_type` = seed.`pool_type`;
+
+DROP TEMPORARY TABLE `fireseed_card_pool_seed`;
 
 DROP TEMPORARY TABLE IF EXISTS `fireseed_pool_rarity_seed`;
 CREATE TEMPORARY TABLE `fireseed_pool_rarity_seed` (
@@ -879,8 +952,8 @@ INSERT INTO `fireseed_pool_rarity_seed`
 ('skill_standard','SS',400000),
 ('skill_standard','P',100000);
 
--- 每张同稀有度卡等权，管理员之后可在资源后台逐卡调整；INSERT IGNORE避免重跑安装种子时覆盖运营配置。 / Cards within a rarity start equally weighted; administrators may tune individual cards later, and INSERT IGNORE preserves live configuration on reruns.
-INSERT IGNORE INTO `general_pool_entries`
+-- 每张同稀有度卡初始等权，之后仅由资源后台显式调整。 / Cards within a rarity start equally weighted; later changes are explicit resource-admin actions.
+INSERT INTO `general_pool_entries`
 (`pool_id`,`general_id`,`weight`,`is_featured`)
 SELECT
   pool.`pool_id`,
@@ -891,6 +964,9 @@ FROM `fireseed_pool_rarity_seed` AS rarity_seed
 JOIN `card_pools` AS pool
   ON pool.`pool_code` = rarity_seed.`pool_code`
   AND pool.`pool_type` = 'general'
+JOIN `fireseed_pool_seed_targets` AS seed_target
+  ON seed_target.`pool_code` = pool.`pool_code`
+  AND seed_target.`pool_type` = 'general'
 JOIN (
   SELECT `rarity`, COUNT(*) AS `card_count`
   FROM `generals`
@@ -904,7 +980,7 @@ JOIN `generals` AS general
   AND general.`owner_id` = 0
   AND general.`is_active` = 1;
 
-INSERT IGNORE INTO `skill_pool_entries`
+INSERT INTO `skill_pool_entries`
 (`pool_id`,`card_id`,`weight`,`is_featured`)
 SELECT
   pool.`pool_id`,
@@ -915,6 +991,9 @@ FROM `fireseed_pool_rarity_seed` AS rarity_seed
 JOIN `card_pools` AS pool
   ON pool.`pool_code` = rarity_seed.`pool_code`
   AND pool.`pool_type` = 'skill'
+JOIN `fireseed_pool_seed_targets` AS seed_target
+  ON seed_target.`pool_code` = pool.`pool_code`
+  AND seed_target.`pool_type` = 'skill'
 JOIN (
   SELECT `rarity`, COUNT(*) AS `card_count`
   FROM `skill_card_catalog`
@@ -926,7 +1005,22 @@ JOIN `skill_card_catalog` AS card
   ON card.`rarity` = rarity_seed.`rarity`
   AND card.`is_active` = 1;
 
+DROP TEMPORARY TABLE `fireseed_pool_seed_targets`;
 DROP TEMPORARY TABLE `fireseed_pool_rarity_seed`;
+
+INSERT INTO `game_config`
+(`key`,`value`,`description`,`is_constant`,`category`)
+SELECT
+  'resource_catalog_seed_20260717',
+  'complete',
+  '资源目录与默认卡池安装种子已完成；用于阻止重跑恢复运营配置 / Resource catalog and default-pool seed completed; prevents reruns from restoring live configuration',
+  1,
+  'system'
+FROM `fireseed_resource_seed_gate` AS seed_gate
+WHERE seed_gate.`allowed` = 1;
+
+DROP TEMPORARY TABLE `fireseed_resource_seed_gate`;
+COMMIT;
 
 INSERT IGNORE INTO `shop_catalog`
 (`item_code`,`name`,`description`,`cost_json`,`grant_json`,`daily_limit`) VALUES

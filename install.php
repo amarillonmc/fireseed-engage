@@ -100,6 +100,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
  * @return true|string 成功或错误信息 / Success or error message
  */
 function performInstallation($config) {
+    $db = null;
+    $installerTransactionOpen = false;
+
     try {
         // 1. 创建配置文件
         $configContent = "<?php\n";
@@ -174,8 +177,8 @@ function performInstallation($config) {
             if (file_exists($sqlFile)) {
                 $sql = file_get_contents($sqlFile);
                 if ($sql) {
-                    // 分割SQL语句
-                    $statements = explode(';', $sql);
+                    // 按引号与注释语义分割SQL，保留字符串内的分号 / Split SQL with quote/comment awareness and preserve semicolons inside strings
+                    $statements = splitInstallerSqlStatements($sql);
                     foreach ($statements as $statement) {
                         $statement = trim($statement);
                         if (!empty($statement)) {
@@ -183,10 +186,50 @@ function performInstallation($config) {
                                 $statement,
                                 $sqlFile
                             );
+                            $transactionCommand =
+                                getInstallerSqlTransactionCommand($statement);
+                            if ($transactionCommand !== null) {
+                                if ($transactionCommand === 'START') {
+                                    if ($installerTransactionOpen
+                                        || !$db->begin_transaction()) {
+                                        if ($installerTransactionOpen) {
+                                            $db->rollback();
+                                            $installerTransactionOpen = false;
+                                        }
+                                        return "无法开始SQL事务 ($sqlFile): "
+                                            . $db->error;
+                                    }
+                                    $installerTransactionOpen = true;
+                                } elseif ($transactionCommand === 'COMMIT') {
+                                    if (!$installerTransactionOpen
+                                        || !$db->commit()) {
+                                        if ($installerTransactionOpen) {
+                                            $db->rollback();
+                                            $installerTransactionOpen = false;
+                                        }
+                                        return "无法提交SQL事务 ($sqlFile): "
+                                            . $db->error;
+                                    }
+                                    $installerTransactionOpen = false;
+                                } else {
+                                    if ($installerTransactionOpen
+                                        && !$db->rollback()) {
+                                        return "无法回滚SQL事务 ($sqlFile): "
+                                            . $db->error;
+                                    }
+                                    $installerTransactionOpen = false;
+                                }
+                                continue;
+                            }
+
                             $sqlStmt = $db->prepare($statement);
                             if (!$sqlStmt || !$sqlStmt->execute()) {
                                 if ($sqlStmt) {
                                     $sqlStmt->close();
+                                }
+                                if ($installerTransactionOpen) {
+                                    $db->rollback();
+                                    $installerTransactionOpen = false;
                                 }
                                 return "执行SQL失败 ($sqlFile): " . $db->error;
                             }
@@ -195,6 +238,11 @@ function performInstallation($config) {
                     }
                 }
             }
+        }
+        if ($installerTransactionOpen) {
+            $db->rollback();
+            $installerTransactionOpen = false;
+            return '安装SQL包含未结束的事务';
         }
         
         // 4. 加载刚生成的配置与安装所需类 / Load the generated config and installation classes
@@ -234,9 +282,118 @@ function performInstallation($config) {
         $db->close();
         return true;
         
-    } catch (Exception $e) {
+    } catch (Throwable $e) {
+        if ($installerTransactionOpen && $db instanceof mysqli) {
+            $db->rollback();
+        }
         return '安装过程中发生错误: ' . $e->getMessage();
     }
+}
+
+/**
+ * 按SQL引号和注释规则分割语句 / Splits statements using SQL quote and comment rules
+ *
+ * @param string $sql SQL文本 / SQL text
+ * @return array SQL语句 / SQL statements
+ */
+function splitInstallerSqlStatements($sql) {
+    $statements = [];
+    $buffer = '';
+    $length = strlen($sql);
+    $quote = null;
+    $inLineComment = false;
+    $inBlockComment = false;
+    $hasExecutableContent = false;
+
+    for ($index = 0; $index < $length; $index++) {
+        $character = $sql[$index];
+        $next = $index + 1 < $length ? $sql[$index + 1] : '';
+        $afterNext = $index + 2 < $length ? $sql[$index + 2] : '';
+
+        if ($inLineComment) {
+            $buffer .= $character;
+            if ($character === "\n" || $character === "\r") {
+                $inLineComment = false;
+            }
+            continue;
+        }
+
+        if ($inBlockComment) {
+            $buffer .= $character;
+            if ($character === '*' && $next === '/') {
+                $buffer .= $next;
+                $index++;
+                $inBlockComment = false;
+            }
+            continue;
+        }
+
+        if ($quote !== null) {
+            $buffer .= $character;
+            if ($character === '\\' && $next !== '') {
+                $buffer .= $next;
+                $index++;
+                continue;
+            }
+            if ($character === $quote) {
+                if ($next === $quote) {
+                    $buffer .= $next;
+                    $index++;
+                } else {
+                    $quote = null;
+                }
+            }
+            continue;
+        }
+
+        if ($character === "'"
+            || $character === '"'
+            || $character === '`') {
+            $quote = $character;
+            $hasExecutableContent = true;
+            $buffer .= $character;
+            continue;
+        }
+        if ($character === '#') {
+            $inLineComment = true;
+            $buffer .= $character;
+            continue;
+        }
+        if ($character === '-'
+            && $next === '-'
+            && ($afterNext === ''
+                || preg_match('/\s/', $afterNext) === 1)) {
+            $inLineComment = true;
+            $buffer .= $character . $next;
+            $index++;
+            continue;
+        }
+        if ($character === '/' && $next === '*') {
+            $inBlockComment = true;
+            $buffer .= $character . $next;
+            $index++;
+            continue;
+        }
+        if ($character === ';') {
+            if ($hasExecutableContent && trim($buffer) !== '') {
+                $statements[] = trim($buffer);
+            }
+            $buffer = '';
+            $hasExecutableContent = false;
+            continue;
+        }
+
+        $buffer .= $character;
+        if (!ctype_space($character)) {
+            $hasExecutableContent = true;
+        }
+    }
+
+    if ($hasExecutableContent && trim($buffer) !== '') {
+        $statements[] = trim($buffer);
+    }
+
+    return $statements;
 }
 
 /**
@@ -262,6 +419,30 @@ function makeInstallerSqlStatementRerunnable($statement, $sqlFile) {
     }
 
     return $statement;
+}
+
+/**
+ * 识别不能通过预处理语句执行的事务控制命令 / Detects transaction controls that cannot use prepared statements
+ *
+ * @param string $statement SQL语句 / SQL statement
+ * @return string|null START、COMMIT、ROLLBACK或空 / START, COMMIT, ROLLBACK, or null
+ */
+function getInstallerSqlTransactionCommand($statement) {
+    $matches = [];
+    if (preg_match(
+        '/(?:^|\R)[ \t]*(START[ \t]+TRANSACTION|COMMIT|ROLLBACK)[ \t]*$/i',
+        $statement,
+        $matches
+    ) !== 1) {
+        return null;
+    }
+
+    $command = strtoupper(preg_replace(
+        '/[ \t]+/',
+        ' ',
+        trim($matches[1])
+    ));
+    return $command === 'START TRANSACTION' ? 'START' : $command;
 }
 
 /**

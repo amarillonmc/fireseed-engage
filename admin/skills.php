@@ -8,7 +8,13 @@ if (!isset($_SESSION['user_id'])) {
 }
 
 $user = new User($_SESSION['user_id']);
-if (!$user->isValid() || !$user->isAdmin()) {
+if (!$user->isValid()) {
+    session_unset();
+    session_destroy();
+    header('Location: login.php');
+    exit;
+}
+if (!$user->isAdmin()) {
     header('Location: ../index.php');
     exit;
 }
@@ -41,6 +47,64 @@ function adminSkillTextLength($value) {
  */
 function adminSkillScalarText($value) {
     return is_scalar($value) ? (string) $value : '';
+}
+
+/**
+ * 校验结构化等级曲线 / Validates structured level curves
+ *
+ * @param object $effectObject 技能效果对象 / Skill-effect object
+ * @param int $maxLevel 技能最高等级 / Maximum skill level
+ * @param string $activationType 发动类型 / Activation type
+ * @return array 校验错误 / Validation errors
+ */
+function adminSkillValidateLevelCurves(
+    $effectObject,
+    $maxLevel,
+    $activationType = 'passive'
+) {
+    $errors = [];
+    foreach (get_object_vars($effectObject) as $effectKey => $effectValue) {
+        if (is_array($effectValue)) {
+            $errors[] = $effectKey . ' 必须是数值或等级曲线描述符对象';
+            continue;
+        }
+        if (!is_object($effectValue)) {
+            continue;
+        }
+        if ($activationType === 'active') {
+            $errors[] = $effectKey . ' 的结构化等级曲线仅支持被动技能';
+            continue;
+        }
+
+        $descriptor = get_object_vars($effectValue);
+        if (!isset($descriptor['mode'])
+            || !is_string($descriptor['mode'])
+            || !in_array(
+                $descriptor['mode'],
+                ['level_values', 'cost_level_values'],
+                true
+            )
+            || !isset($descriptor['values'])
+            || !is_array($descriptor['values'])) {
+            $errors[] = $effectKey . ' 的等级曲线描述符无效';
+            continue;
+        }
+        if (count($descriptor['values']) < $maxLevel) {
+            $errors[] = $effectKey . ' 的曲线长度必须覆盖最高等级';
+            continue;
+        }
+
+        foreach ($descriptor['values'] as $curveValue) {
+            if ((!is_int($curveValue) && !is_float($curveValue))
+                || !is_finite((float) $curveValue)
+                || (float) $curveValue < 0.0) {
+                $errors[] = $effectKey . ' 的曲线值必须是非负有限数值';
+                break;
+            }
+        }
+    }
+
+    return $errors;
 }
 
 /**
@@ -117,6 +181,16 @@ function adminSkillValidateCatalogInput(array $input) {
         $errors[] = '启用状态无效';
     }
 
+    $baseCooldown = filter_var($cooldownInput, FILTER_VALIDATE_INT);
+    if ($baseCooldown === false || $baseCooldown < 0 || $baseCooldown > 31536000) {
+        $errors[] = '基础冷却须为0至31536000秒的整数';
+    }
+
+    $maxLevel = filter_var($maxLevelInput, FILTER_VALIDATE_INT);
+    if ($maxLevel === false || $maxLevel < 1 || $maxLevel > 100) {
+        $errors[] = '最高等级须为1至100的整数';
+    }
+
     $effectJson = '';
     if ($effectInput === '' || strlen($effectInput) > 10000) {
         $errors[] = '效果JSON须为1至10000字节';
@@ -132,17 +206,19 @@ function adminSkillValidateCatalogInput(array $input) {
             if ($effectJson === false) {
                 $errors[] = '效果JSON无法保存';
             }
+            if ($maxLevel !== false
+                && $maxLevel >= 1
+                && $maxLevel <= 100) {
+                $errors = array_merge(
+                    $errors,
+                    adminSkillValidateLevelCurves(
+                        $effectObject,
+                        (int) $maxLevel,
+                        $activationType
+                    )
+                );
+            }
         }
-    }
-
-    $baseCooldown = filter_var($cooldownInput, FILTER_VALIDATE_INT);
-    if ($baseCooldown === false || $baseCooldown < 0 || $baseCooldown > 31536000) {
-        $errors[] = '基础冷却须为0至31536000秒的整数';
-    }
-
-    $maxLevel = filter_var($maxLevelInput, FILTER_VALIDATE_INT);
-    if ($maxLevel === false || $maxLevel < 1 || $maxLevel > 100) {
-        $errors[] = '最高等级须为1至100的整数';
     }
 
     return [
@@ -164,30 +240,103 @@ function adminSkillValidateCatalogInput(array $input) {
 }
 
 /**
- * 检查技能卡目录记录是否存在 / Checks whether a catalog card exists
+ * 锁定引用技能卡的全部卡池并返回已发布池 / Locks every referencing pool and returns published pools
  *
  * @param mysqli $db 数据库连接 / Database connection
  * @param int $cardId 技能卡ID / Skill-card ID
- * @return bool 是否存在 / Whether the card exists
+ * @return array 已发布卡池 / Published pools
  */
-function adminSkillCardExists($db, $cardId) {
-    $stmt = $db->prepare(
-        'SELECT card_id FROM skill_card_catalog WHERE card_id = ? LIMIT 1'
-    );
+function adminSkillLoadPublishedPoolsForUpdate($db, $cardId) {
+    $query = "SELECT pool.pool_id, pool.name, pool.revision, pool.status
+              FROM card_pools pool
+              JOIN skill_pool_entries entry
+                ON entry.pool_id = pool.pool_id
+              WHERE entry.card_id = ?
+              ORDER BY pool.pool_id
+              FOR UPDATE";
+    $stmt = $db->prepare($query);
     if (!$stmt) {
-        throw new RuntimeException('无法检查技能卡记录');
+        throw new RuntimeException('无法锁定技能卡所属的已发布卡池');
     }
-
     $stmt->bind_param('i', $cardId);
     if (!$stmt->execute()) {
         $stmt->close();
-        throw new RuntimeException('无法检查技能卡记录');
+        throw new RuntimeException('无法锁定技能卡所属的已发布卡池');
     }
 
-    $exists = (bool) $stmt->get_result()->fetch_assoc();
+    $result = $stmt->get_result();
+    $pools = [];
+    while ($result && ($pool = $result->fetch_assoc())) {
+        if ($pool['status'] === 'published') {
+            $pools[] = $pool;
+        }
+    }
     $stmt->close();
 
-    return $exists;
+    return $pools;
+}
+
+/**
+ * 锁定并读取技能卡目录行 / Locks and reads a skill-card catalog row
+ *
+ * @param mysqli $db 数据库连接 / Database connection
+ * @param int $cardId 技能卡ID / Skill-card ID
+ * @return array|null 技能卡数据 / Skill-card data
+ */
+function adminSkillLoadCardForUpdate($db, $cardId) {
+    $stmt = $db->prepare(
+        'SELECT card_id, rarity, is_active
+         FROM skill_card_catalog
+         WHERE card_id = ?
+         LIMIT 1 FOR UPDATE'
+    );
+    if (!$stmt) {
+        throw new RuntimeException('无法锁定技能卡记录');
+    }
+    $stmt->bind_param('i', $cardId);
+    if (!$stmt->execute()) {
+        $stmt->close();
+        throw new RuntimeException('无法锁定技能卡记录');
+    }
+
+    $card = $stmt->get_result()->fetch_assoc();
+    $stmt->close();
+
+    return $card ?: null;
+}
+
+/**
+ * 递增受目录稀有度变化影响的卡池修订号 / Increments revisions for pools affected by a catalog-rarity change
+ *
+ * @param mysqli $db 数据库连接 / Database connection
+ * @param array $pools 已锁定卡池 / Locked pools
+ * @param int $adminId 管理员ID / Administrator ID
+ * @return void
+ */
+function adminSkillTouchPublishedPools($db, array $pools, $adminId) {
+    if (empty($pools)) {
+        return;
+    }
+
+    $query = "UPDATE card_pools
+              SET revision = revision + 1,
+                  updated_by = ?
+              WHERE pool_id = ?
+                AND status = 'published'";
+    $stmt = $db->prepare($query);
+    if (!$stmt) {
+        throw new RuntimeException('无法更新技能卡所属卡池的修订号');
+    }
+
+    foreach ($pools as $pool) {
+        $poolId = (int) $pool['pool_id'];
+        $stmt->bind_param('ii', $adminId, $poolId);
+        if (!$stmt->execute() || $stmt->affected_rows !== 1) {
+            $stmt->close();
+            throw new RuntimeException('无法更新技能卡所属卡池的修订号');
+        }
+    }
+    $stmt->close();
 }
 
 /**
@@ -216,6 +365,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $error = '请求校验失败，请刷新页面后重试';
     } else {
         $action = adminSkillScalarText($_POST['action'] ?? '');
+        $transactionOpen = false;
 
         try {
             if ($action === 'create_skill') {
@@ -231,6 +381,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 }
 
                 $card = $validated['data'];
+                if (!$db->begin_transaction()) {
+                    throw new RuntimeException('无法开始技能卡创建事务');
+                }
+                $transactionOpen = true;
+                lockResourceAdministrationBoundary($db);
                 $stmt = $db->prepare(
                     'INSERT INTO skill_card_catalog
                      (card_code, name, description, rarity, element,
@@ -267,6 +422,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
                 $cardId = (int) $db->insert_id;
                 $stmt->close();
+                if (!$db->commit()) {
+                    throw new RuntimeException('技能卡创建事务提交失败');
+                }
+                $transactionOpen = false;
                 $success = '技能卡创建成功';
                 $user->logAdminAction(
                     'create_skill_card',
@@ -284,7 +443,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     FILTER_VALIDATE_INT,
                     ['options' => ['min_range' => 1]]
                 );
-                if ($cardId === false || !adminSkillCardExists($db, $cardId)) {
+                if ($cardId === false) {
                     throw new DomainException('技能卡不存在');
                 }
 
@@ -296,6 +455,43 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 }
 
                 $card = $validated['data'];
+                if (!$db->begin_transaction()) {
+                    throw new RuntimeException('无法开始技能卡更新事务');
+                }
+                $transactionOpen = true;
+                lockResourceAdministrationBoundary($db);
+                $publishedPools = adminSkillLoadPublishedPoolsForUpdate(
+                    $db,
+                    $cardId
+                );
+                $existingCard = adminSkillLoadCardForUpdate($db, $cardId);
+                if (!$existingCard) {
+                    throw new DomainException('技能卡不存在');
+                }
+
+                $rarityChanged = (string) $existingCard['rarity']
+                    !== (string) $card['rarity'];
+                $activeStatusChanged = (int) $existingCard['is_active']
+                    !== (int) $card['is_active'];
+                if ($activeStatusChanged
+                    && !$adminManager->hasPermission('delete_skills')) {
+                    throw new DomainException(
+                        '改变技能卡启用状态需要停用技能权限'
+                    );
+                }
+                if ($activeStatusChanged && !empty($publishedPools)) {
+                    throw new DomainException(
+                        '该技能卡仍属于已发布卡池；请先从这些卡池移除或归档卡池'
+                    );
+                }
+                if ($rarityChanged
+                    && !empty($publishedPools)
+                    && !$adminManager->hasPermission('publish_card_pools')) {
+                    throw new DomainException(
+                        '该技能卡属于已发布卡池；修改稀有度需要卡池发布权限'
+                    );
+                }
+
                 $stmt = $db->prepare(
                     'UPDATE skill_card_catalog
                      SET card_code = ?, name = ?, description = ?, rarity = ?,
@@ -333,6 +529,17 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 }
 
                 $stmt->close();
+                if ($rarityChanged && !empty($publishedPools)) {
+                    adminSkillTouchPublishedPools(
+                        $db,
+                        $publishedPools,
+                        (int) $user->getUserId()
+                    );
+                }
+                if (!$db->commit()) {
+                    throw new RuntimeException('技能卡更新事务提交失败');
+                }
+                $transactionOpen = false;
                 $success = '技能卡更新成功';
                 $user->logAdminAction(
                     'update_skill_card',
@@ -340,6 +547,16 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     $cardId,
                     'Card code: ' . $card['card_code']
                 );
+                if ($rarityChanged) {
+                    foreach ($publishedPools as $pool) {
+                        $user->logAdminAction(
+                            'revise_card_pool_from_skill_catalog',
+                            'card_pool',
+                            (int) $pool['pool_id'],
+                            'Skill-card rarity changed: ' . $cardId
+                        );
+                    }
+                }
             } elseif ($action === 'disable_skill') {
                 if (!$adminManager->hasPermission('delete_skills')) {
                     throw new DomainException('您没有权限停用技能卡');
@@ -350,8 +567,27 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     FILTER_VALIDATE_INT,
                     ['options' => ['min_range' => 1]]
                 );
-                if ($cardId === false || !adminSkillCardExists($db, $cardId)) {
+                if ($cardId === false) {
                     throw new DomainException('技能卡不存在');
+                }
+
+                if (!$db->begin_transaction()) {
+                    throw new RuntimeException('无法开始技能卡停用事务');
+                }
+                $transactionOpen = true;
+                lockResourceAdministrationBoundary($db);
+                $publishedPools = adminSkillLoadPublishedPoolsForUpdate(
+                    $db,
+                    $cardId
+                );
+                $existingCard = adminSkillLoadCardForUpdate($db, $cardId);
+                if (!$existingCard) {
+                    throw new DomainException('技能卡不存在');
+                }
+                if (!empty($publishedPools)) {
+                    throw new DomainException(
+                        '该技能卡仍属于已发布卡池；请先从这些卡池移除或归档卡池'
+                    );
                 }
 
                 $stmt = $db->prepare(
@@ -368,6 +604,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 }
 
                 $stmt->close();
+                if (!$db->commit()) {
+                    throw new RuntimeException('技能卡停用事务提交失败');
+                }
+                $transactionOpen = false;
                 $success = '技能卡已停用，玩家持有的卡片和装备记录均已保留';
                 $user->logAdminAction(
                     'disable_skill_card',
@@ -379,10 +619,19 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 throw new InvalidArgumentException('未知的技能卡操作');
             }
         } catch (DomainException $exception) {
+            if ($transactionOpen) {
+                $db->rollback();
+            }
             $error = $exception->getMessage();
         } catch (InvalidArgumentException $exception) {
+            if ($transactionOpen) {
+                $db->rollback();
+            }
             $error = $exception->getMessage();
         } catch (Throwable $exception) {
+            if ($transactionOpen) {
+                $db->rollback();
+            }
             error_log('admin/skills.php failed: ' . $exception->getMessage());
             $error = '技能卡操作失败，请检查数据库状态后重试';
         }

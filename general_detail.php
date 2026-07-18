@@ -431,6 +431,9 @@ $pageTitle = '武将详情 - ' . $general->getName();
                             槽位 <?php echo number_format((int) $skill->getSlot()); ?> /
                             Lv.<?php echo number_format((int) $skill->getSkillLevel()); ?>）
                         </span>
+                        <?php if ($skill->isCatalogCardDisabled()): ?>
+                            <span class="muted">[已停用，不会生效 / Disabled and inactive]</span>
+                        <?php endif; ?>
                         <p><?php echo escapeHtml(formatGeneralSkillEffectsForPage($skill->getEffect())); ?></p>
                     </article>
                 <?php endforeach; ?>

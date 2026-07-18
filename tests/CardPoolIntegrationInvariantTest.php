@@ -13,11 +13,21 @@ $files = [
     'skill_service' => file_get_contents(
         $root . '/includes/classes/SkillCardService.php'
     ),
+    'general_skill' => file_get_contents(
+        $root . '/includes/classes/GeneralSkill.php'
+    ),
+    'general' => file_get_contents($root . '/includes/classes/General.php'),
+    'functions' => file_get_contents($root . '/includes/functions.php'),
     'admin_home' => file_get_contents($root . '/admin/index.php'),
     'admin_resources' => file_get_contents($root . '/admin/resources.php'),
     'admin_pools' => file_get_contents($root . '/admin/card_pools.php'),
+    'admin_generals' => file_get_contents($root . '/admin/generals.php'),
+    'admin_skills' => file_get_contents($root . '/admin/skills.php'),
     'recruit_page' => file_get_contents($root . '/recruit.php'),
     'skill_page' => file_get_contents($root . '/skills.php'),
+    'generals_page' => file_get_contents($root . '/generals.php'),
+    'general_detail_page' => file_get_contents($root . '/general_detail.php'),
+    'installer' => file_get_contents($root . '/install.php'),
     'fresh_sql' => file_get_contents($root . '/sql/gameplay_expansion.sql'),
     'upgrade_sql' => file_get_contents(
         $root . '/sql/upgrade_20260717_card_pool_resources.sql'
@@ -41,12 +51,79 @@ function assertCardPoolIntegration($condition, $message) {
     }
 }
 
+/**
+ * 提取独立的PHP函数源码 / Extracts standalone PHP function source
+ *
+ * @param string $source PHP源码 / PHP source
+ * @param string $functionName 函数名 / Function name
+ * @return string|null 函数源码 / Function source
+ */
+function extractCardPoolTestFunction($source, $functionName) {
+    $start = strpos($source, 'function ' . $functionName . '(');
+    if ($start === false) {
+        return null;
+    }
+
+    $openingBrace = strpos($source, '{', $start);
+    if ($openingBrace === false) {
+        return null;
+    }
+
+    $depth = 0;
+    $length = strlen($source);
+    for ($index = $openingBrace; $index < $length; $index++) {
+        if ($source[$index] === '{') {
+            $depth++;
+        } elseif ($source[$index] === '}') {
+            $depth--;
+            if ($depth === 0) {
+                return substr($source, $start, $index - $start + 1);
+            }
+        }
+    }
+
+    return null;
+}
+
 foreach ($files as $name => $contents) {
     assertCardPoolIntegration(
         $contents !== false,
         "Required card-pool file must be readable: {$name}"
     );
 }
+
+$sqlSplitterSource = extractCardPoolTestFunction(
+    $files['installer'],
+    'splitInstallerSqlStatements'
+);
+assertCardPoolIntegration(
+    $sqlSplitterSource !== null,
+    'Fresh installer must provide a quote-and-comment-aware SQL splitter'
+);
+if ($sqlSplitterSource !== null
+    && !function_exists('splitInstallerSqlStatements')) {
+    eval($sqlSplitterSource);
+}
+$splitSql = <<<'SQL'
+-- leading comment; this semicolon is not a delimiter
+INSERT INTO `demo;table` (`value`) VALUES ('a;b', "c;d");
+# another; comment
+/* block; comment */
+START TRANSACTION;
+INSERT INTO demo (`value`) VALUES ('it''s;safe', 'slash\\;safe');
+COMMIT;
+-- trailing; comment only
+SQL;
+$splitStatements = splitInstallerSqlStatements($splitSql);
+assertCardPoolIntegration(
+    count($splitStatements) === 4
+        && strpos($splitStatements[0], "'a;b'") !== false
+        && strpos($splitStatements[0], '`demo;table`') !== false
+        && strpos($splitStatements[2], "'it''s;safe'") !== false
+        && stripos($splitStatements[1], 'START TRANSACTION') !== false
+        && stripos($splitStatements[3], 'COMMIT') !== false,
+    'Installer SQL splitter must ignore semicolons inside quotes and SQL comments'
+);
 
 assertCardPoolIntegration(
     strpos($files['init'], 'CardPoolService.php') !== false
@@ -81,6 +158,46 @@ foreach (['recruitment', 'skill_service'] as $serviceName) {
 }
 
 assertCardPoolIntegration(
+    strpos($files['general_skill'], 'LEFT JOIN equipped_skill_cards') !== false
+        && strpos($files['general_skill'], 'LEFT JOIN skill_card_catalog') !== false
+        && strpos($files['general_skill'], 'catalog_name') !== false
+        && strpos($files['general_skill'], 'catalog_effect_json') !== false
+        && preg_match(
+            '/hasCatalogMapping.{0,240}catalog_effect_json'
+            . '.{0,500}hasCatalogCard.{0,240}catalog_name/is',
+            $files['general_skill']
+        ) === 1,
+    'Mapped general skills must use authoritative catalog names and effects'
+);
+assertCardPoolIntegration(
+    strpos(
+        $files['general_skill'],
+        'public function isCatalogCardDisabled()'
+    ) !== false
+        && strpos($files['general_skill'], 'catalog_is_active') !== false
+        && strpos($files['general_skill'], '!$hasCatalogCard') !== false,
+    'GeneralSkill must expose disabled or missing mapped catalog cards'
+);
+foreach (['generals_page', 'general_detail_page'] as $pageName) {
+    assertCardPoolIntegration(
+        strpos($files[$pageName], 'isCatalogCardDisabled()') !== false
+            && strpos($files[$pageName], 'Disabled') !== false,
+        "{$pageName} must label disabled mapped skill cards"
+    );
+    assertCardPoolIntegration(
+        preg_match(
+            '/escapeHtml\(\s*\$skill->getSkillName\(\)\s*\)/',
+            $files[$pageName]
+        ) === 1
+            && preg_match(
+                '/escapeHtml\(\s*\$skill->getSkillType\(\)\s*\)/',
+                $files[$pageName]
+            ) === 1,
+        "{$pageName} must escape administrator-editable skill labels"
+    );
+}
+
+assertCardPoolIntegration(
     strpos($files['admin_home'], '数值层') !== false
         && strpos($files['admin_home'], '资源层') !== false
         && strpos($files['admin_home'], 'resources.php') !== false,
@@ -106,6 +223,220 @@ assertCardPoolIntegration(
         && strpos($files['admin_pools'], 'FOR UPDATE') !== false,
     'Pool mutations must use CSRF validation, transactions, and row locks'
 );
+assertCardPoolIntegration(
+    strpos(
+        $files['functions'],
+        'function lockResourceAdministrationBoundary('
+    ) !== false
+        && strpos($files['functions'], 'resource_admin_locks') !== false
+        && strpos($files['functions'], "lock_name = 'catalog_pools'") !== false
+        && strpos($files['functions'], 'FOR UPDATE') !== false,
+    'Catalog and pool mutations must share a durable transaction mutex'
+);
+assertCardPoolIntegration(
+    substr_count($files['admin_pools'], 'begin_transaction()') > 0
+        && substr_count(
+            $files['admin_pools'],
+            'lockResourceAdministrationBoundary($db);'
+        ) === substr_count($files['admin_pools'], 'begin_transaction()'),
+    'Every pool-administration transaction must acquire the shared mutex first'
+);
+assertCardPoolIntegration(
+    strpos(
+        $files['general'],
+        'lockResourceAdministrationBoundary($this->db);'
+    ) !== false
+        && strpos($files['general'], '(int) $this->ownerId === 0') !== false,
+    'Public general-template deletion must share the pool-administration mutex'
+);
+
+foreach (['admin_resources', 'admin_pools'] as $pageName) {
+    assertCardPoolIntegration(
+        preg_match(
+            '/if\s*\(\s*!\s*\$user->isValid\(\)\s*\)\s*\{'
+            . '.*?session_unset\(\)\s*;'
+            . '.*?session_destroy\(\)\s*;'
+            . ".*?header\(\s*'Location:\s*login\\.php'\s*\)\s*;"
+            . '.*?exit\s*;.*?\}/s',
+            $files[$pageName]
+        ) === 1,
+        "{$pageName} must clear an invalid login session before redirecting"
+    );
+}
+
+$catalogPoolRules = [
+    'admin_generals' => [
+        'load_helper' => 'adminGeneralLoadPublishedPoolsForUpdate',
+        'touch_helper' => 'adminGeneralTouchPublishedPools',
+        'entry_table' => 'general_pool_entries',
+        'resource_key' => 'general_id'
+    ],
+    'admin_skills' => [
+        'load_helper' => 'adminSkillLoadPublishedPoolsForUpdate',
+        'touch_helper' => 'adminSkillTouchPublishedPools',
+        'entry_table' => 'skill_pool_entries',
+        'resource_key' => 'card_id'
+    ]
+];
+foreach ($catalogPoolRules as $pageName => $rule) {
+    $page = $files[$pageName];
+    $loadHelperSource = extractCardPoolTestFunction(
+        $page,
+        $rule['load_helper']
+    );
+    assertCardPoolIntegration(
+        $loadHelperSource !== null
+            && substr_count($page, $rule['load_helper'] . '(') >= 2
+            && strpos($page, $rule['entry_table']) !== false
+            && strpos($page, $rule['resource_key']) !== false
+            && strpos($loadHelperSource, 'pool.status') !== false
+            && strpos(
+                $loadHelperSource,
+                "pool.status = 'published'"
+            ) === false
+            && strpos($loadHelperSource, 'FOR UPDATE') !== false
+            && strpos(
+                $loadHelperSource,
+                "\$pool['status'] === 'published'"
+            ) !== false,
+        "{$pageName} must lock every containing pool before selecting published pools"
+    );
+    assertCardPoolIntegration(
+        substr_count($page, 'begin_transaction()') > 0
+            && substr_count(
+                $page,
+                'lockResourceAdministrationBoundary($db);'
+            ) === substr_count($page, 'begin_transaction()'),
+        "{$pageName} catalog transactions must acquire the shared mutex first"
+    );
+    assertCardPoolIntegration(
+        strpos($page, "hasPermission('publish_card_pools')") !== false
+            && preg_match(
+                '/rarity.{0,240}!==.{0,240}rarity/is',
+                $page
+            ) === 1,
+        "{$pageName} must require publish permission when rarity changes affect published odds"
+    );
+    assertCardPoolIntegration(
+        strpos($page, 'function ' . $rule['touch_helper'] . '(') !== false
+            && substr_count($page, $rule['touch_helper'] . '(') >= 2
+            && preg_match(
+                '/UPDATE\s+card_pools\s+SET\s+revision\s*=\s*revision\s*\+\s*1/is',
+                $page
+            ) === 1,
+        "{$pageName} must increment affected published-pool revisions"
+    );
+}
+
+$disableSkillStart = strpos(
+    $files['admin_skills'],
+    "\$action === 'disable_skill'"
+);
+$disableSkillSection = $disableSkillStart === false
+    ? ''
+    : substr($files['admin_skills'], $disableSkillStart, 5000);
+assertCardPoolIntegration(
+    $disableSkillSection !== ''
+        && strpos(
+            $disableSkillSection,
+            'adminSkillLoadPublishedPoolsForUpdate('
+        ) !== false
+        && strpos($disableSkillSection, 'DomainException') !== false
+        && strpos($disableSkillSection, 'UPDATE skill_card_catalog') !== false
+        && strpos($disableSkillSection, 'adminSkillLoadPublishedPoolsForUpdate(')
+            < strpos($disableSkillSection, 'UPDATE skill_card_catalog'),
+    'Skill retirement must be rejected before writing when a published pool references the card'
+);
+
+assertCardPoolIntegration(
+    strpos($files['admin_skills'], "'level_values'") !== false
+        && strpos($files['admin_skills'], "'cost_level_values'") !== false
+        && strpos($files['admin_skills'], "['mode']") !== false
+        && strpos($files['admin_skills'], "['values']") !== false,
+    'Structured level-curve modes must receive dedicated catalog validation'
+);
+assertCardPoolIntegration(
+    preg_match(
+        '/count\s*\([^)]*values[^)]*\).{0,240}maxLevel/is',
+        $files['admin_skills']
+    ) === 1
+        && (
+            strpos($files['admin_skills'], 'is_numeric(') !== false
+            || (
+                strpos($files['admin_skills'], 'is_int(') !== false
+                && strpos($files['admin_skills'], 'is_float(') !== false
+            )
+        )
+        && strpos($files['admin_skills'], 'is_finite(') !== false,
+    'Structured curves must contain finite numeric values covering max_level'
+);
+
+$curveValidatorSource = extractCardPoolTestFunction(
+    $files['admin_skills'],
+    'adminSkillValidateLevelCurves'
+);
+assertCardPoolIntegration(
+    $curveValidatorSource !== null,
+    'Structured curve validator must remain independently testable'
+);
+if ($curveValidatorSource !== null
+    && !function_exists('adminSkillValidateLevelCurves')) {
+    eval($curveValidatorSource);
+}
+
+$validLevelCurve = (object) [
+    'attack' => (object) [
+        'mode' => 'level_values',
+        'values' => [1, 2.5, 3]
+    ],
+    'speed' => (object) [
+        'mode' => 'cost_level_values',
+        'values' => [4, 5, 6]
+    ]
+];
+assertCardPoolIntegration(
+    empty(adminSkillValidateLevelCurves($validLevelCurve, 3)),
+    'Both structured curve modes must accept finite numeric values through max_level'
+);
+assertCardPoolIntegration(
+    !empty(adminSkillValidateLevelCurves($validLevelCurve, 3, 'active')),
+    'Structured curves must be rejected for active skills until active execution supports them'
+);
+
+$invalidCurves = [
+    'short' => (object) [
+        'attack' => (object) [
+            'mode' => 'level_values',
+            'values' => [1, 2]
+        ]
+    ],
+    'numeric_string' => (object) [
+        'attack' => (object) [
+            'mode' => 'level_values',
+            'values' => [1, '2', 3]
+        ]
+    ],
+    'not_finite' => (object) [
+        'attack' => (object) [
+            'mode' => 'cost_level_values',
+            'values' => [1, INF, 3]
+        ]
+    ],
+    'array_without_descriptor' => (object) [
+        'attack' => [1, 2, 3]
+    ],
+    'object_without_descriptor' => (object) [
+        'attack' => (object) [
+            'values_by_name' => [1, 2, 3]
+        ]
+    ]
+];
+foreach ($invalidCurves as $caseName => $effectObject) {
+    assertCardPoolIntegration(
+        !empty(adminSkillValidateLevelCurves($effectObject, 3)),
+        "Structured curve validator must reject {$caseName} values"
+    );
+}
 
 foreach (['recruit_page', 'skill_page'] as $pageName) {
     assertCardPoolIntegration(
@@ -116,6 +447,14 @@ foreach (['recruit_page', 'skill_page'] as $pageName) {
         "{$pageName} must expose selectable pools and published odds"
     );
 }
+assertCardPoolIntegration(
+    strpos($files['skill_page'], '$inventoryCardDisabled') !== false
+        && strpos(
+            $files['skill_page'],
+            '库存记录保留但不能新装备'
+        ) !== false,
+    'Disabled inventory cards must be labeled and excluded from equip controls'
+);
 
 foreach (['fresh_sql', 'upgrade_sql'] as $schemaName) {
     $schema = $files[$schemaName];
@@ -123,6 +462,8 @@ foreach (['fresh_sql', 'upgrade_sql'] as $schemaName) {
         'card_pools',
         'general_pool_entries',
         'skill_pool_entries',
+        'resource_admin_locks',
+        "'catalog_pools'",
         'pool_code_snapshot',
         'pool_revision',
         'entry_weight',

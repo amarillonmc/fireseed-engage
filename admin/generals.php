@@ -10,7 +10,13 @@ if (!isset($_SESSION['user_id'])) {
 }
 
 $user = new User($_SESSION['user_id']);
-if (!$user->isValid() || !$user->isAdmin()) {
+if (!$user->isValid()) {
+    session_unset();
+    session_destroy();
+    header('Location: login.php');
+    exit;
+}
+if (!$user->isAdmin()) {
     header('Location: ../index.php');
     exit;
 }
@@ -338,6 +344,75 @@ function synchronizeAdminInherentSkill($db, $generalId, $card) {
     $stmt->close();
 }
 
+/**
+ * 锁定引用武将模板的全部卡池并返回已发布池 / Locks every referencing pool and returns published pools
+ * @param mysqli $db 数据库连接 / Database connection
+ * @param int $generalId 公共模板ID / Public template ID
+ * @return array 已发布卡池 / Published pools
+ */
+function adminGeneralLoadPublishedPoolsForUpdate($db, $generalId) {
+    $query = "SELECT pool.pool_id, pool.name, pool.revision, pool.status
+              FROM card_pools pool
+              JOIN general_pool_entries entry
+                ON entry.pool_id = pool.pool_id
+              WHERE entry.general_id = ?
+              ORDER BY pool.pool_id
+              FOR UPDATE";
+    $stmt = $db->prepare($query);
+    if (!$stmt) {
+        throw new RuntimeException('无法锁定武将所属的已发布卡池');
+    }
+    $stmt->bind_param('i', $generalId);
+    if (!$stmt->execute()) {
+        $stmt->close();
+        throw new RuntimeException('无法锁定武将所属的已发布卡池');
+    }
+
+    $result = $stmt->get_result();
+    $pools = [];
+    while ($result && ($pool = $result->fetch_assoc())) {
+        if ($pool['status'] === 'published') {
+            $pools[] = $pool;
+        }
+    }
+    $stmt->close();
+
+    return $pools;
+}
+
+/**
+ * 递增受目录稀有度变化影响的卡池修订号 / Increments revisions for pools affected by a catalog-rarity change
+ * @param mysqli $db 数据库连接 / Database connection
+ * @param array $pools 已锁定卡池 / Locked pools
+ * @param int $adminId 管理员ID / Administrator ID
+ * @return void
+ */
+function adminGeneralTouchPublishedPools($db, array $pools, $adminId) {
+    if (empty($pools)) {
+        return;
+    }
+
+    $query = "UPDATE card_pools
+              SET revision = revision + 1,
+                  updated_by = ?
+              WHERE pool_id = ?
+                AND status = 'published'";
+    $stmt = $db->prepare($query);
+    if (!$stmt) {
+        throw new RuntimeException('无法更新武将所属卡池的修订号');
+    }
+
+    foreach ($pools as $pool) {
+        $poolId = (int) $pool['pool_id'];
+        $stmt->bind_param('ii', $adminId, $poolId);
+        if (!$stmt->execute() || $stmt->affected_rows !== 1) {
+            $stmt->close();
+            throw new RuntimeException('无法更新武将所属卡池的修订号');
+        }
+    }
+    $stmt->close();
+}
+
 // 处理武将操作 / Handle general-template mutations
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     if (!validateCsrfToken()) {
@@ -370,6 +445,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     throw new RuntimeException('无法开始模板创建事务');
                 }
                 $transactionOpen = true;
+                lockResourceAdministrationBoundary($db);
                 $card = loadAdminInherentCard(
                     $db,
                     $data['inherent_card_id']
@@ -438,10 +514,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     throw new RuntimeException('无法开始模板更新事务');
                 }
                 $transactionOpen = true;
+                lockResourceAdministrationBoundary($db);
+                $publishedPools = adminGeneralLoadPublishedPoolsForUpdate(
+                    $db,
+                    $generalId
+                );
 
                 // 锁定并再次校验模板归属，阻止并发请求越权更新玩家武将 / Lock and revalidate ownership to prevent concurrent updates from touching player generals
                 $stmt = $db->prepare(
-                    'SELECT owner_id
+                    'SELECT owner_id, rarity
                      FROM generals
                      WHERE general_id = ?
                      LIMIT 1 FOR UPDATE'
@@ -458,6 +539,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 $stmt->close();
                 if (!$template || (int) $template['owner_id'] !== 0) {
                     throw new DomainException('公共武将模板不存在');
+                }
+                $rarityChanged = (string) $template['rarity']
+                    !== (string) $data['rarity'];
+                if ($rarityChanged
+                    && !empty($publishedPools)
+                    && !$adminManager->hasPermission('publish_card_pools')) {
+                    throw new DomainException(
+                        '该武将属于已发布卡池；修改稀有度需要卡池发布权限'
+                    );
                 }
 
                 $card = loadAdminInherentCard(
@@ -494,6 +584,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 $stmt->close();
 
                 synchronizeAdminInherentSkill($db, $generalId, $card);
+                if ($rarityChanged && !empty($publishedPools)) {
+                    adminGeneralTouchPublishedPools(
+                        $db,
+                        $publishedPools,
+                        (int) $user->getUserId()
+                    );
+                }
                 if (!$db->commit()) {
                     throw new RuntimeException('武将模板更新事务提交失败');
                 }
@@ -505,6 +602,16 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     $generalId,
                     'Updated template: ' . $data['name']
                 );
+                if ($rarityChanged) {
+                    foreach ($publishedPools as $pool) {
+                        $user->logAdminAction(
+                            'revise_card_pool_from_general_catalog',
+                            'card_pool',
+                            (int) $pool['pool_id'],
+                            'General rarity changed: ' . $generalId
+                        );
+                    }
+                }
             } elseif ($action === 'delete_general') {
                 $generalId = (int) ($_POST['general_id'] ?? 0);
                 $general = new General($generalId);
@@ -517,7 +624,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 }
                 if (!$general->delete()) {
                     throw new DomainException(
-                        '武将已被招募记录引用，无法删除；可保留模板以维护历史'
+                        '武将仍被卡池或招募记录引用，无法删除；请先移出卡池并保留历史所需模板'
                     );
                 }
 

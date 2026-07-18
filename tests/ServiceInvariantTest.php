@@ -298,6 +298,21 @@ assertServiceInvariant(
     'Interrupted installation reruns must make base DDL and configuration seeds idempotent'
 );
 assertServiceInvariant(
+    strpos($install, 'function getInstallerSqlTransactionCommand') !== false
+        && strpos($install, "\$transactionCommand === 'START'") !== false
+        && strpos($install, "\$transactionCommand === 'COMMIT'") !== false
+        && strpos($install, '$db->begin_transaction()') !== false
+        && strpos($install, '$db->commit()') !== false
+        && strpos($install, '$db->rollback()') !== false
+        && strpos($install, '$db->prepare($statement)') !== false,
+    'Installer must route transaction controls through mysqli transaction APIs while preparing ordinary SQL'
+);
+assertServiceInvariant(
+    strpos($install, 'function splitInstallerSqlStatements(') !== false
+        && strpos($install, "explode(';', \$sql)") === false,
+    'Installer must split SQL without breaking semicolons inside strings or comments'
+);
+assertServiceInvariant(
     strpos($install, 'function createOrRecoverInstallationAdmin') !== false
         && strpos($install, 'WHERE username = ? OR email = ?') !== false
         && strpos($install, "\$accounts[0]['username'] !== \$username") !== false

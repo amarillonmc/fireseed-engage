@@ -8,7 +8,13 @@ if (!isset($_SESSION['user_id'])) {
 }
 
 $user = new User($_SESSION['user_id']);
-if (!$user->isValid() || !$user->isAdmin()) {
+if (!$user->isValid()) {
+    session_unset();
+    session_destroy();
+    header('Location: login.php');
+    exit;
+}
+if (!$user->isAdmin()) {
     header('Location: ../index.php');
     exit;
 }
@@ -609,6 +615,7 @@ if (isset($_SERVER['REQUEST_METHOD'])
                     throw new RuntimeException('无法开始卡池创建事务');
                 }
                 $transactionOpen = true;
+                lockResourceAdministrationBoundary($db);
 
                 $query = "SELECT pool_id
                           FROM card_pools
@@ -688,6 +695,7 @@ if (isset($_SERVER['REQUEST_METHOD'])
                     throw new RuntimeException('无法开始卡池更新事务');
                 }
                 $transactionOpen = true;
+                lockResourceAdministrationBoundary($db);
                 $pool = adminPoolLoadForUpdate($db, $poolId);
                 adminPoolRequireEditable($adminManager, $pool);
                 $changed = adminPoolMetadataChanged($pool, $data);
@@ -761,6 +769,7 @@ if (isset($_SERVER['REQUEST_METHOD'])
                     throw new RuntimeException('无法开始成员更新事务');
                 }
                 $transactionOpen = true;
+                lockResourceAdministrationBoundary($db);
                 $pool = adminPoolLoadForUpdate($db, $poolId);
                 adminPoolRequireEditable($adminManager, $pool);
                 $resource = adminPoolLoadActiveResource(
@@ -861,6 +870,7 @@ if (isset($_SERVER['REQUEST_METHOD'])
                     throw new RuntimeException('无法开始成员移除事务');
                 }
                 $transactionOpen = true;
+                lockResourceAdministrationBoundary($db);
                 $pool = adminPoolLoadForUpdate($db, $poolId);
                 adminPoolRequireEditable($adminManager, $pool);
                 $existing = adminPoolLoadEntryForUpdate(
@@ -940,6 +950,7 @@ if (isset($_SERVER['REQUEST_METHOD'])
                     throw new RuntimeException('无法开始卡池发布事务');
                 }
                 $transactionOpen = true;
+                lockResourceAdministrationBoundary($db);
                 $pool = adminPoolLoadForUpdate($db, $poolId);
                 if ($pool['status'] === 'archived') {
                     throw new DomainException('归档卡池必须先恢复为草稿');
@@ -987,6 +998,7 @@ if (isset($_SERVER['REQUEST_METHOD'])
                     throw new RuntimeException('无法开始卡池归档事务');
                 }
                 $transactionOpen = true;
+                lockResourceAdministrationBoundary($db);
                 $pool = adminPoolLoadForUpdate($db, $poolId);
                 if ($pool['status'] === 'archived') {
                     throw new DomainException('卡池已经归档');
@@ -1029,6 +1041,7 @@ if (isset($_SERVER['REQUEST_METHOD'])
                     throw new RuntimeException('无法开始卡池恢复事务');
                 }
                 $transactionOpen = true;
+                lockResourceAdministrationBoundary($db);
                 $pool = adminPoolLoadForUpdate($db, $poolId);
                 if ($pool['status'] !== 'archived') {
                     throw new DomainException('只有归档卡池可以恢复');

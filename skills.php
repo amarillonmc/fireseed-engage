@@ -194,7 +194,7 @@ $equippedQuery = "SELECT gs.skill_id, gs.general_id, gs.skill_name, gs.slot,
                          c.name AS catalog_name,
                          c.effect_json AS catalog_effect_json,
                          c.rarity, c.activation_type, c.max_level,
-                         c.base_cooldown, cd.ready_at
+                         c.base_cooldown, c.is_active, cd.ready_at
                   FROM general_skills gs
                   JOIN generals g ON g.general_id = gs.general_id
                   JOIN equipped_skill_cards esc ON esc.skill_id = gs.skill_id
@@ -472,11 +472,15 @@ $pageTitle = '技能卡管理';
             <?php else: ?>
                 <div class="skill-grid">
                     <?php foreach ($inventory as $card): ?>
+                        <?php $inventoryCardDisabled = (int) $card['is_active'] !== 1; ?>
                         <article class="skill-card">
                             <h4>
                                 <?php echo escapeHtml($card['name']); ?>
                                 <span class="rarity"><?php echo escapeHtml($card['rarity']); ?></span>
                                 × <?php echo number_format((int) $card['quantity']); ?>
+                                <?php if ($inventoryCardDisabled): ?>
+                                    <span class="muted">[已停用 / Disabled]</span>
+                                <?php endif; ?>
                             </h4>
                             <p><?php echo escapeHtml($card['description']); ?></p>
                             <p>
@@ -484,7 +488,9 @@ $pageTitle = '技能卡管理';
                                 <?php echo escapeHtml($card['element']); ?> /
                                 <?php echo escapeHtml(formatSkillEffectsForPage($card['effect'])); ?>
                             </p>
-                            <?php if (empty($ownedGenerals)): ?>
+                            <?php if ($inventoryCardDisabled): ?>
+                                <p class="muted">该目录卡已停用，库存记录保留但不能新装备。</p>
+                            <?php elseif (empty($ownedGenerals)): ?>
                                 <p class="muted">你尚未拥有可装备的武将。</p>
                             <?php else: ?>
                                 <form method="post" action="skills.php">
@@ -547,12 +553,16 @@ $pageTitle = '技能卡管理';
                                     : '';
                                 $onCooldown = $readyAt !== ''
                                     && strtotime($readyAt) > time();
+                                $skillDisabled = (int) $skill['is_active'] !== 1;
                                 ?>
                                 <article class="skill-card">
                                     <h5>
                                         槽位 <?php echo (int) $skill['slot']; ?>：
                                         <?php echo escapeHtml($skill['skill_name']); ?>
                                         <span class="rarity"><?php echo escapeHtml($skill['rarity']); ?></span>
+                                        <?php if ($skillDisabled): ?>
+                                            <span class="muted">[已停用 / Disabled]</span>
+                                        <?php endif; ?>
                                     </h5>
                                     <p>
                                         Lv.<?php echo number_format((int) $skill['skill_level']); ?>
@@ -571,7 +581,7 @@ $pageTitle = '技能卡管理';
                                             <?php echo csrfField(); ?>
                                             <input type="hidden" name="action" value="upgrade">
                                             <input type="hidden" name="skill_id" value="<?php echo (int) $skill['skill_id']; ?>">
-                                            <button type="submit" <?php echo (int) $skill['skill_level'] >= (int) $skill['max_level'] ? 'disabled' : ''; ?>>
+                                            <button type="submit" <?php echo $skillDisabled || (int) $skill['skill_level'] >= (int) $skill['max_level'] ? 'disabled' : ''; ?>>
                                                 升级（技能点 × <?php echo number_format((int) $skill['skill_level'] * 10); ?>）
                                             </button>
                                         </form>
@@ -580,7 +590,7 @@ $pageTitle = '技能卡管理';
                                                 <?php echo csrfField(); ?>
                                                 <input type="hidden" name="action" value="activate">
                                                 <input type="hidden" name="skill_id" value="<?php echo (int) $skill['skill_id']; ?>">
-                                                <button type="submit" <?php echo $onCooldown ? 'disabled' : ''; ?>>发动</button>
+                                                <button type="submit" <?php echo $skillDisabled || $onCooldown ? 'disabled' : ''; ?>>发动</button>
                                             </form>
                                         <?php endif; ?>
                                         <?php if ((int) $skill['slot'] > 0): ?>

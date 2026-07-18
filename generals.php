@@ -441,9 +441,12 @@ $pageTitle = '武将管理';
                             <h5>技能卡牌</h5>
                             <?php foreach ($general->getSkills() as $skill): ?>
                             <div class="skill">
-                                <span class="skill-name"><?php echo $skill->getSkillName(); ?></span>
+                                <span class="skill-name"><?php echo escapeHtml($skill->getSkillName()); ?></span>
                                 <span class="skill-level">Lv.<?php echo $skill->getSkillLevel(); ?></span>
-                                <span class="skill-type">(<?php echo $skill->getSkillType(); ?>)</span>
+                                <span class="skill-type">(<?php echo escapeHtml($skill->getSkillType()); ?>)</span>
+                                <?php if ($skill->isCatalogCardDisabled()): ?>
+                                    <span class="skill-type">[已停用 / Disabled]</span>
+                                <?php endif; ?>
                             </div>
                             <?php endforeach; ?>
                         </div>

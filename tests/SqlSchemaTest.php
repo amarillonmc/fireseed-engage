@@ -106,6 +106,155 @@ assertSql(
     'Upgrade must not depend on a SOURCE statement'
 );
 
+$resourceSeedScripts = [
+    'fresh install' => $freshSql,
+    'card-pool upgrade' => $cardPoolUpgradeSql
+];
+foreach ($resourceSeedScripts as $scriptName => $schemaSql) {
+    $catalogSeedMarker = 'resource_catalog_seed_20260717';
+    $catalogInsertMatch = [];
+    $hasCatalogInsert = preg_match(
+        '/INSERT(?:\s+IGNORE)?\s+INTO\s+`skill_card_catalog`/i',
+        $schemaSql,
+        $catalogInsertMatch,
+        PREG_OFFSET_CAPTURE
+    ) === 1;
+    $firstCatalogInsert = $hasCatalogInsert
+        ? (int) $catalogInsertMatch[0][1]
+        : false;
+    $firstMarker = strpos($schemaSql, $catalogSeedMarker);
+    $lastMarker = strrpos($schemaSql, $catalogSeedMarker);
+    $poolInsertMatch = [];
+    $hasPoolInsert = preg_match(
+        '/INSERT(?:\s+IGNORE)?\s+INTO\s+`card_pools`/i',
+        $schemaSql,
+        $poolInsertMatch,
+        PREG_OFFSET_CAPTURE
+    ) === 1;
+    $firstPoolInsert = $hasPoolInsert
+        ? (int) $poolInsertMatch[0][1]
+        : false;
+    $skillPoolMemberMatch = [];
+    $hasSkillPoolMemberInsert = preg_match(
+        '/INSERT(?:\s+IGNORE)?\s+INTO\s+`skill_pool_entries`/i',
+        $schemaSql,
+        $skillPoolMemberMatch,
+        PREG_OFFSET_CAPTURE
+    ) === 1;
+    $skillPoolMemberInsert = $hasSkillPoolMemberInsert
+        ? (int) $skillPoolMemberMatch[0][1]
+        : false;
+    $seedTransactionStart = strrpos(
+        substr($schemaSql, 0, $firstCatalogInsert),
+        'START TRANSACTION;'
+    );
+    $seedCommit = strpos($schemaSql, 'COMMIT;', $lastMarker);
+
+    assertSql(
+        $firstCatalogInsert !== false
+            && $firstMarker !== false
+            && $lastMarker !== false
+            && $firstPoolInsert !== false
+            && $skillPoolMemberInsert !== false
+            && $firstMarker !== $lastMarker
+            && $lastMarker > $firstCatalogInsert
+            && $lastMarker > $skillPoolMemberInsert,
+        "{$scriptName} must wrap catalog boilerplate in a durable one-time seed marker"
+    );
+    assertSql(
+        $seedTransactionStart !== false
+            && $seedTransactionStart < $firstCatalogInsert
+            && $seedCommit !== false
+            && $seedCommit > $lastMarker,
+        "{$scriptName} must commit catalog, pool, and completion-marker writes atomically"
+    );
+    assertSql(
+        preg_match(
+            '/NOT\s+EXISTS\s*\(.*?game_config.*?'
+            . $catalogSeedMarker
+            . '/is',
+            $schemaSql
+            ) === 1
+            && preg_match(
+                '/INSERT(?:\s+IGNORE)?\s+INTO\s+`?game_config`?'
+                . '.*?'
+                . $catalogSeedMarker
+                . '.*?FROM\s+`fireseed_resource_seed_gate`'
+                . '/is',
+                $schemaSql
+            ) === 1,
+        "{$scriptName} must test and persist the catalog seed marker"
+    );
+    assertSql(
+        strpos($schemaSql, 'fireseed_skill_card_seed') !== false
+            && preg_match(
+                '/INSERT(?:\s+IGNORE)?\s+INTO\s+`skill_card_catalog`'
+                . '.*?FROM\s+`fireseed_skill_card_seed`\s+AS\s+seed'
+                . '.*?JOIN\s+`fireseed_resource_seed_gate`\s+AS\s+seed_gate'
+                . '.*?LEFT\s+JOIN\s+`skill_card_catalog`\s+AS\s+existing'
+                . '.*?existing\.`card_id`\s+IS\s+NULL'
+                . '/is',
+                $schemaSql
+            ) === 1,
+        "{$scriptName} must not repopulate retired skill catalog seeds after completion"
+    );
+    assertSql(
+        strpos($schemaSql, 'fireseed_general_seed_targets') !== false
+            && preg_match(
+                '/INSERT\s+INTO\s+`fireseed_general_seed_targets`'
+                . '.*?JOIN\s+`fireseed_resource_seed_gate`\s+AS\s+seed_gate'
+                . '.*?LEFT\s+JOIN\s+`general_template_catalog`\s+AS\s+catalog'
+                . '.*?catalog\.`template_code`\s+IS\s+NULL'
+                . '/is',
+                $schemaSql
+            ) === 1
+            && substr_count(
+                $schemaSql,
+                'JOIN `fireseed_general_seed_targets` AS seed_target'
+            ) >= 3,
+        "{$scriptName} must restrict general boilerplate writes to first-run target codes"
+    );
+    $poolTargetSnapshot = strpos(
+        $schemaSql,
+        'INSERT INTO `fireseed_pool_seed_targets`'
+    );
+    $poolTargetSection = $poolTargetSnapshot === false
+        || $firstPoolInsert === false
+        || $poolTargetSnapshot >= $firstPoolInsert
+        ? ''
+        : substr(
+            $schemaSql,
+            $poolTargetSnapshot,
+            $firstPoolInsert - $poolTargetSnapshot
+        );
+    $poolAbsenceCheck = preg_match(
+        '/NOT\s+EXISTS\s*\(.*?FROM\s+`card_pools`/is',
+        $poolTargetSection
+    ) === 1
+        || (
+            strpos($poolTargetSection, 'LEFT JOIN `card_pools`') !== false
+            && preg_match(
+                '/existing\.`pool_id`\s+IS\s+NULL/i',
+                $poolTargetSection
+            ) === 1
+        );
+    assertSql(
+        $poolTargetSnapshot !== false
+            && $firstPoolInsert !== false
+            && $poolTargetSnapshot < $firstPoolInsert
+            && $poolAbsenceCheck
+            && strpos(
+                $poolTargetSection,
+                'JOIN `fireseed_resource_seed_gate` AS seed_gate'
+            ) !== false
+            && substr_count(
+                $schemaSql,
+                'JOIN `fireseed_pool_seed_targets` AS seed_target'
+            ) >= 3,
+        "{$scriptName} must seed members only into default pools absent before this seed run"
+    );
+}
+
 $freshTables = extractTables($freshSql);
 $upgradeTables = extractTables($upgradeSql);
 foreach ($freshTables as $table) {
@@ -205,6 +354,53 @@ foreach ([$freshSql, $upgradeSql] as $schemaSql) {
             $schemaSql
         ) === 1,
         'Arena winner must allow NULL and use ON DELETE SET NULL'
+    );
+}
+
+assertSql(
+    strpos(
+        $baseUpgradeSql,
+        'fireseed_gameplay_general_seed_gate'
+    ) !== false
+        && strpos(
+            $baseUpgradeSql,
+            "WHERE `key` = 'resource_catalog_seed_20260717'"
+        ) !== false
+        && substr_count(
+            $baseUpgradeSql,
+            'JOIN `fireseed_gameplay_general_seed_gate` AS resource_gate'
+        ) >= 6,
+    'Base gameplay migration reruns must freeze legacy general seeds after the resource catalog marker'
+);
+assertSql(
+    preg_match(
+        '/UPDATE\s+`generals`\s+AS\s+general.*?'
+        . 'JOIN\s+`fireseed_gameplay_general_seed_gate`/is',
+        $baseUpgradeSql
+    ) === 1
+        && preg_match(
+            '/UPDATE\s+`general_skills`\s+AS\s+skill.*?'
+            . 'JOIN\s+`fireseed_gameplay_general_seed_gate`/is',
+            $baseUpgradeSql
+        ) === 1,
+    'Legacy general and inherent-skill overwrites must both obey the catalog seed gate'
+);
+
+$resourceLockScripts = [
+    'fresh install' => $freshSql,
+    'card-pool upgrade' => $cardPoolUpgradeSql
+];
+foreach ($resourceLockScripts as $scriptName => $schemaSql) {
+    assertSql(
+        strpos(
+            $schemaSql,
+            'CREATE TABLE IF NOT EXISTS `resource_admin_locks`'
+        ) !== false
+            && strpos(
+                $schemaSql,
+                "VALUES ('catalog_pools')"
+            ) !== false,
+        "{$scriptName} must install the shared resource-administration mutex"
     );
 }
 

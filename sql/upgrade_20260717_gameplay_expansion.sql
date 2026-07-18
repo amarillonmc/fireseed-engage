@@ -1443,6 +1443,21 @@ INSERT IGNORE INTO `skill_card_catalog`
 ('crystal_guard','晶障','降低所属军队受到的战损。','SS','冷冰冰','passive','defense','{"damage_reduction":15}',0,5),
 ('data_insight','数据洞察','提高技能效果与任务奖励。','SS','亮晶晶','passive','support','{"skill_power":15,"quest_reward":5}',0,5);
 
+-- 后续资源目录迁移完成后冻结此旧版模板种子，避免重跑覆盖后台已发布内容。 / Freeze this legacy template seed after the later catalog migration completes so reruns cannot overwrite published administration data.
+DROP TEMPORARY TABLE IF EXISTS `fireseed_gameplay_general_seed_gate`;
+CREATE TEMPORARY TABLE `fireseed_gameplay_general_seed_gate` (
+  `allowed` tinyint(1) NOT NULL,
+  PRIMARY KEY (`allowed`)
+) ENGINE=InnoDB;
+
+INSERT INTO `fireseed_gameplay_general_seed_gate` (`allowed`)
+SELECT 1
+WHERE NOT EXISTS (
+  SELECT 1
+  FROM `game_config`
+  WHERE `key` = 'resource_catalog_seed_20260717'
+);
+
 -- 从企划武将设计文档同步 G001-G014，并添加六张低罕贵同角色版本以支持 B 池。 / Synchronize G001-G014 from the project design and add six lower-rarity versions for the B pool.
 DROP TEMPORARY TABLE IF EXISTS `fireseed_general_template_seed`;
 CREATE TEMPORARY TABLE `fireseed_general_template_seed` (
@@ -1488,6 +1503,8 @@ SELECT
   0, seed.`name`, '原创角色', seed.`rarity`, seed.`cost`, seed.`element`,
   1, 100, 100, seed.`attack`, seed.`defense`, seed.`speed`, seed.`intelligence`, 1
 FROM `fireseed_general_template_seed` AS seed
+JOIN `fireseed_gameplay_general_seed_gate` AS resource_gate
+  ON resource_gate.`allowed` = 1
 LEFT JOIN `general_template_catalog` AS catalog
   ON catalog.`template_code` = seed.`template_code`
 LEFT JOIN `generals` AS existing
@@ -1501,6 +1518,8 @@ WHERE catalog.`template_code` IS NULL
 INSERT IGNORE INTO `general_template_catalog` (`template_code`,`general_id`)
 SELECT seed.`template_code`, MIN(general.`general_id`)
 FROM `fireseed_general_template_seed` AS seed
+JOIN `fireseed_gameplay_general_seed_gate` AS resource_gate
+  ON resource_gate.`allowed` = 1
 JOIN `generals` AS general
   ON general.`owner_id` = 0
   AND general.`name` = seed.`name`
@@ -1513,6 +1532,8 @@ JOIN `general_template_catalog` AS catalog
   ON catalog.`general_id` = general.`general_id`
 JOIN `fireseed_general_template_seed` AS seed
   ON seed.`template_code` = catalog.`template_code`
+JOIN `fireseed_gameplay_general_seed_gate` AS resource_gate
+  ON resource_gate.`allowed` = 1
 SET
   general.`owner_id` = 0,
   general.`name` = seed.`name`,
@@ -1536,6 +1557,8 @@ JOIN `fireseed_general_template_seed` AS seed
   ON seed.`template_code` = catalog.`template_code`
 JOIN `skill_card_catalog` AS card
   ON card.`card_code` = seed.`skill_card_code`
+JOIN `fireseed_gameplay_general_seed_gate` AS resource_gate
+  ON resource_gate.`allowed` = 1
 SET
   skill.`skill_type` = '自带',
   skill.`skill_name` = card.`name`,
@@ -1548,6 +1571,8 @@ INSERT INTO `general_skills`
 SELECT
   catalog.`general_id`, '自带', card.`name`, 0, 1, card.`effect_json`
 FROM `general_template_catalog` AS catalog
+JOIN `fireseed_gameplay_general_seed_gate` AS resource_gate
+  ON resource_gate.`allowed` = 1
 JOIN `fireseed_general_template_seed` AS seed
   ON seed.`template_code` = catalog.`template_code`
 JOIN `skill_card_catalog` AS card
@@ -1560,6 +1585,8 @@ WHERE existing.`skill_id` IS NULL;
 INSERT INTO `equipped_skill_cards` (`skill_id`,`card_id`,`equipped_at`)
 SELECT skill.`skill_id`, card.`card_id`, NOW()
 FROM `general_template_catalog` AS catalog
+JOIN `fireseed_gameplay_general_seed_gate` AS resource_gate
+  ON resource_gate.`allowed` = 1
 JOIN `fireseed_general_template_seed` AS seed
   ON seed.`template_code` = catalog.`template_code`
 JOIN `skill_card_catalog` AS card
@@ -1571,6 +1598,7 @@ ON DUPLICATE KEY UPDATE
   `card_id` = VALUES(`card_id`);
 
 DROP TEMPORARY TABLE `fireseed_general_template_seed`;
+DROP TEMPORARY TABLE `fireseed_gameplay_general_seed_gate`;
 
 INSERT IGNORE INTO `shop_catalog`
 (`item_code`,`name`,`description`,`cost_json`,`grant_json`,`daily_limit`) VALUES

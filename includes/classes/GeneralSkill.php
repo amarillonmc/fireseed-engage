@@ -10,6 +10,8 @@ class GeneralSkill {
     private $slot;
     private $skillLevel;
     private $skillEffect;
+    private $catalogCardId;
+    private $isCatalogCardDisabled = false;
     private $isValid = false;
     
     /**
@@ -26,10 +28,21 @@ class GeneralSkill {
     }
     
     /**
-     * 加载技能数据
+     * 加载技能数据，并让已映射技能使用目录权威定义
+     * Loads skill data and uses the authoritative catalog definition for mapped skills
      */
     private function loadSkillData() {
-        $query = "SELECT * FROM general_skills WHERE skill_id = ?";
+        $query = "SELECT gs.*, mapped.card_id AS mapped_card_id,
+                         card.card_id AS catalog_card_id,
+                         card.name AS catalog_name,
+                         card.effect_json AS catalog_effect_json,
+                         card.is_active AS catalog_is_active
+                  FROM general_skills gs
+                  LEFT JOIN equipped_skill_cards mapped
+                    ON mapped.skill_id = gs.skill_id
+                  LEFT JOIN skill_card_catalog card
+                    ON card.card_id = mapped.card_id
+                  WHERE gs.skill_id = ?";
         $stmt = $this->db->prepare($query);
         $stmt->bind_param('i', $this->skillId);
         $stmt->execute();
@@ -42,7 +55,23 @@ class GeneralSkill {
             $this->skillType = $skillData['skill_type'];
             $this->slot = $skillData['slot'];
             $this->skillLevel = $skillData['skill_level'];
-            $this->skillEffect = json_decode($skillData['skill_effect'], true);
+            $hasCatalogMapping = $skillData['mapped_card_id'] !== null;
+            $hasCatalogCard = $skillData['catalog_card_id'] !== null;
+            $effectJson = $hasCatalogMapping
+                ? (string) ($skillData['catalog_effect_json'] ?? '')
+                : (string) $skillData['skill_effect'];
+            $decodedEffect = json_decode($effectJson, true);
+            $this->skillEffect = is_array($decodedEffect)
+                ? $decodedEffect
+                : [];
+            if ($hasCatalogMapping) {
+                $this->catalogCardId = (int) $skillData['mapped_card_id'];
+                $this->isCatalogCardDisabled = !$hasCatalogCard
+                    || (int) $skillData['catalog_is_active'] !== 1;
+                if ($hasCatalogCard) {
+                    $this->skillName = (string) $skillData['catalog_name'];
+                }
+            }
             $this->isValid = true;
         }
         
@@ -233,6 +262,23 @@ class GeneralSkill {
      */
     public function getEffect() {
         return $this->skillEffect;
+    }
+
+    /**
+     * 获取映射的目录技能卡ID / Gets the mapped catalog skill-card ID
+     * @return int|null 技能卡ID / Skill-card ID
+     */
+    public function getCatalogCardId() {
+        return $this->catalogCardId;
+    }
+
+    /**
+     * 判断映射目录卡是否已停用或缺失 / Checks whether the mapped catalog card is disabled or missing
+     * @return bool 是否停用 / Whether disabled
+     */
+    public function isCatalogCardDisabled() {
+        return $this->catalogCardId !== null
+            && $this->isCatalogCardDisabled;
     }
     
     /**

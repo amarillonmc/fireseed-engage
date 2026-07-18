@@ -1249,9 +1249,16 @@ class General {
         }
         
         // 开始事务 / Start the transaction.
-        $this->db->begin_transaction();
+        if (!$this->db->begin_transaction()) {
+            return false;
+        }
         
         try {
+            // 公共模板删除与卡池后台共享事务边界 / Public-template deletion shares the pool-administration transaction boundary.
+            if ((int) $this->ownerId === 0) {
+                lockResourceAdministrationBoundary($this->db);
+            }
+
             // 删除武将的技能 / Delete the general's skills.
             $query = "DELETE FROM general_skills WHERE general_id = ?";
             $stmt = $this->db->prepare($query);

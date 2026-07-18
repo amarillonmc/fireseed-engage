@@ -315,6 +315,44 @@ function lockSeasonForWorldAction($db) {
 }
 
 /**
+ * 锁定资源目录与卡池后台的共享事务边界 / Lock the shared catalog-and-pool administration boundary
+ *
+ * 调用方必须已经开启事务，并在锁定任何卡池或目录行之前调用本函数。
+ * The caller must already have a transaction open and invoke this function
+ * before locking any pool or catalog row.
+ *
+ * @param mysqli $db 数据库连接 / Database connection
+ * @return void
+ * @throws RuntimeException 互斥锁缺失或无法取得 / Mutex missing or unavailable
+ */
+function lockResourceAdministrationBoundary($db) {
+    $query = "SELECT lock_name
+              FROM resource_admin_locks
+              WHERE lock_name = 'catalog_pools'
+              FOR UPDATE";
+    $stmt = $db->prepare($query);
+    if (!$stmt || !$stmt->execute()) {
+        if ($stmt) {
+            $stmt->close();
+        }
+        throw new RuntimeException(
+            '无法锁定资源目录与卡池管理边界'
+            . ' / Failed to lock the catalog-and-pool administration boundary'
+        );
+    }
+
+    $result = $stmt->get_result();
+    $lock = $result ? $result->fetch_assoc() : null;
+    $stmt->close();
+    if (!$lock) {
+        throw new RuntimeException(
+            '资源管理互斥锁尚未安装，请先执行最新数据库升级'
+            . ' / Resource administration mutex is not installed'
+        );
+    }
+}
+
+/**
  * 限制并清理单行文本输入 / Normalize and bound a single-line text input
  * @param mixed $value 输入值 / Input value
  * @param int $maxLength 最大字符数 / Maximum character count

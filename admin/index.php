@@ -9,7 +9,13 @@ if (!isset($_SESSION['user_id'])) {
 }
 
 $user = new User($_SESSION['user_id']);
-if (!$user->isValid() || !$user->isAdmin()) {
+if (!$user->isValid()) {
+    session_unset();
+    session_destroy();
+    header('Location: login.php');
+    exit;
+}
+if (!$user->isAdmin()) {
     header('Location: ../index.php');
     exit;
 }
