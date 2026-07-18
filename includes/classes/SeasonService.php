@@ -115,12 +115,19 @@ class SeasonService {
                 throw new RuntimeException('不能攻击自己占领的地点');
             }
             if ($site['owner_id'] !== null
-                && $this->areUsersAllied($userId, (int) $site['owner_id'])) {
-                throw new RuntimeException('不能攻击同联盟成员占领的地点');
+                && $this->areUsersInSameForce(
+                    $userId,
+                    (int) $site['owner_id']
+                )) {
+                throw new RuntimeException(
+                    '不能攻击同势力成员占领的地点 / Cannot attack a site held by the same force'
+                );
             }
             if ($site['site_type'] === 'silver_hole'
                 && !$this->hasGatewayAccessInTransaction($userId)) {
-                throw new RuntimeException('必须先由自己或联盟成员占领至少一座十二门');
+                throw new RuntimeException(
+                    '必须先由自己或同势力成员占领至少一座十二门 / Your force must control a Gateway first'
+                );
             }
 
             $attackerPower = $army->getCombatPower();
@@ -338,7 +345,12 @@ class SeasonService {
 
                 $requiredSeconds = VICTORY_OCCUPATION_DAYS * 86400;
                 if ((int) $silverHole['held_seconds'] >= $requiredSeconds) {
-                    $winnerId = (int) $silverHole['owner_id'];
+                    // 胜利归属使用当前有效势力领袖，附属玩家不能单独截留胜利。 / Attribute victory to the current effective-force owner so a vassal cannot retain it separately.
+                    $vassalService = new VassalService();
+                    $winnerId = (int) $vassalService
+                        ->getEffectiveForceOwnerId(
+                            (int) $silverHole['owner_id']
+                        );
                     $resetHours = (int) SEASON_RESET_DELAY_HOURS;
                     $query = "UPDATE seasons
                               SET status = 'reset_pending', winner_id = ?,
@@ -452,26 +464,132 @@ class SeasonService {
      * @return array 排名 / Rankings
      */
     private function getRanking($seasonId) {
-        $query = "SELECT ss.*, u.username,
-                         (ss.territory_score + ss.battle_score * 2
-                          + ss.gateway_score * 100 + ss.raid_score) AS total_score
+        $query = "SELECT ss.user_id, ss.territory_score,
+                         ss.battle_score, ss.gateway_score,
+                         ss.raid_score, ss.updated_at
                   FROM season_scores ss
-                  INNER JOIN users u ON u.user_id = ss.user_id
                   WHERE ss.season_id = ?
-                  ORDER BY total_score DESC, ss.updated_at ASC LIMIT 50";
+                  ORDER BY ss.user_id";
         $stmt = $this->db->prepare($query);
         $stmt->bind_param('i', $seasonId);
         $stmt->execute();
         $result = $stmt->get_result();
-        $ranking = [];
+        $scoreRows = [];
         if ($result) {
             while ($row = $result->fetch_assoc()) {
-                $ranking[] = $row;
+                $scoreRows[] = $row;
             }
         }
         $stmt->close();
 
-        return $ranking;
+        if (empty($scoreRows)) {
+            return [];
+        }
+
+        $vassalService = new VassalService();
+        $ownerIds = $vassalService->getEffectiveForceOwnerIds(
+            array_column($scoreRows, 'user_id')
+        );
+        $grouped = [];
+        foreach ($scoreRows as $row) {
+            $userId = (int) $row['user_id'];
+            $ownerId = isset($ownerIds[$userId])
+                ? (int) $ownerIds[$userId]
+                : $userId;
+            if (!isset($grouped[$ownerId])) {
+                $grouped[$ownerId] = [
+                    'user_id' => $ownerId,
+                    'contributor_ids' => [],
+                    'territory_score' => 0,
+                    'battle_score' => 0,
+                    'gateway_score' => 0,
+                    'raid_score' => 0,
+                    'updated_at' => (string) $row['updated_at']
+                ];
+            }
+
+            $grouped[$ownerId]['contributor_ids'][$userId] = true;
+            foreach ([
+                'territory_score',
+                'battle_score',
+                'gateway_score',
+                'raid_score'
+            ] as $scoreColumn) {
+                $grouped[$ownerId][$scoreColumn] +=
+                    (int) $row[$scoreColumn];
+            }
+            if (strcmp(
+                (string) $row['updated_at'],
+                (string) $grouped[$ownerId]['updated_at']
+            ) < 0) {
+                $grouped[$ownerId]['updated_at'] =
+                    (string) $row['updated_at'];
+            }
+        }
+
+        $usernames = $this->readUsernamesByIds(array_keys($grouped));
+        $ranking = [];
+        foreach ($grouped as $ownerId => $row) {
+            $row['username'] = isset($usernames[$ownerId])
+                ? $usernames[$ownerId]
+                : (string) $ownerId;
+            $row['contributor_count'] = count($row['contributor_ids']);
+            unset($row['contributor_ids']);
+            $row['total_score'] = (int) $row['territory_score']
+                + (int) $row['battle_score'] * 2
+                + (int) $row['gateway_score'] * 100
+                + (int) $row['raid_score'];
+            $ranking[] = $row;
+        }
+
+        usort($ranking, function ($left, $right) {
+            $comparison = (int) $right['total_score']
+                <=> (int) $left['total_score'];
+            if ($comparison !== 0) {
+                return $comparison;
+            }
+            $comparison = strcmp(
+                (string) $left['updated_at'],
+                (string) $right['updated_at']
+            );
+            return $comparison !== 0
+                ? $comparison
+                : ((int) $left['user_id'] <=> (int) $right['user_id']);
+        });
+
+        return array_slice($ranking, 0, 50);
+    }
+
+    /**
+     * 批量读取势力领袖显示名 / Read force-owner display names in batches
+     * @param array $userIds 玩家ID / User IDs
+     * @return array 以玩家ID为键的显示名 / Display names keyed by user ID
+     */
+    private function readUsernamesByIds($userIds) {
+        $usernames = [];
+        foreach (array_chunk(array_values($userIds), 500) as $chunk) {
+            if (empty($chunk)) {
+                continue;
+            }
+
+            $placeholders = implode(',', array_fill(0, count($chunk), '?'));
+            $query = "SELECT user_id, username
+                      FROM users
+                      WHERE user_id IN ({$placeholders})";
+            $stmt = $this->db->prepare($query);
+            $parameters = array_map('intval', $chunk);
+            $types = str_repeat('i', count($parameters));
+            $stmt->bind_param($types, ...$parameters);
+            $stmt->execute();
+            $result = $stmt->get_result();
+            while ($result && ($row = $result->fetch_assoc())) {
+                $usernames[(int) $row['user_id']] =
+                    (string) $row['username'];
+            }
+            $stmt->close();
+        }
+
+        return $usernames;
     }
 
     /**
@@ -489,51 +607,41 @@ class SeasonService {
      * @return bool 是否拥有通行权 / Whether access is available
      */
     private function hasGatewayAccessInTransaction($userId) {
-        $query = "SELECT 1
-                  FROM world_sites ws
-                  LEFT JOIN alliance_members mine ON mine.user_id = ?
-                  LEFT JOIN alliance_members owner_member
-                    ON owner_member.user_id = ws.owner_id
-                  WHERE ws.site_type = 'gateway'
-                    AND (
-                      ws.owner_id = ?
-                      OR (
-                        mine.alliance_id IS NOT NULL
-                        AND owner_member.alliance_id = mine.alliance_id
-                      )
-                    )
-                  LIMIT 1";
+        $query = "SELECT owner_id
+                  FROM world_sites
+                  WHERE site_type = 'gateway' AND owner_id IS NOT NULL
+                  ORDER BY site_id";
         $stmt = $this->db->prepare($query);
-        $stmt->bind_param('ii', $userId, $userId);
         $stmt->execute();
         $result = $stmt->get_result();
-        $hasAccess = $result && $result->num_rows > 0;
+        $vassalService = new VassalService();
+        $hasAccess = false;
+        while ($result && ($row = $result->fetch_assoc())) {
+            if ($vassalService->areUsersInSameForce(
+                $userId,
+                (int) $row['owner_id']
+            )) {
+                $hasAccess = true;
+                break;
+            }
+        }
         $stmt->close();
 
         return $hasAccess;
     }
 
     /**
-     * 检查两名玩家是否在同一联盟 / Check whether two users share an alliance
+     * 检查两名玩家是否归属同一有效势力 / Check whether two users belong to the same effective force
      * @param int $firstUserId 第一玩家ID / First user ID
      * @param int $secondUserId 第二玩家ID / Second user ID
-     * @return bool 是否同盟 / Whether they are allied
+     * @return bool 是否同势力 / Whether they share an effective force
      */
-    private function areUsersAllied($firstUserId, $secondUserId) {
-        $query = "SELECT 1
-                  FROM alliance_members first_member
-                  INNER JOIN alliance_members second_member
-                    ON second_member.alliance_id = first_member.alliance_id
-                  WHERE first_member.user_id = ? AND second_member.user_id = ?
-                  LIMIT 1";
-        $stmt = $this->db->prepare($query);
-        $stmt->bind_param('ii', $firstUserId, $secondUserId);
-        $stmt->execute();
-        $result = $stmt->get_result();
-        $allied = $result && $result->num_rows > 0;
-        $stmt->close();
-
-        return $allied;
+    private function areUsersInSameForce($firstUserId, $secondUserId) {
+        $vassalService = new VassalService();
+        return $vassalService->areUsersInSameForce(
+            $firstUserId,
+            $secondUserId
+        );
     }
 
     /**

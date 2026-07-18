@@ -20,6 +20,7 @@ class Battle {
     private $tableAvailability = [];
     private $lockedWorldSite = false;
     private $lockedSeasonId = null;
+    private $lockedForceOwnerIds = [];
     private $participantSnapshotLoaded = false;
     private $participantSnapshot = null;
     private $isValid = false;
@@ -202,6 +203,7 @@ class Battle {
         $defenderUserId = null;
         $battleResult = null;
         $territoryCaptured = false;
+        $this->lockedForceOwnerIds = [];
         $this->db->begin_transaction();
 
         try {
@@ -245,15 +247,49 @@ class Battle {
                 throw new RuntimeException('战斗目标无效 / Invalid battle target');
             }
             $ownerSnapshot = $this->readCombatOwnerIds($defenderType);
-            $this->lockUserRows(
-                $ownerSnapshot['attacker_user_id'],
-                $ownerSnapshot['defender_user_id']
-            );
+            $forceChainUserIds = [$ownerSnapshot['attacker_user_id']];
             if ($ownerSnapshot['defender_user_id'] !== null) {
-                $this->lockAllianceMemberships(
+                $vassalService = new VassalService();
+                $combatUserIds = [
                     $ownerSnapshot['attacker_user_id'],
                     $ownerSnapshot['defender_user_id']
+                ];
+                $forceChainUserIds =
+                    $vassalService->getEffectiveForceChainUserIds(
+                        $combatUserIds
+                    );
+            }
+            $this->lockUserRows($forceChainUserIds);
+            if ($ownerSnapshot['defender_user_id'] !== null) {
+                // 锁住预读链后再次解析；若此前链条已变化，则回滚并由下一轮重试。
+                // Resolve again after locking the previewed chain; if it changed
+                // beforehand, roll back for a clean retry instead of adding
+                // out-of-order user locks.
+                $verifiedForceChainUserIds =
+                    $vassalService->getEffectiveForceChainUserIdsForUpdate(
+                        $combatUserIds,
+                        $forceChainUserIds
+                    );
+                if (!empty(array_diff(
+                    $verifiedForceChainUserIds,
+                    $forceChainUserIds
+                ))) {
+                    throw new RuntimeException(
+                        '有效势力链已经变化，请重试战斗 / Effective-force chain changed; retry the battle'
+                    );
+                }
+                // 附属关系先于联盟关系锁定，因为它会覆盖有效势力归属。 / Lock vassalage before alliance membership because it overrides effective-force ownership.
+                $vassalService->lockRelationsForUsers(
+                    $verifiedForceChainUserIds
                 );
+                $this->lockAllianceMemberships(
+                    $verifiedForceChainUserIds
+                );
+                $this->lockedForceOwnerIds =
+                    $vassalService->getEffectiveForceOwnerIdsForUpdate(
+                        $combatUserIds,
+                        $forceChainUserIds
+                    );
             }
             $this->lockCombatState($defenderType);
 
@@ -309,8 +345,19 @@ class Battle {
                 throw new RuntimeException('参战方归属已经变化 / Combatant ownership changed');
             }
             if ($defenderUserId !== null) {
-                $allianceService = new AllianceService();
-                if (!$allianceService->canUsersFight($attackerUserId, $defenderUserId)) {
+                $attackerForceOwnerId = isset(
+                    $this->lockedForceOwnerIds[$attackerUserId]
+                )
+                    ? (int) $this->lockedForceOwnerIds[$attackerUserId]
+                    : null;
+                $defenderForceOwnerId = isset(
+                    $this->lockedForceOwnerIds[$defenderUserId]
+                )
+                    ? (int) $this->lockedForceOwnerIds[$defenderUserId]
+                    : null;
+                if ($attackerForceOwnerId === null
+                    || $defenderForceOwnerId === null
+                    || $attackerForceOwnerId === $defenderForceOwnerId) {
                     $this->cancelPendingBattleLocked();
                     $this->db->commit();
                     return false;
@@ -575,14 +622,17 @@ class Battle {
     }
 
     /**
-     * 按用户ID顺序锁定参战玩家 / Lock battle users in ascending user-ID order
+     * 按用户ID顺序锁定参战势力链玩家 / Lock battle force-chain users in ascending user-ID order
+     * @param array $userIds 玩家ID / User IDs
+     * @return void
      */
-    private function lockUserRows($attackerUserId, $defenderUserId) {
-        $userIds = [(int) $attackerUserId];
-        if ($defenderUserId !== null) {
-            $userIds[] = (int) $defenderUserId;
-        }
-        $userIds = array_values(array_unique($userIds));
+    private function lockUserRows($userIds) {
+        $userIds = array_values(array_unique(array_filter(
+            array_map('intval', (array) $userIds),
+            function ($userId) {
+                return $userId > 0;
+            }
+        )));
         sort($userIds, SORT_NUMERIC);
         foreach ($userIds as $userId) {
             $query = "SELECT user_id
@@ -981,23 +1031,32 @@ class Battle {
     }
 
     /**
-     * 按用户ID锁定联盟关系，防止结算途中阵营变化 / Lock memberships by user ID to prevent mid-resolution alliance changes
+     * 按用户ID锁定势力链联盟关系，防止结算途中阵营变化 / Lock force-chain memberships by user ID to prevent mid-resolution force changes
+     * @param array $userIds 玩家ID / User IDs
+     * @return void
      */
-    private function lockAllianceMemberships($firstUserId, $secondUserId) {
+    private function lockAllianceMemberships($userIds) {
         if (!$this->isOptionalTableAvailable('alliance_members')) {
             return;
         }
-        $lowerId = min((int) $firstUserId, (int) $secondUserId);
-        $upperId = max((int) $firstUserId, (int) $secondUserId);
-        $query = "SELECT member_id FROM alliance_members
-                  WHERE user_id IN (?, ?)
-                  ORDER BY user_id
-                  FOR UPDATE";
-        $stmt = $this->db->prepare($query);
-        $stmt->bind_param('ii', $lowerId, $upperId);
-        $stmt->execute();
-        $stmt->get_result();
-        $stmt->close();
+        $userIds = array_values(array_unique(array_filter(
+            array_map('intval', (array) $userIds),
+            function ($userId) {
+                return $userId > 0;
+            }
+        )));
+        sort($userIds, SORT_NUMERIC);
+        foreach ($userIds as $userId) {
+            $query = "SELECT member_id
+                      FROM alliance_members
+                      WHERE user_id = ?
+                      FOR UPDATE";
+            $stmt = $this->db->prepare($query);
+            $stmt->bind_param('i', $userId);
+            $stmt->execute();
+            $stmt->get_result();
+            $stmt->close();
+        }
     }
 
     /**
@@ -1213,10 +1272,8 @@ class Battle {
                     ];
                     $rewards['circuit_points'] = 5; // 获得5点思考回路
                 }
-                // 非主城是否易主由守军清零、锤子兵耐久伤害与占领成本共同决定 / Non-main-city capture is decided by cleared defenses, golem damage, and the occupation cost
-                if (!$defender->isMainCity()) {
-                    $rewards['capture_city'] = true;
-                }
+                // 副城易主或主城附属都必须先清空防御并耗尽耐久。 / Both secondary-city transfer and main-city subjugation require cleared defenses and depleted durability.
+                $rewards['capture_city'] = true;
                 break;
             case 'tile':
                 // 攻占地图格子的奖励
@@ -1320,7 +1377,6 @@ class Battle {
                 }
 
                 if (!empty($rewards['capture_city'])
-                    && !$defender->isMainCity()
                     && (!$attackerWon
                         || !$cityDefenseCleared
                         || !$this->isCityDurabilityDepleted($cityId))) {
@@ -1328,7 +1384,33 @@ class Battle {
                     unset($rewards['capture_city']);
                 }
 
-                if (!empty($rewards['capture_city']) && !$defender->isMainCity()) {
+                if (!empty($rewards['capture_city'])
+                    && $defender->isMainCity()) {
+                    // 主城物理所有权始终保留给原玩家；这里只改变附属关系或执行救出。 / A main city always remains physically owned by its player; this branch only changes vassalage or performs rescue.
+                    $vassalService = new VassalService();
+                    $rewards['main_city_resolution'] =
+                        $vassalService->resolveMainCityCaptureInTransaction(
+                            $attackerId,
+                            $oldOwnerId,
+                            $this->battleId,
+                            $this->lockedForceOwnerIds
+                        );
+                    $query = "UPDATE cities
+                              SET durability = max_durability
+                              WHERE city_id = ? AND owner_id = ?
+                                AND is_main_city = 1";
+                    $stmt = $this->db->prepare($query);
+                    $stmt->bind_param('ii', $cityId, $oldOwnerId);
+                    $restored = $stmt->execute()
+                        && $stmt->affected_rows === 1;
+                    $stmt->close();
+                    if (!$restored) {
+                        throw new RuntimeException(
+                            '无法恢复主城耐久 / Failed to restore main-city durability'
+                        );
+                    }
+                    unset($rewards['capture_city']);
+                } elseif (!empty($rewards['capture_city'])) {
                     if (!$this->consumeTerritoryOccupationCost($attackerId)) {
                         // 战斗胜利仍成立，但思考回路不足时不转移控制权 / Victory still stands, but insufficient circuit points prevent ownership transfer
                         unset($rewards['capture_city']);
@@ -1497,9 +1579,12 @@ class Battle {
         if ($attackerWon) {
             if (isset($rewards['circuit_points'])) {
                 $query = "UPDATE users
-                          SET circuit_points = LEAST(
-                              max_circuit_points,
-                              circuit_points + ?
+                          SET circuit_points = GREATEST(
+                              circuit_points,
+                              LEAST(
+                                  max_circuit_points,
+                                  circuit_points + ?
+                              )
                           )
                           WHERE user_id = ?";
                 $stmt = $this->db->prepare($query);

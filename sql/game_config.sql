@@ -45,6 +45,12 @@ INSERT INTO `game_config` (`key`, `value`, `description`, `is_constant`, `catego
 ('battle_damage_multiplier', '1.0', '战斗伤害倍率', 0, 'military'),
 ('army_movement_speed', '1.0', '军队移动速度倍率', 0, 'military'),
 
+-- 附属与脱离设置 / Vassalage and release settings
+('vassal_release_resource_rate', '0.70', '附属玩家主动脱离时缴纳当前每类资源的比例（0-1） / Share of every stored resource paid on voluntary release (0-1)', 0, 'vassalage'),
+('vassal_release_relocation_mode', 'outer', '主动脱离后的主城迁移模式：outer=外围，middle=中围，subbase=随机既有分基地 / Main-city relocation after release: outer, middle, or a random existing sub-base', 0, 'vassalage'),
+('vassal_release_lose_all_territory', '1', '主动脱离后是否失去全部普通领地和未保留分基地（0/1） / Whether release removes all ordinary territory and unkept sub-bases (0/1)', 0, 'vassalage'),
+('vassal_release_refund_circuit', '1', '清除普通领地时是否全额返还其占用的思考回路（0/1，返还可暂时超过持有上限） / Whether removed ordinary territory fully refunds its occupied Circuit Points (0/1; refunds may temporarily exceed the holding cap)', 0, 'vassalage'),
+
 -- 武将相关设置
 ('general_recruitment_cost_multiplier', '1.0', '武将招募费用倍率', 0, 'generals'),
 ('general_max_level', '100', '武将最大等级', 0, 'generals'),

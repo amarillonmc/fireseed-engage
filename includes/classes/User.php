@@ -292,10 +292,14 @@ class User {
             return false;
         }
         
-        $newPoints = $this->circuitPoints + $points;
-        if ($newPoints > $this->maxCircuitPoints) {
-            $newPoints = $this->maxCircuitPoints;
-        }
+        // 全额退款可能使余额暂时超上限；普通加点不得反向削减该余额。 / Full refunds may temporarily exceed the cap; ordinary grants must never reduce that balance.
+        $newPoints = max(
+            (int) $this->circuitPoints,
+            min(
+                (int) $this->maxCircuitPoints,
+                (int) $this->circuitPoints + (int) $points
+            )
+        );
         
         $query = "UPDATE users SET circuit_points = ? WHERE user_id = ?";
         $stmt = $this->db->prepare($query);

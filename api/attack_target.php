@@ -205,7 +205,10 @@ if (!Map::isAdjacentToUserControl(
 if ($defenderOwnerId !== null) {
     $allianceService = new AllianceService();
     if (!$allianceService->canUsersFight($userId, $defenderOwnerId)) {
-        echo json_encode(['success' => false, 'message' => '不能攻击自己或同联盟成员']);
+        echo json_encode([
+            'success' => false,
+            'message' => '不能攻击自己或同势力成员 / Cannot attack yourself or a member of the same force'
+        ]);
         exit;
     }
 }

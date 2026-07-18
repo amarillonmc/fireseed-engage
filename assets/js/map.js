@@ -286,6 +286,16 @@ document.addEventListener('DOMContentLoaded', function() {
         const safeName = escapeHtml(tile.name || '');
         const safeDescription = escapeHtml(tile.description || '');
         const safeOwnerName = escapeHtml(tile.owner_name || '');
+        const safeForceOwnerName = escapeHtml(tile.force_owner_name || '');
+        const forceOwnerId = Number.isFinite(Number(tile.force_owner_id))
+            ? Math.trunc(Number(tile.force_owner_id))
+            : 0;
+        const sameForce = tile.same_force === true;
+        const forceNotice = tileOwnerId > 0
+            && forceOwnerId > 0
+            && forceOwnerId !== tileOwnerId
+            ? `<p>势力归属: ${safeForceOwnerName}</p>`
+            : '';
         
         let infoHtml = `
             <h3>${safeName}</h3>
@@ -299,13 +309,16 @@ document.addEventListener('DOMContentLoaded', function() {
                 if (tileOwnerId > 0) {
                     infoHtml += `
                         <p>拥有者: ${safeOwnerName}</p>
+                        ${forceNotice}
                         <p>驻军总量: ${garrisonTotal}</p>
                         ${ownGarrison}
                         <div class="map-actions">
                             ${tileOwnerId === USER_ID
                                 ? `${tileId > 0 ? `<button id="territory-btn" data-tile-id="${tileId}">管理驻军</button>` : ''}
                                    ${garrisonTotal === 0 ? `<button id="abandon-btn" data-x="${tileX}" data-y="${tileY}">放弃</button>` : ''}`
-                                : `<button id="attack-btn" data-x="${tileX}" data-y="${tileY}">攻击</button>`}
+                                : (sameForce
+                                    ? '<span>同势力领地</span>'
+                                    : `<button id="attack-btn" data-x="${tileX}" data-y="${tileY}">攻击</button>`)}
                         </div>
                     `;
                 } else {
@@ -325,13 +338,16 @@ document.addEventListener('DOMContentLoaded', function() {
                 if (tileOwnerId > 0) {
                     infoHtml += `
                         <p>拥有者: ${safeOwnerName}</p>
+                        ${forceNotice}
                         <p>驻军总量: ${garrisonTotal}</p>
                         ${ownGarrison}
                         <div class="map-actions">
                             ${tileOwnerId === USER_ID
                                 ? `${tileId > 0 ? `<button id="territory-btn" data-tile-id="${tileId}">管理驻军</button>` : ''}
                                    ${garrisonTotal === 0 ? `<button id="abandon-btn" data-x="${tileX}" data-y="${tileY}">放弃</button>` : ''}`
-                                : `<button id="attack-btn" data-x="${tileX}" data-y="${tileY}">攻击</button>`}
+                                : (sameForce
+                                    ? '<span>同势力领地</span>'
+                                    : `<button id="attack-btn" data-x="${tileX}" data-y="${tileY}">攻击</button>`)}
                         </div>
                     `;
                 } else {
@@ -345,18 +361,26 @@ document.addEventListener('DOMContentLoaded', function() {
             case 'npc_fort':
                 infoHtml += `
                     <p>等级: ${npcLevel}</p>
+                    ${tileOwnerId > 0 ? `<p>拥有者: ${safeOwnerName}</p>${forceNotice}` : ''}
                     <div class="map-actions">
-                        ${tile.subtype && tile.subtype.indexOf('gateway_') === 0
+                        ${sameForce
+                            ? '<span>同势力据点</span>'
+                            : (tile.subtype && tile.subtype.indexOf('gateway_') === 0
                             ? '<button id="season-btn">前往赛季战</button>'
-                            : `<button id="attack-btn" data-x="${tileX}" data-y="${tileY}">攻击</button>`}
+                            : `<button id="attack-btn" data-x="${tileX}" data-y="${tileY}">攻击</button>`)}
                     </div>
                 `;
                 break;
             case 'player_city':
                 infoHtml += `
                     <p>拥有者: ${safeOwnerName}</p>
+                    ${forceNotice}
                     <div class="map-actions">
-                        ${tileOwnerId === USER_ID ? `<button id="enter-btn" data-city-id="${tileCityId}">进入</button>` : `<button id="attack-btn" data-x="${tileX}" data-y="${tileY}">攻击</button>`}
+                        ${tileOwnerId === USER_ID
+                            ? `<button id="enter-btn" data-city-id="${tileCityId}">进入</button>`
+                            : (sameForce
+                                ? '<span>同势力城池</span>'
+                                : `<button id="attack-btn" data-x="${tileX}" data-y="${tileY}">攻击</button>`)}
                     </div>
                 `;
                 break;

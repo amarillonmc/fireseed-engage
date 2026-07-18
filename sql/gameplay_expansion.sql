@@ -187,6 +187,52 @@ CREATE TABLE IF NOT EXISTS `alliance_members` (
   CONSTRAINT `alliance_members_ibfk_2` FOREIGN KEY (`user_id`) REFERENCES `users` (`user_id`) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
+-- 附属关系保留完整历史；生成列保证每名玩家同时至多存在一条有效关系。 / Vassalage keeps full history; the generated column permits at most one active relation per player.
+CREATE TABLE IF NOT EXISTS `vassal_relations` (
+  `relation_id` bigint(20) NOT NULL AUTO_INCREMENT,
+  `vassal_id` int(11) NOT NULL,
+  `lord_id` int(11) NOT NULL,
+  `overlord_id` int(11) NOT NULL,
+  `previous_force_owner_id` int(11) NOT NULL,
+  `previous_alliance_id` int(11) DEFAULT NULL,
+  `previous_alliance_role` enum('leader','officer','member') DEFAULT NULL,
+  `previous_alliance_contribution` int(11) NOT NULL DEFAULT 0,
+  `previous_alliance_joined_at` datetime DEFAULT NULL,
+  `status` enum('active','rescued','redeemed','replaced') NOT NULL DEFAULT 'active',
+  `active_vassal_id` int(11) GENERATED ALWAYS AS
+    (CASE WHEN `status` = 'active' THEN `vassal_id` ELSE NULL END) STORED,
+  `capture_battle_id` int(11) DEFAULT NULL,
+  `ended_by_user_id` int(11) DEFAULT NULL,
+  `release_payment_json` text DEFAULT NULL,
+  `release_destination` varchar(32) DEFAULT NULL,
+  `refunded_circuit_points` int(11) NOT NULL DEFAULT 0,
+  `captured_at` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  `ended_at` datetime DEFAULT NULL,
+  PRIMARY KEY (`relation_id`),
+  UNIQUE KEY `uq_vassal_relations_active_vassal` (`active_vassal_id`),
+  KEY `lord_status` (`lord_id`,`status`),
+  KEY `overlord_status` (`overlord_id`,`status`),
+  KEY `previous_alliance_id` (`previous_alliance_id`),
+  KEY `capture_battle_id` (`capture_battle_id`),
+  CONSTRAINT `vassal_relations_ibfk_1` FOREIGN KEY (`vassal_id`) REFERENCES `users` (`user_id`) ON DELETE CASCADE,
+  CONSTRAINT `vassal_relations_ibfk_2` FOREIGN KEY (`lord_id`) REFERENCES `users` (`user_id`) ON DELETE RESTRICT,
+  CONSTRAINT `vassal_relations_ibfk_3` FOREIGN KEY (`overlord_id`) REFERENCES `users` (`user_id`) ON DELETE RESTRICT,
+  CONSTRAINT `vassal_relations_ibfk_4` FOREIGN KEY (`previous_force_owner_id`) REFERENCES `users` (`user_id`) ON DELETE RESTRICT,
+  CONSTRAINT `vassal_relations_ibfk_5` FOREIGN KEY (`previous_alliance_id`) REFERENCES `alliances` (`alliance_id`) ON DELETE SET NULL,
+  CONSTRAINT `vassal_relations_ibfk_6` FOREIGN KEY (`capture_battle_id`) REFERENCES `battles` (`battle_id`) ON DELETE SET NULL,
+  CONSTRAINT `vassal_relations_ibfk_7` FOREIGN KEY (`ended_by_user_id`) REFERENCES `users` (`user_id`) ON DELETE SET NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+-- 首次失守时固化可执行救出的原势力成员；后续联盟流动不会改写历史资格。 / Freeze original-force rescuers on the first capture so later alliance movement cannot rewrite historical eligibility.
+CREATE TABLE IF NOT EXISTS `vassal_rescue_eligibility` (
+  `relation_id` bigint(20) NOT NULL,
+  `eligible_user_id` int(11) NOT NULL,
+  PRIMARY KEY (`relation_id`,`eligible_user_id`),
+  KEY `eligible_user_id` (`eligible_user_id`),
+  CONSTRAINT `vassal_rescue_eligibility_ibfk_1` FOREIGN KEY (`relation_id`) REFERENCES `vassal_relations` (`relation_id`) ON DELETE CASCADE,
+  CONSTRAINT `vassal_rescue_eligibility_ibfk_2` FOREIGN KEY (`eligible_user_id`) REFERENCES `users` (`user_id`) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
 CREATE TABLE IF NOT EXISTS `alliance_applications` (
   `application_id` int(11) NOT NULL AUTO_INCREMENT,
   `alliance_id` int(11) NOT NULL,
@@ -745,3 +791,10 @@ SELECT
 WHERE NOT EXISTS (
   SELECT 1 FROM `raid_events` WHERE `name` = '数据潮汐·零号'
 );
+
+INSERT IGNORE INTO `game_config`
+(`key`,`value`,`description`,`is_constant`,`category`) VALUES
+('vassal_release_resource_rate','0.70','附属玩家主动脱离时缴纳当前每类资源的比例（0-1） / Share of every stored resource paid on voluntary release (0-1)',0,'vassalage'),
+('vassal_release_relocation_mode','outer','主动脱离后的主城迁移模式：outer=外围，middle=中围，subbase=随机既有分基地 / Main-city relocation after release: outer, middle, or a random existing sub-base',0,'vassalage'),
+('vassal_release_lose_all_territory','1','主动脱离后是否失去全部普通领地和未保留分基地（0/1） / Whether release removes all ordinary territory and unkept sub-bases (0/1)',0,'vassalage'),
+('vassal_release_refund_circuit','1','清除普通领地时是否全额返还其占用的思考回路（0/1，返还可暂时超过持有上限） / Whether removed ordinary territory fully refunds its occupied Circuit Points (0/1; refunds may temporarily exceed the holding cap)',0,'vassalage');

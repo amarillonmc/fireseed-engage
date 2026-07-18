@@ -1,0 +1,161 @@
+种火集结号 - 主城失守、附属、救出与主动脱离实现记录
+Fireseed Engage - Capital loss, vassalage, rescue, and voluntary release implementation log
+
+日期 / Date: 2026-07-17
+
+一、规则落地 / Implemented rules
+
+1. 敌对玩家彻底攻陷主城后，主城仍由原玩家经营，物理所有权不转移；
+   系统会立即建立一条有效附属关系。
+   A fully conquered capital remains physically owned and operated by its
+   original player, while an active vassal relation is created immediately.
+
+2. 关系同时记录直接宗主、当前势力领袖快照、原势力、原联盟身份、
+   原贡献与加入时间，并保留 rescued、redeemed、replaced 历史。
+   Relations record the direct lord, effective-force snapshot, former force,
+   former alliance role, contribution, and join time, while retaining rescued,
+   redeemed, and replaced history.
+
+3. 附属玩家会暂时离开原联盟。首次失守时会冻结原势力可救援成员名单；
+   名单内玩家之后无论离盟、入盟或成为其他附属，救出资格都不改变。名单
+   内玩家再次攻陷主城时恢复原联盟与贡献；若原盟主职位已经移交，则以
+   干部身份归队。
+   A vassal temporarily leaves the former alliance. Eligible rescuers are
+   frozen at the first capture, so later membership or vassalage changes do
+   not rewrite eligibility. A listed player can reconquer the capital to
+   restore membership and contribution; a transferred leader returns as an
+   officer unless the leader seat is empty.
+
+4. 非原势力玩家再次攻陷附属玩家主城时会改换直接宗主，但原势力快照
+   继续保留，以便之后仍可由原势力救出。
+   A later hostile conquest replaces the direct lord while retaining the
+   original-force snapshot for a future rescue.
+
+5. 附属期间，领地、城池和本季全部积分仍记在物理玩家账下，但排行榜、
+   敌友判断、十二门通行权与赛季胜利会沿任意深度的直接宗主链实时汇总
+   到当前有效势力。
+   During vassalage, holdings and raw season scores remain on the physical
+   account, while rankings, hostility, Gateway access, and season victory are
+   attributed to the live effective force through an arbitrarily deep direct-
+   lord chain.
+
+二、主动脱离 / Voluntary release
+
+1. 新页面 vassal.php 显示直接宗主、积分归属势力、原势力救出说明、
+   六系贡金预估、迁城规则、领地数量和强制确认框。
+   The new vassal.php page shows the direct lord, score force, rescue rules,
+   six-resource tribute preview, relocation policy, holdings, and a mandatory
+   confirmation.
+
+2. 默认贡金为六系当前余额的 70%，每系向下取整并直接支付给直接宗主。
+   计算使用百万分之一精度的定点数，避免 90 × 70% 被浮点误差算成 62。
+   Tribute defaults to 70% of each live resource balance, floors each resource,
+   and pays the direct lord. Millionth-scale fixed-point arithmetic prevents
+   floating-point undercharges such as calculating 90 × 70% as 62.
+
+3. 脱离事务会重新锁定并计算最新余额；宗主必须完整收到贡金，若整数上限
+   无法容纳则整笔事务回滚，不会静默丢失资源。
+   The release transaction recalculates locked live balances. The lord must
+   receive the exact tribute; integer overflow rolls back the whole operation
+   instead of silently dropping resources.
+
+4. 迁城模式：
+   - outer：地图最外围约 20% 带状区域；
+   - middle：外围 20% 与中央 35%-65% 之间的中围环；
+   - subbase：随机既有分基地升为主城；没有分基地时回退 outer。
+   Relocation modes:
+   - outer: the outermost approximately 20% map band;
+   - middle: the ring between the outer 20% and central 35%-65% area;
+   - subbase: promote a random existing sub-base, falling back to outer.
+
+5. 开启全部领地清算时，普通领地、NPC 据点、特殊地点和未保留分基地
+   会失去；城市士兵、领地驻军、驻城武将和军队会安全合并或召回新主城。
+   With full settlement enabled, ordinary territory, NPC forts, special sites,
+   and unkept sub-bases are released. City troops, territory garrisons, city
+   generals, and armies are safely merged or recalled to the new capital.
+
+6. 净领地分会按实际失去的普通领地、NPC 据点和计分分基地扣减。
+   思考回路按仍占用成本的普通领地全额返还；这是归还既有投入，可暂时
+   超过常规持有上限，之后的新产出会等待余额重新低于上限。分基地改建
+   时已有的既有返还机制继续有效。
+   Net territory score is reduced for lost ordinary tiles, NPC forts, and
+   scored sub-bases. Circuit Points committed to ordinary territory are fully
+   restored. Because this repays an existing investment, the balance may
+   temporarily exceed its normal cap; new production waits until it falls
+   below the cap. Ordinary rewards never reduce an over-cap refund, while
+   abandonment and sub-base conversion also restore their investments in full.
+
+7. 脱离不会恢复原联盟；玩家在迁城完成和贡金支付后成为独立玩家。
+   救出才会恢复原势力身份。
+   Voluntary release does not restore the former alliance. The player becomes
+   independent after relocation and payment; only rescue restores the former
+   force identity.
+
+三、后台配置 / Administration settings
+
+- vassal_release_resource_rate = 0.70
+- vassal_release_relocation_mode = outer
+- vassal_release_lose_all_territory = 1
+- vassal_release_refund_circuit = 1
+
+四、并发与完整性 / Concurrency and integrity
+
+1. 用户、附属关系、联盟成员、军队、城池、地图和资源采用固定事务锁序。
+   派兵、联盟创建/申请/审批与主城征服共享玩家优先锁，不能并发制造
+   “既是附属又是联盟成员”或迁城后的陈旧战斗。战斗结算会预读、按ID
+   锁定并再次复核参战双方的完整宗主链；链条在加锁前变化时整笔回滚重试。
+   User, vassal, membership, army, city, map, and resource rows use stable lock
+   ordering. Dispatch and alliance admission share user-first locks with
+   capital conquest, preventing mixed vassal/membership states and stale
+   relocation battles. Battle resolution previews, locks in ID order, and
+   revalidates both complete lord chains; a pre-lock chain change rolls the
+   transaction back for a clean retry.
+
+2. 迁城会取消玩家发起、驻军防守、城池防守和领地防守的待处理战斗；
+   外来进攻军会停止无效行军，玩家自己的军队统一召回。
+   Relocation cancels pending battles involving the player's attacking army,
+   defending army, city, or territory. Incoming armies stop invalid marches,
+   and the player's own armies are recalled.
+
+3. 有效附属唯一键由可空生成列实现。只有附属玩家删除可级联清理关系；
+   宗主、势力领袖和原势力快照使用 RESTRICT，不能因演员删号静默解除
+   有效附属或抹去历史。
+   A nullable generated column enforces one active relation per vassal. Only
+   deletion of the vassal cascades; lord, overlord, and former-force references
+   use RESTRICT so actor deletion cannot silently free a vassal or erase history.
+
+4. vassal_rescue_eligibility 以关系与玩家复合主键保存首次失守名单；
+   再征服复制原名单。升级脚本会为旧有效关系按现存原联盟成员与已保存
+   原势力领袖进行最佳努力回填。
+   vassal_rescue_eligibility stores the first-capture roster by relation and
+   user, and superseding conquests copy it. The upgrade best-effort backfills
+   legacy active relations from current former-alliance members and the saved
+   former-force owner.
+
+5. 通用后台配置保存已修正为“更新保留原分类、新建默认 general”，
+   因而附属配置保存后仍留在 vassalage 页签。
+   Generic admin saves now preserve an existing category and use general only
+   for new keys, so vassalage settings remain in their administration tab.
+
+五、安装与升级 / Installation and upgrade
+
+全新安装继续由 install.php 载入 sql/gameplay_expansion.sql。
+Fresh installations continue to load sql/gameplay_expansion.sql via install.php.
+
+现有数据库执行：
+Existing databases run:
+
+mysql -u root -p fireseed_engage < sql/upgrade_20260717_gameplay_expansion.sql
+
+六、验证 / Validation
+
+- PHP 语法：119 个文件通过 / PHP syntax: 119 files passed
+- JavaScript 语法：2 个文件通过 / JavaScript syntax: 2 files passed
+- 静态规则：8 组、467 项断言通过 / Static rules: 8 suites, 467 assertions passed
+- git diff --check：通过 / passed
+
+当前环境没有 MySQL/MariaDB 客户端与 mysqli/pdo_mysql 驱动，因此未执行
+真实数据库迁移；新装与升级脚本已通过仓库的模式一致性静态检查。
+The current environment has no MySQL/MariaDB client or mysqli/pdo_mysql driver,
+so a live migration was not executed. Fresh and upgrade schemas passed the
+repository's static parity checks.

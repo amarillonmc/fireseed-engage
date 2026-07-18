@@ -27,6 +27,7 @@ require_once 'includes/classes/Battle.php';
 require_once 'includes/classes/AdminManager.php';
 require_once 'includes/classes/GameConfig.php';
 require_once 'includes/classes/GameRules.php';
+require_once 'includes/classes/VassalService.php';
 require_once 'includes/classes/EconomyService.php';
 require_once 'includes/classes/ProgressService.php';
 require_once 'includes/classes/RecruitmentService.php';

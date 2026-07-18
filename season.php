@@ -124,14 +124,16 @@ $pageTitle = '十二门与赛季';
         </section>
 
         <section class="gameplay-section">
-            <h3>赛季排行</h3>
+            <h3>赛季势力排行</h3>
+            <p>联盟成员与附属玩家的本季贡献会实时汇总到当前有效势力。</p>
             <table class="gameplay-table">
-                <thead><tr><th>名次</th><th>玩家</th><th>领地</th><th>战斗</th><th>十二门</th><th>总分</th></tr></thead>
+                <thead><tr><th>名次</th><th>势力代表</th><th>贡献者</th><th>领地</th><th>战斗</th><th>十二门</th><th>总分</th></tr></thead>
                 <tbody>
                 <?php foreach ($overview['ranking'] as $index => $rank): ?>
                     <tr>
                         <td><?php echo $index + 1; ?></td>
                         <td><?php echo escapeHtml($rank['username']); ?></td>
+                        <td><?php echo number_format((int) $rank['contributor_count']); ?></td>
                         <td><?php echo number_format((int) $rank['territory_score']); ?></td>
                         <td><?php echo number_format((int) $rank['battle_score']); ?></td>
                         <td><?php echo number_format((int) $rank['gateway_score']); ?></td>

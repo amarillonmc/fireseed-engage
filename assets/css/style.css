@@ -254,6 +254,13 @@ header {
     border: 1px solid #0000cc;
 }
 
+/* 附属与高风险操作警告 / Vassalage and high-risk action warnings */
+.message.warning {
+    background-color: #fff3cd;
+    color: #856404;
+    border: 1px solid #ffe08a;
+}
+
 /* 页脚样式 */
 footer {
     text-align: center;

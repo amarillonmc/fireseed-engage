@@ -308,29 +308,35 @@ class SubBaseService {
             );
 
             $refundCost = max(0, (int) TERRITORY_OCCUPATION_COST);
-            $refund = min(
-                $refundCost,
-                max(
-                    0,
-                    (int) $user['max_circuit_points']
-                        - (int) $user['circuit_points']
-                )
-            );
-            $query = "UPDATE users
-                      SET circuit_points = LEAST(
-                          max_circuit_points,
-                          circuit_points + ?
-                      )
-                      WHERE user_id = ?";
-            $stmt = $this->db->prepare($query);
-            $stmt->bind_param('ii', $refundCost, $userId);
-            if (!$stmt->execute()) {
-                $stmt->close();
-                throw new RuntimeException(
-                    '无法返还思考回路 / Failed to refund circuit points'
+            $refund = $refundCost;
+            if ($refundCost > 0) {
+                if ((int) $user['circuit_points']
+                    > 2147483647 - $refundCost) {
+                    throw new RuntimeException(
+                        '思考回路无法全额返还且不溢出整数 / Circuit Points cannot be fully refunded without integer overflow'
+                    );
+                }
+                $query = "UPDATE users
+                          SET circuit_points = circuit_points + ?
+                          WHERE user_id = ? AND circuit_points <= ?";
+                $stmt = $this->db->prepare($query);
+                $maximumBeforeAdd = 2147483647 - $refundCost;
+                $stmt->bind_param(
+                    'iii',
+                    $refundCost,
+                    $userId,
+                    $maximumBeforeAdd
                 );
+                $refunded = $stmt->execute()
+                    && $stmt->affected_rows === 1;
+                if (!$refunded) {
+                    $stmt->close();
+                    throw new RuntimeException(
+                        '无法返还思考回路 / Failed to refund circuit points'
+                    );
+                }
+                $stmt->close();
             }
-            $stmt->close();
 
             $this->recordGameplayEvent(
                 $userId,
@@ -349,10 +355,8 @@ class SubBaseService {
                 'name' => $name,
                 'resource_type' => (string) $tile['subtype'],
                 'refunded_circuit_points' => $refund,
-                'circuit_points' => min(
-                    (int) $user['max_circuit_points'],
-                    (int) $user['circuit_points'] + $refundCost
-                ),
+                'circuit_points' =>
+                    (int) $user['circuit_points'] + $refundCost,
                 'max_circuit_points' => (int) $user['max_circuit_points'],
                 'limit' => $limit,
                 'current_count' => $subBaseCount + 1

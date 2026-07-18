@@ -845,9 +845,9 @@ class Map {
             $stmt->bind_param('i', $userId);
             $stmt->execute();
             $userResult = $stmt->get_result();
-            $userExists = $userResult && $userResult->num_rows === 1;
+            $userRow = $userResult ? $userResult->fetch_assoc() : null;
             $stmt->close();
-            if (!$userExists) {
+            if (!$userRow) {
                 $db->rollback();
                 return '用户信息无效';
             }
@@ -922,21 +922,36 @@ class Map {
                 throw new RuntimeException('地图格子所有权已经变化 / Tile ownership changed');
             }
 
-            // 普通领地成本随放弃原子返还，但余额仍受玩家上限约束 / Refund the ordinary-territory cost atomically while respecting the user's cap
+            // 放弃领地归还的是既有投入，必须全额返还且不得因常规上限丢失。
+            // Abandonment restores an existing investment in full rather than
+            // truncating it at the normal cap.
             $occupationCost = max(0, (int) TERRITORY_OCCUPATION_COST);
-            $query = "UPDATE users
-                      SET circuit_points = LEAST(
-                          max_circuit_points,
-                          circuit_points + ?
-                      )
-                      WHERE user_id = ?";
-            $stmt = $db->prepare($query);
-            $stmt->bind_param('ii', $occupationCost, $userId);
-            if (!$stmt->execute()) {
+            if ($occupationCost > 0) {
+                if ((int) $userRow['circuit_points']
+                    > 2147483647 - $occupationCost) {
+                    throw new RuntimeException(
+                        '思考回路无法全额返还且不溢出整数 / Circuit Points cannot be fully refunded without integer overflow'
+                    );
+                }
+                $query = "UPDATE users
+                          SET circuit_points = circuit_points + ?
+                          WHERE user_id = ? AND circuit_points <= ?";
+                $stmt = $db->prepare($query);
+                $maximumBeforeAdd = 2147483647 - $occupationCost;
+                $stmt->bind_param(
+                    'iii',
+                    $occupationCost,
+                    $userId,
+                    $maximumBeforeAdd
+                );
+                $refunded = $stmt->execute()
+                    && $stmt->affected_rows === 1;
+                if (!$refunded) {
+                    $stmt->close();
+                    throw new RuntimeException('无法返还思考回路 / Failed to refund circuit points');
+                }
                 $stmt->close();
-                throw new RuntimeException('无法返还思考回路 / Failed to refund circuit points');
             }
-            $stmt->close();
 
             self::recordGameplayEvent(
                 $db,

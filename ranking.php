@@ -19,7 +19,7 @@ if (!$user->isValid()) {
 
 // 获取排名类型
 $rankingType = isset($_GET['type']) ? $_GET['type'] : 'level';
-$validTypes = ['level', 'cities', 'generals', 'combat_power', 'resources'];
+$validTypes = ['forces', 'level', 'cities', 'generals', 'combat_power', 'resources'];
 if (!in_array($rankingType, $validTypes)) {
     $rankingType = 'level';
 }
@@ -29,8 +29,133 @@ $page = isset($_GET['page']) ? max(1, intval($_GET['page'])) : 1;
 $limit = 20;
 $offset = ($page - 1) * $limit;
 
+/**
+ * 按权威附属链聚合完整势力领地排行 / Aggregate the complete force-territory ranking through authoritative vassal chains
+ * @return array 已排序的势力排行 / Sorted force ranking
+ */
+function getForceRankingEntries() {
+    static $entries = null;
+    if ($entries !== null) {
+        return $entries;
+    }
+
+    $db = Database::getInstance()->getConnection();
+    $query = "SELECT u.user_id, u.username, u.level, u.created_at,
+                     (
+                       SELECT COUNT(*)
+                       FROM cities c
+                       WHERE c.owner_id = u.user_id
+                     ) AS city_count,
+                     (
+                       SELECT COUNT(*)
+                       FROM map_tiles mt
+                       WHERE mt.owner_id = u.user_id
+                         AND mt.type IN ('empty','resource')
+                     ) AS territory_count
+              FROM users u
+              ORDER BY u.user_id";
+    $stmt = $db->prepare($query);
+    $stmt->execute();
+    $result = $stmt->get_result();
+    $users = [];
+    $usersById = [];
+    while ($result && ($row = $result->fetch_assoc())) {
+        $row['user_id'] = (int) $row['user_id'];
+        $users[] = $row;
+        $usersById[$row['user_id']] = $row;
+    }
+    $stmt->close();
+
+    if (empty($users)) {
+        $entries = [];
+        return $entries;
+    }
+
+    $vassalService = new VassalService();
+    $ownerIds = $vassalService->getEffectiveForceOwnerIds(
+        array_column($users, 'user_id')
+    );
+    $grouped = [];
+    foreach ($users as $row) {
+        $userId = (int) $row['user_id'];
+        $ownerId = isset($ownerIds[$userId])
+            ? (int) $ownerIds[$userId]
+            : $userId;
+        if (!isset($grouped[$ownerId])) {
+            $owner = isset($usersById[$ownerId])
+                ? $usersById[$ownerId]
+                : $row;
+            $grouped[$ownerId] = [
+                'user_id' => $ownerId,
+                'username' => (string) $owner['username'],
+                'level' => 0,
+                'created_at' => (string) $row['created_at'],
+                'member_count' => 0,
+                'city_count' => 0,
+                'territory_count' => 0
+            ];
+        }
+
+        $grouped[$ownerId]['level'] = max(
+            (int) $grouped[$ownerId]['level'],
+            (int) $row['level']
+        );
+        if (strcmp(
+            (string) $row['created_at'],
+            (string) $grouped[$ownerId]['created_at']
+        ) < 0) {
+            $grouped[$ownerId]['created_at'] = (string) $row['created_at'];
+        }
+        $grouped[$ownerId]['member_count']++;
+        $grouped[$ownerId]['city_count'] += (int) $row['city_count'];
+        $grouped[$ownerId]['territory_count'] +=
+            (int) $row['territory_count'];
+    }
+
+    $entries = array_values($grouped);
+    usort($entries, function ($left, $right) {
+        $comparison = (int) $right['territory_count']
+            <=> (int) $left['territory_count'];
+        if ($comparison !== 0) {
+            return $comparison;
+        }
+        $comparison = (int) $right['city_count']
+            <=> (int) $left['city_count'];
+        if ($comparison !== 0) {
+            return $comparison;
+        }
+        $comparison = (int) $right['level'] <=> (int) $left['level'];
+        if ($comparison !== 0) {
+            return $comparison;
+        }
+        $comparison = strcmp(
+            (string) $left['created_at'],
+            (string) $right['created_at']
+        );
+        return $comparison !== 0
+            ? $comparison
+            : ((int) $left['user_id'] <=> (int) $right['user_id']);
+    });
+
+    return $entries;
+}
+
 // 获取排名数据
 function getRankingData($type, $limit, $offset) {
+    if ($type === 'forces') {
+        $rankings = array_slice(
+            getForceRankingEntries(),
+            (int) $offset,
+            (int) $limit
+        );
+        foreach ($rankings as $index => &$ranking) {
+            $ranking['rank'] = (int) $offset + $index + 1;
+        }
+        unset($ranking);
+
+        return $rankings;
+    }
+
     $db = Database::getInstance()->getConnection();
     
     switch ($type) {
@@ -119,24 +244,36 @@ function getRankingData($type, $limit, $offset) {
     return $rankings;
 }
 
-// 获取总用户数
-function getTotalUsers() {
+// 获取当前排行榜类型的总条目数 / Get the total entry count for the current ranking type
+function getTotalRankingEntries($type) {
     $db = Database::getInstance()->getConnection();
-    $query = "SELECT COUNT(*) as total FROM users";
-    $result = $db->query($query);
-    $row = $result->fetch_assoc();
-    return $row['total'];
+    if ($type === 'forces') {
+        return count(getForceRankingEntries());
+    }
+
+    $query = "SELECT COUNT(*) AS total FROM users";
+    $stmt = $db->prepare($query);
+    $stmt->execute();
+    $result = $stmt->get_result();
+    $row = $result ? $result->fetch_assoc() : ['total' => 0];
+    $stmt->close();
+    return (int) $row['total'];
 }
 
 $rankings = getRankingData($rankingType, $limit, $offset);
-$totalUsers = getTotalUsers();
-$totalPages = ceil($totalUsers / $limit);
+$totalEntries = getTotalRankingEntries($rankingType);
+$totalPages = ceil($totalEntries / $limit);
+$vassalService = new VassalService();
+$currentForceOwnerId = $vassalService->getEffectiveForceOwnerId(
+    $user->getUserId()
+);
 
 // 页面标题
 $pageTitle = '排行榜';
 
 // 排名类型名称映射
 $typeNames = [
+    'forces' => '势力领地排行',
     'level' => '等级排行',
     'cities' => '城池排行',
     'generals' => '武将排行',
@@ -392,10 +529,13 @@ $typeNames = [
                         <thead>
                             <tr>
                                 <th>排名</th>
-                                <th>用户</th>
+                                <th><?php echo $rankingType === 'forces' ? '势力代表' : '用户'; ?></th>
                                 <th>等级</th>
                                 <th>城池</th>
-                                <?php if ($rankingType == 'generals'): ?>
+                                <?php if ($rankingType === 'forces'): ?>
+                                <th>贡献者</th>
+                                <th>普通领地</th>
+                                <?php elseif ($rankingType == 'generals'): ?>
                                 <th>武将数量</th>
                                 <?php elseif ($rankingType == 'combat_power'): ?>
                                 <th>战斗力</th>
@@ -419,10 +559,15 @@ $typeNames = [
                                     </span>
                                 </td>
                                 <td>
-                                    <div class="username <?php echo $ranking['user_id'] == $user->getUserId() ? 'current-user' : ''; ?>">
+                                    <?php
+                                    $isCurrentEntry = $rankingType === 'forces'
+                                        ? (int) $ranking['user_id'] === (int) $currentForceOwnerId
+                                        : (int) $ranking['user_id'] === (int) $user->getUserId();
+                                    ?>
+                                    <div class="username <?php echo $isCurrentEntry ? 'current-user' : ''; ?>">
                                         <?php echo htmlspecialchars($ranking['username']); ?>
-                                        <?php if ($ranking['user_id'] == $user->getUserId()): ?>
-                                        (你)
+                                        <?php if ($isCurrentEntry): ?>
+                                        <?php echo $rankingType === 'forces' ? '(你的势力)' : '(你)'; ?>
                                         <?php endif; ?>
                                     </div>
                                 </td>
@@ -432,7 +577,14 @@ $typeNames = [
                                 <td>
                                     <span class="stat-value"><?php echo $ranking['city_count']; ?></span>
                                 </td>
-                                <?php if ($rankingType == 'generals'): ?>
+                                <?php if ($rankingType === 'forces'): ?>
+                                <td>
+                                    <span class="stat-value"><?php echo number_format((int) $ranking['member_count']); ?></span>
+                                </td>
+                                <td>
+                                    <span class="stat-value"><?php echo number_format((int) $ranking['territory_count']); ?></span>
+                                </td>
+                                <?php elseif ($rankingType == 'generals'): ?>
                                 <td>
                                     <span class="stat-value"><?php echo $ranking['general_count']; ?></span>
                                 </td>

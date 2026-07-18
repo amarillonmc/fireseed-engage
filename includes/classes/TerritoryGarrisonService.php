@@ -478,6 +478,35 @@ class TerritoryGarrisonService {
         try {
             lockSeasonForWorldAction($this->db);
 
+            // 用户与目标城池先于地图和驻军加锁，统一迁城清算的锁序并阻止并发新建军队。 / Lock the user and destination city before map and garrison rows to match relocation settlement and block concurrent army creation.
+            $query = "SELECT user_id
+                      FROM users
+                      WHERE user_id = ?
+                      FOR UPDATE";
+            $stmt = $this->db->prepare($query);
+            $stmt->bind_param('i', $userId);
+            $stmt->execute();
+            $result = $stmt->get_result();
+            $userLocked = $result && $result->num_rows === 1;
+            $stmt->close();
+            if (!$userLocked) {
+                throw new RuntimeException('玩家不存在 / Player does not exist');
+            }
+
+            $query = "SELECT city_id, owner_id, x, y
+                      FROM cities
+                      WHERE city_id = ?
+                      FOR UPDATE";
+            $stmt = $this->db->prepare($query);
+            $stmt->bind_param('i', $cityId);
+            $stmt->execute();
+            $result = $stmt->get_result();
+            $city = $result ? $result->fetch_assoc() : null;
+            $stmt->close();
+            if (!$city || (int) $city['owner_id'] !== $userId) {
+                throw new RuntimeException('撤回目标必须是自己的城池');
+            }
+
             $query = "SELECT tile_id, owner_id, type, x, y
                       FROM map_tiles
                       WHERE tile_id = ?
@@ -527,20 +556,6 @@ class TerritoryGarrisonService {
                         getSoldierName($soldierType) . '驻军数量不足'
                     );
                 }
-            }
-
-            $query = "SELECT city_id, owner_id, x, y
-                      FROM cities
-                      WHERE city_id = ?
-                      FOR UPDATE";
-            $stmt = $this->db->prepare($query);
-            $stmt->bind_param('i', $cityId);
-            $stmt->execute();
-            $result = $stmt->get_result();
-            $city = $result ? $result->fetch_assoc() : null;
-            $stmt->close();
-            if (!$city || (int) $city['owner_id'] !== $userId) {
-                throw new RuntimeException('撤回目标必须是自己的城池');
             }
 
             $currentX = (int) $tile['x'];

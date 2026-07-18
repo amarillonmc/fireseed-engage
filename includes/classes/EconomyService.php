@@ -223,7 +223,10 @@ class EconomyService {
         if (isset($reward['circuit_points'])) {
             $amount = max(0, (int) $reward['circuit_points']);
             $query = "UPDATE users
-                      SET circuit_points = LEAST(max_circuit_points, circuit_points + ?)
+                      SET circuit_points = GREATEST(
+                        circuit_points,
+                        LEAST(max_circuit_points, circuit_points + ?)
+                      )
                       WHERE user_id = ?";
             $stmt = $db->prepare($query);
             $stmt->bind_param('ii', $amount, $userId);

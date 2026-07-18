@@ -507,6 +507,17 @@ $pageTitle = '战斗报告';
                     </p>
                     <?php endif; ?>
 
+                    <?php if (!empty($rewards['main_city_resolution'])): ?>
+                        <?php $mainCityResolution = $rewards['main_city_resolution']; ?>
+                        <?php if ($mainCityResolution['type'] === 'rescued'): ?>
+                            <p><strong>主城结果：</strong>救出成功，守方已恢复原势力。</p>
+                        <?php elseif ($mainCityResolution['type'] === 're_subjugated'): ?>
+                            <p><strong>主城结果：</strong>守方已改为附属于新的宗主势力。</p>
+                        <?php else: ?>
+                            <p><strong>主城结果：</strong>守方已成为攻击方的附属。</p>
+                        <?php endif; ?>
+                    <?php endif; ?>
+
                     <?php if (!empty($rewards['captives']['units'])): ?>
                     <p>俘虏：共 <?php echo number_format((int) $rewards['captives']['total']); ?> 名</p>
                     <ul>

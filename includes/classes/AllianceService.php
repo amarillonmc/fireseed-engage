@@ -77,6 +77,13 @@ class AllianceService {
         $tag = strtoupper(trim((string) $tag));
         $description = trim((string) $description);
 
+        $vassalService = new VassalService();
+        if ($vassalService->isVassalized($userId)) {
+            return $this->failure(
+                '附属状态下不能创建联盟，请先获得救出或主动脱离。'
+            );
+        }
+
         if ($this->textLength($name) < 2 || $this->textLength($name) > 40) {
             return $this->failure('联盟名称须为 2 至 40 个字符。');
         }
@@ -89,6 +96,15 @@ class AllianceService {
 
         $this->db->begin_transaction();
         try {
+            // 联盟身份变更与主城征服共用用户→附属→成员锁序。 / Alliance membership changes share the user-to-vassal-to-membership lock order with capital conquest.
+            $this->lockUserRows([$userId]);
+            $vassalService->lockRelationsForUsers([$userId]);
+            if ($vassalService->isVassalized($userId)) {
+                $this->db->rollback();
+                return $this->failure(
+                    '附属状态下不能创建联盟，请先获得救出或主动脱离。'
+                );
+            }
             $membership = $this->getMembershipForUpdate($userId);
             if ($membership !== null) {
                 $this->db->rollback();
@@ -142,27 +158,63 @@ class AllianceService {
         if ($this->textLength($message) > 255) {
             return $this->failure('申请留言不能超过 255 个字符。');
         }
-        if ($this->getMembership($userId) !== null) {
-            return $this->failure('你已经加入了一个联盟。');
-        }
-        if (!$this->allianceExists($allianceId)) {
-            return $this->failure('目标联盟不存在。');
-        }
+        $this->db->begin_transaction();
+        try {
+            $this->lockUserRows([$userId]);
+            $vassalService = new VassalService();
+            $vassalService->lockRelationsForUsers([$userId]);
+            if ($vassalService->isVassalized($userId)) {
+                $this->db->rollback();
+                return $this->failure(
+                    '附属状态下不能申请联盟，请先获得救出或主动脱离。'
+                );
+            }
+            if ($this->getMembershipForUpdate($userId) !== null) {
+                $this->db->rollback();
+                return $this->failure('你已经加入了一个联盟。');
+            }
 
-        $query = "INSERT INTO alliance_applications
-                     (alliance_id, user_id, message, status, created_at, resolved_at)
-                  VALUES (?, ?, ?, 'pending', NOW(), NULL)
-                  ON DUPLICATE KEY UPDATE
-                     message = VALUES(message), status = 'pending',
-                     created_at = NOW(), resolved_at = NULL";
-        $stmt = $this->db->prepare($query);
-        $stmt->bind_param('iis', $allianceId, $userId, $message);
-        $success = $stmt->execute();
-        $stmt->close();
+            $query = "SELECT alliance_id
+                      FROM alliances
+                      WHERE alliance_id = ?
+                      FOR UPDATE";
+            $stmt = $this->db->prepare($query);
+            $stmt->bind_param('i', $allianceId);
+            $stmt->execute();
+            $result = $stmt->get_result();
+            $allianceExists = $result && $result->num_rows === 1;
+            $stmt->close();
+            if (!$allianceExists) {
+                $this->db->rollback();
+                return $this->failure('目标联盟不存在。');
+            }
 
-        return $success
-            ? $this->success('加入申请已提交。')
-            : $this->failure('无法提交加入申请。');
+            $query = "INSERT INTO alliance_applications
+                         (alliance_id, user_id, message, status,
+                          created_at, resolved_at)
+                      VALUES (?, ?, ?, 'pending', NOW(), NULL)
+                      ON DUPLICATE KEY UPDATE
+                         message = VALUES(message), status = 'pending',
+                         created_at = NOW(), resolved_at = NULL";
+            $stmt = $this->db->prepare($query);
+            $stmt->bind_param('iis', $allianceId, $userId, $message);
+            $success = $stmt->execute();
+            $stmt->close();
+            if (!$success) {
+                throw new RuntimeException(
+                    '无法提交加入申请 / Failed to submit alliance application'
+                );
+            }
+            $this->db->commit();
+
+            return $this->success('加入申请已提交。');
+        } catch (Throwable $exception) {
+            $this->db->rollback();
+            error_log(
+                'Alliance application failed: ' . $exception->getMessage()
+            );
+            return $this->failure('无法提交加入申请。');
+        }
     }
 
     /**
@@ -171,15 +223,46 @@ class AllianceService {
      * @return array 操作结果 / Operation result
      */
     public function resolveApplication($actorId, $applicationId, $decision) {
+        $actorId = (int) $actorId;
         $applicationId = (int) $applicationId;
         $decision = (string) $decision;
-        if ($applicationId <= 0 || !in_array($decision, ['accepted', 'rejected'], true)) {
+        if ($actorId <= 0
+            || $applicationId <= 0
+            || !in_array($decision, ['accepted', 'rejected'], true)) {
             return $this->failure('无效的审核请求。');
         }
 
+        // 先只读申请者ID，再在事务内按玩家ID排序取得权威锁。 / Preview the applicant ID, then acquire authoritative transaction locks in user-ID order.
+        $query = "SELECT user_id
+                  FROM alliance_applications
+                  WHERE application_id = ?";
+        $stmt = $this->db->prepare($query);
+        $stmt->bind_param('i', $applicationId);
+        $stmt->execute();
+        $result = $stmt->get_result();
+        $applicationPreview = $result ? $result->fetch_assoc() : null;
+        $stmt->close();
+        if (!$applicationPreview) {
+            return $this->failure('申请不存在或不属于你的联盟。');
+        }
+        $applicantId = (int) $applicationPreview['user_id'];
+
         $this->db->begin_transaction();
         try {
-            $actorMembership = $this->getMembershipForUpdate($actorId);
+            $participantIds = array_values(array_unique([
+                $actorId,
+                $applicantId
+            ]));
+            sort($participantIds, SORT_NUMERIC);
+            $this->lockUserRows($participantIds);
+            $vassalService = new VassalService();
+            $vassalService->lockRelationsForUsers($participantIds);
+            $memberships = [];
+            foreach ($participantIds as $participantId) {
+                $memberships[$participantId] =
+                    $this->getMembershipForUpdate($participantId);
+            }
+            $actorMembership = $memberships[$actorId];
             if ($actorMembership === null || !in_array($actorMembership['role'], ['leader', 'officer'], true)) {
                 $this->db->rollback();
                 return $this->failure('只有盟主或干部可以审核申请。');
@@ -196,7 +279,10 @@ class AllianceService {
             $application = $result ? $result->fetch_assoc() : null;
             $stmt->close();
 
-            if (!$application || (int) $application['alliance_id'] !== (int) $actorMembership['alliance_id']) {
+            if (!$application
+                || (int) $application['user_id'] !== $applicantId
+                || (int) $application['alliance_id']
+                    !== (int) $actorMembership['alliance_id']) {
                 $this->db->rollback();
                 return $this->failure('申请不存在或不属于你的联盟。');
             }
@@ -205,9 +291,15 @@ class AllianceService {
                 return $this->failure('该申请已经处理。');
             }
 
-            $applicantId = (int) $application['user_id'];
             if ($decision === 'accepted') {
-                if ($this->getMembershipForUpdate($applicantId) !== null) {
+                if ($vassalService->isVassalized($applicantId)) {
+                    $this->setApplicationStatus($applicationId, 'rejected');
+                    $this->db->commit();
+                    return $this->failure(
+                        '申请者已处于附属状态，申请已关闭。'
+                    );
+                }
+                if ($memberships[$applicantId] !== null) {
                     $this->setApplicationStatus($applicationId, 'rejected');
                     $this->db->commit();
                     return $this->failure('申请者已经加入了其他联盟，申请已关闭。');
@@ -252,8 +344,12 @@ class AllianceService {
      * @return array 操作结果 / Operation result
      */
     public function leaveAlliance($userId) {
+        $userId = (int) $userId;
         $this->db->begin_transaction();
         try {
+            // 与战斗势力链复核共享用户→附属→盟籍锁序，盟主移交不能绕过用户锁。 / Share the user-to-vassal-to-membership order with battle force-chain validation so leadership transfer cannot bypass the user lock.
+            $this->lockUserRows([$userId]);
+            $this->lockRelationsForUsers([$userId]);
             $membership = $this->getMembershipForUpdate($userId);
             if ($membership === null) {
                 $this->db->rollback();
@@ -1256,8 +1352,41 @@ class AllianceService {
      * 判断两名玩家之间是否允许敌对行为 / Determine whether hostility is allowed between two users
      */
     public function canUsersFight($attackerId, $defenderId) {
-        return (int) $attackerId !== (int) $defenderId
-            && !$this->areUsersAllied($attackerId, $defenderId);
+        // 附属关系覆盖普通联盟关系，所有世界敌友判断都使用有效势力。 / Vassalage overrides ordinary alliance membership, so all world hostility uses effective forces.
+        $vassalService = new VassalService();
+        return $vassalService->canUsersFight($attackerId, $defenderId);
+    }
+
+    /**
+     * 按玩家ID顺序锁定联盟身份变更参与者 / Lock alliance-membership participants in user-ID order
+     * @param array $userIds 玩家ID / User IDs
+     * @return void
+     */
+    private function lockUserRows($userIds) {
+        $userIds = array_values(array_unique(array_map('intval', $userIds)));
+        sort($userIds, SORT_NUMERIC);
+        foreach ($userIds as $userId) {
+            if ($userId <= 0) {
+                throw new InvalidArgumentException(
+                    '联盟玩家参数无效 / Invalid alliance user'
+                );
+            }
+            $query = "SELECT user_id
+                      FROM users
+                      WHERE user_id = ?
+                      FOR UPDATE";
+            $stmt = $this->db->prepare($query);
+            $stmt->bind_param('i', $userId);
+            $stmt->execute();
+            $result = $stmt->get_result();
+            $locked = $result && $result->num_rows === 1;
+            $stmt->close();
+            if (!$locked) {
+                throw new RuntimeException(
+                    '联盟玩家已经不存在 / Alliance user no longer exists'
+                );
+            }
+        }
     }
 
     /**

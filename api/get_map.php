@@ -51,6 +51,11 @@ $garrisons = $garrisonService->getMapGarrisonsInRange(
     $endY,
     (int) $_SESSION['user_id']
 );
+$vassalService = new VassalService();
+$viewerForceOwnerId = $vassalService->getEffectiveForceOwnerId(
+    (int) $_SESSION['user_id']
+);
+$forceCache = [];
 
 // 准备返回数据
 $tileData = [];
@@ -108,6 +113,27 @@ foreach ($tiles as $tile) {
             if ($owner->isValid()) {
                 $data['owner_name'] = $owner->getUsername();
             }
+
+            // 物理领主继续经营领地，但地图同时公开其排行榜势力归属。 / The physical owner keeps operating the tile while the map also exposes its ranking-force attribution.
+            if (!isset($forceCache[(int) $ownerId])) {
+                $forceOwnerId = $vassalService->getEffectiveForceOwnerId(
+                    (int) $ownerId
+                );
+                $forceOwner = $forceOwnerId
+                    ? new User($forceOwnerId)
+                    : null;
+                $forceCache[(int) $ownerId] = [
+                    'owner_id' => $forceOwnerId,
+                    'owner_name' => $forceOwner && $forceOwner->isValid()
+                        ? $forceOwner->getUsername()
+                        : ''
+                ];
+            }
+            $force = $forceCache[(int) $ownerId];
+            $data['force_owner_id'] = $force['owner_id'];
+            $data['force_owner_name'] = $force['owner_name'];
+            $data['same_force'] = (int) $force['owner_id']
+                === (int) $viewerForceOwnerId;
             
             // 如果是玩家城池，添加城池ID
             if ($tile->getType() == 'player_city') {
@@ -136,5 +162,6 @@ foreach ($tiles as $tile) {
 // 返回地图数据
 echo json_encode([
     'success' => true,
+    'message' => '地图数据已加载 / Map data loaded',
     'tiles' => $tileData
 ]);

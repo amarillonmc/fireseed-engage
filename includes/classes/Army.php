@@ -373,6 +373,7 @@ class Army {
         // 根据目标类型获取目标信息
         $targetX = null;
         $targetY = null;
+        $targetOwnerId = null;
         
         switch ($targetType) {
             case 'city':
@@ -383,6 +384,7 @@ class Army {
                 $coordinates = $city->getCoordinates();
                 $targetX = $coordinates[0];
                 $targetY = $coordinates[1];
+                $targetOwnerId = (int) $city->getOwnerId();
                 break;
             case 'tile':
                 $tile = new Map($targetId);
@@ -391,6 +393,9 @@ class Army {
                 }
                 $targetX = $tile->getX();
                 $targetY = $tile->getY();
+                $targetOwnerId = $tile->getOwnerId() === null
+                    ? null
+                    : (int) $tile->getOwnerId();
                 break;
             case 'army':
                 $army = new Army($targetId);
@@ -400,6 +405,7 @@ class Army {
                 $position = $army->getCurrentPosition();
                 $targetX = $position[0];
                 $targetY = $position[1];
+                $targetOwnerId = (int) $army->getOwnerId();
                 break;
             default:
                 return false;
@@ -408,6 +414,32 @@ class Army {
         $this->db->begin_transaction();
         try {
             lockSeasonForWorldAction($this->db);
+            // 玩家锁先于附属、军队与目标实体，防止迁城或主城失守期间插入陈旧战斗。 / Lock users before vassalage, armies, and targets so relocation or capital capture cannot admit a stale battle.
+            $combatUserIds = [(int) $this->ownerId];
+            if ($targetOwnerId !== null) {
+                $combatUserIds[] = (int) $targetOwnerId;
+            }
+            $combatUserIds = array_values(array_unique($combatUserIds));
+            sort($combatUserIds, SORT_NUMERIC);
+            foreach ($combatUserIds as $combatUserId) {
+                $query = "SELECT user_id
+                          FROM users
+                          WHERE user_id = ?
+                          FOR UPDATE";
+                $stmt = $this->db->prepare($query);
+                $stmt->bind_param('i', $combatUserId);
+                $stmt->execute();
+                $userResult = $stmt->get_result();
+                $userLocked = $userResult
+                    && $userResult->num_rows === 1;
+                $stmt->close();
+                if (!$userLocked) {
+                    throw new RuntimeException(
+                        '攻击方或目标玩家已经不存在 / An attacking or target player no longer exists'
+                    );
+                }
+            }
+
             // 重新锁定军队并确保一军只有一个待结算战斗 / Re-lock the army and allow only one pending battle per army
             $query = "SELECT status, current_x, current_y
                       FROM armies
@@ -439,7 +471,7 @@ class Army {
 
             // 锁定并重读权威目标坐标，随后锁定相邻控制点完成事务内边界重验 / Lock and reload authoritative target coordinates, then lock an adjacent control point for transactional boundary validation
             if ($targetType === 'city') {
-                $query = "SELECT x, y
+                $query = "SELECT x, y, owner_id
                           FROM cities
                           WHERE city_id = ?
                           FOR UPDATE";
@@ -450,7 +482,7 @@ class Army {
                 $targetRow = $targetResult ? $targetResult->fetch_assoc() : null;
                 $stmt->close();
             } elseif ($targetType === 'tile') {
-                $query = "SELECT x, y
+                $query = "SELECT x, y, owner_id
                           FROM map_tiles
                           WHERE tile_id = ?
                           FOR UPDATE";
@@ -464,7 +496,8 @@ class Army {
                 if ((int) $targetId === (int) $this->armyId) {
                     throw new RuntimeException('军队不能攻击自身 / An army cannot attack itself');
                 }
-                $query = "SELECT current_x AS x, current_y AS y, status
+                $query = "SELECT current_x AS x, current_y AS y,
+                                 status, owner_id
                           FROM armies
                           WHERE army_id = ?
                           FOR UPDATE";
@@ -481,8 +514,27 @@ class Army {
             if (!$targetRow) {
                 throw new RuntimeException('攻击目标已经失效或移动 / Attack target is stale or has moved');
             }
+            $authoritativeTargetOwnerId = $targetRow['owner_id'] === null
+                ? null
+                : (int) $targetRow['owner_id'];
+            if ($authoritativeTargetOwnerId !== $targetOwnerId) {
+                throw new RuntimeException(
+                    '攻击目标拥有权已经变化 / Attack target ownership changed'
+                );
+            }
             $targetX = (int) $targetRow['x'];
             $targetY = (int) $targetRow['y'];
+            if ($targetRow['owner_id'] !== null) {
+                $allianceService = new AllianceService();
+                if (!$allianceService->canUsersFight(
+                    (int) $this->ownerId,
+                    (int) $targetRow['owner_id']
+                )) {
+                    throw new RuntimeException(
+                        '不能攻击自己或同势力成员 / Cannot attack yourself or a member of the same force'
+                    );
+                }
+            }
             if (!Map::isAdjacentToUserControl(
                 (int) $this->ownerId,
                 $targetX,

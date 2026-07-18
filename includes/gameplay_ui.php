@@ -20,6 +20,7 @@ function renderGameplayHeader($pageTitle, $user, $activePage = '') {
         'battles' => ['battles.php', '战报'],
         'scouting' => ['scouting.php', '侦察'],
         'alliance' => ['alliance.php', '联盟'],
+        'vassal' => ['vassal.php', '附属'],
         'quests' => ['quests.php', '任务'],
         'shop' => ['shop.php', '兑换'],
         'social' => ['social.php', '通讯']
@@ -39,6 +40,20 @@ function renderGameplayHeader($pageTitle, $user, $activePage = '') {
         . number_format($user->getMaxCircuitPoints()) . '</li>';
     echo '</ul></nav>';
     echo '</header>';
+
+    $vassalService = new VassalService();
+    $vassalRelation = $vassalService->getActiveRelation(
+        $user->getUserId()
+    );
+    if ($vassalRelation) {
+        echo '<div class="message warning">';
+        echo '当前附属于 ' . escapeHtml($vassalRelation['lord_name'])
+            . '；领地与排行榜积分计入 '
+            . escapeHtml($vassalRelation['overlord_name'])
+            . ' 的势力。'
+            . ' <a href="vassal.php">查看救出与主动脱离规则</a>';
+        echo '</div>';
+    }
 
     if (isSeasonGameplayFrozen()) {
         echo '<div class="message error">'

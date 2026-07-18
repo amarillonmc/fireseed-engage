@@ -19,6 +19,10 @@ if (!$user->isValid()) {
 
 // 获取用户资源
 $resource = new Resource($user->getUserId());
+$vassalService = new VassalService();
+$activeVassalRelation = $vassalService->getActiveRelation(
+    $user->getUserId()
+);
 
 // 获取用户主城
 $mainCity = City::getUserMainCity($user->getUserId());
@@ -60,6 +64,7 @@ $pageTitle = '主页';
                     <li><a href="map.php">地图</a></li>
                     <li><a href="internal.php">内政</a></li>
                     <li><a href="ranking.php">排名</a></li>
+                    <li><a href="vassal.php">附属</a></li>
                     <li class="circuit-points">思考回路: <?php echo $user->getCircuitPoints(); ?> / <?php echo $user->getMaxCircuitPoints(); ?></li>
                 </ul>
             </nav>
@@ -67,6 +72,16 @@ $pageTitle = '主页';
         
         <!-- 主内容 -->
         <main>
+            <?php if ($activeVassalRelation): ?>
+            <div class="message warning">
+                当前附属于
+                <?php echo escapeHtml($activeVassalRelation['lord_name']); ?>；
+                领地与排行榜贡献计入
+                <?php echo escapeHtml($activeVassalRelation['overlord_name']); ?>
+                的势力。<a href="vassal.php">查看救出或主动脱离</a>
+            </div>
+            <?php endif; ?>
+
             <!-- 资源显示 -->
             <div class="resource-bar">
                 <div class="resource bright-crystal">

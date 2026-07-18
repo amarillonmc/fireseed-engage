@@ -57,10 +57,10 @@ class GameConfig {
      * @param string $key 配置键
      * @param mixed $value 配置值
      * @param string $description 描述
-     * @param string $category 分类
+     * @param string|null $category 分类；更新时为空则保留原分类 / Category; null preserves it on update
      * @return bool
      */
-    public function set($key, $value, $description = null, $category = 'general') {
+    public function set($key, $value, $description = null, $category = null) {
         // 转换值为字符串
         if (is_bool($value)) {
             $value = $value ? 'true' : 'false';
@@ -96,9 +96,16 @@ class GameConfig {
             $checkStmt->close();
             
             // 插入新配置
+            $insertCategory = $category === null ? 'general' : $category;
             $insertQuery = "INSERT INTO game_config (`key`, `value`, `description`, `category`, `is_constant`) VALUES (?, ?, ?, ?, 0)";
             $insertStmt = $this->db->prepare($insertQuery);
-            $insertStmt->bind_param('ssss', $key, $value, $description, $category);
+            $insertStmt->bind_param(
+                'ssss',
+                $key,
+                $value,
+                $description,
+                $insertCategory
+            );
             $result = $insertStmt->execute();
             $insertStmt->close();
         }
@@ -259,7 +266,11 @@ class GameConfig {
             'training_speed_multiplier' => 1.0,
             'battle_damage_multiplier' => 1.0,
             'army_movement_speed' => 1.0,
-            'general_recruitment_cost_multiplier' => 1.0
+            'general_recruitment_cost_multiplier' => 1.0,
+            'vassal_release_resource_rate' => 0.70,
+            'vassal_release_relocation_mode' => 'outer',
+            'vassal_release_lose_all_territory' => 1,
+            'vassal_release_refund_circuit' => 1
         ];
         
         $success = true;
@@ -316,7 +327,14 @@ class GameConfig {
             'training_speed_multiplier' => ['type' => 'float', 'min' => 0.1, 'max' => 10.0],
             'battle_damage_multiplier' => ['type' => 'float', 'min' => 0.1, 'max' => 5.0],
             'army_movement_speed' => ['type' => 'float', 'min' => 0.1, 'max' => 10.0],
-            'victory_condition_days' => ['type' => 'int', 'min' => 1, 'max' => 365]
+            'victory_condition_days' => ['type' => 'int', 'min' => 1, 'max' => 365],
+            'vassal_release_resource_rate' => ['type' => 'float', 'min' => 0.0, 'max' => 1.0],
+            'vassal_release_relocation_mode' => [
+                'type' => 'enum',
+                'values' => ['outer', 'middle', 'subbase']
+            ],
+            'vassal_release_lose_all_territory' => ['type' => 'bool'],
+            'vassal_release_refund_circuit' => ['type' => 'bool']
         ];
         
         if (!isset($validationRules[$key])) {
@@ -340,7 +358,12 @@ class GameConfig {
                 $value = floatval($value);
                 break;
             case 'bool':
-                if (!in_array(strtolower($value), ['0', '1', 'true', 'false'])) {
+                if (!in_array(strtolower((string) $value), ['0', '1', 'true', 'false'], true)) {
+                    return false;
+                }
+                break;
+            case 'enum':
+                if (!in_array((string) $value, $rule['values'], true)) {
                     return false;
                 }
                 break;

@@ -49,7 +49,7 @@ if ($targetValid) {
         $allianceService = new AllianceService();
         $canAttack = $allianceService->canUsersFight($user->getUserId(), $ownerId);
         if (!$canAttack) {
-            $targetMessage = '不能攻击自己或同联盟成员控制的地点。';
+            $targetMessage = '不能攻击自己或同势力成员控制的地点。';
         }
     } else {
         $targetMessage = '该地点没有可攻击目标；无主普通领地可直接占领。';

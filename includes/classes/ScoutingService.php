@@ -373,8 +373,16 @@ class ScoutingService {
                 }
                 $targetOwnerId = (int) $city['owner_id'];
             }
-            if ($targetOwnerId !== null && $targetOwnerId === $userId) {
-                throw new DomainException('不能侦察自己的城池或据点');
+            if ($targetOwnerId !== null) {
+                $vassalService = new VassalService();
+                if ($vassalService->areUsersInSameForce(
+                    $userId,
+                    $targetOwnerId
+                )) {
+                    throw new DomainException(
+                        '不能侦察自己或同势力的城池与据点 / Cannot scout your own force'
+                    );
+                }
             }
 
             $army = new Army($armyId);
@@ -713,15 +721,27 @@ class ScoutingService {
             $cityResult = $stmt->get_result();
             $city = $cityResult ? $cityResult->fetch_assoc() : null;
             $stmt->close();
-            if (!$city || (int) $city['owner_id'] === $userId) {
+            if (!$city) {
+                return null;
+            }
+            $vassalService = new VassalService();
+            if ($vassalService->areUsersInSameForce(
+                $userId,
+                (int) $city['owner_id']
+            )) {
                 return null;
             }
             return array_merge($target, $city);
         }
 
-        if ($target['owner_id'] !== null
-            && (int) $target['owner_id'] === $userId) {
-            return null;
+        if ($target['owner_id'] !== null) {
+            $vassalService = new VassalService();
+            if ($vassalService->areUsersInSameForce(
+                $userId,
+                (int) $target['owner_id']
+            )) {
+                return null;
+            }
         }
 
         return $target;
