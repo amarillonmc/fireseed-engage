@@ -5,17 +5,17 @@
  * 管理技能卡目录、抽取、装备、升级与主动发动 / Manages the skill-card catalog, draws, equipment, upgrades, and active use
  */
 class SkillCardService {
-    private const DRAW_COST_NIGHT = 250;
-    private const VALID_COUNTS = [1, 5, 10];
     private const RARITIES = ['B', 'A', 'S', 'SS', 'P'];
 
     private $db;
+    private $cardPoolService;
 
     /**
      * 创建技能卡服务 / Creates the skill-card service
      */
     public function __construct() {
         $this->db = Database::getInstance()->getConnection();
+        $this->cardPoolService = new CardPoolService($this->db);
     }
 
     /**
@@ -85,6 +85,15 @@ class SkillCardService {
     }
 
     /**
+     * 获取当前开放的技能卡池 / Gets currently open skill-card pools
+     *
+     * @return array 结构化卡池结果 / Structured pool result
+     */
+    public function getDrawPools(): array {
+        return $this->cardPoolService->getAvailablePools('skill');
+    }
+
+    /**
      * 获取玩家技能卡库存 / Gets a player's skill-card inventory
      *
      * @param int $userId 玩家ID / User ID
@@ -143,13 +152,14 @@ class SkillCardService {
     }
 
     /**
-     * 消耗夜静静抽取技能卡 / Draws skill cards by consuming night crystals
+     * 从已发布卡池抽取技能卡 / Draws skill cards from a published pool
      *
      * @param int $userId 玩家ID / User ID
-     * @param int $count 抽取次数，仅允许1、5或10 / Draw count, limited to 1, 5, or 10
+     * @param int $count 抽取次数 / Draw count
+     * @param mixed $poolIdentifier 卡池ID、代码或旧渠道名 / Pool ID, code, or legacy channel name
      * @return array 结构化抽取结果 / Structured draw result
      */
-    public function draw($userId, $count = 1): array {
+    public function draw($userId, $count = 1, $poolIdentifier = 'default'): array {
         $normalizedUserId = (int) $userId;
         $normalizedCount = is_numeric($count) ? (int) $count : 0;
 
@@ -159,32 +169,37 @@ class SkillCardService {
 
         if (!is_numeric($count)
             || (float) $count !== (float) $normalizedCount
-            || !in_array($normalizedCount, self::VALID_COUNTS, true)) {
+            || $normalizedCount < 1
+            || $normalizedCount > 100) {
             return $this->result(
                 false,
-                '抽取次数只能为1、5或10 / Draw count must be 1, 5, or 10'
+                '抽取次数无效 / Invalid draw count'
             );
         }
 
         $transactionStarted = false;
 
         try {
-            $totalCost = self::DRAW_COST_NIGHT * $normalizedCount;
             $this->beginTransaction();
             $transactionStarted = true;
             $this->lockUser($normalizedUserId);
-            $this->consumeNightCrystal($normalizedUserId, $totalCost);
+            $pool = $this->cardPoolService->lockPoolForDraw(
+                'skill',
+                $poolIdentifier,
+                $normalizedCount
+            );
+            $totalCost = $this->cardPoolService->consumeCost(
+                $normalizedUserId,
+                $pool['cost'],
+                $normalizedCount
+            );
             $cards = [];
 
             for ($index = 0; $index < $normalizedCount; $index++) {
-                $rolledRarity = GameRules::rollSkillCardRarity();
-                $card = $this->selectCardWithFallback($rolledRarity);
-
-                if ($card === null) {
-                    throw new DomainException(
-                        '没有可抽取的技能卡 / No skill card is available to draw'
-                    );
-                }
+                $selectedEntry = CardPoolService::selectWeightedEntry(
+                    $pool['entries']
+                );
+                $card = $selectedEntry;
 
                 $this->increaseInventory(
                     $normalizedUserId,
@@ -194,7 +209,9 @@ class SkillCardService {
                 $this->recordDraw(
                     $normalizedUserId,
                     (int) $card['card_id'],
-                    (string) $card['rarity']
+                    (string) $card['rarity'],
+                    $pool,
+                    $selectedEntry
                 );
                 $this->recordGameplayEvent(
                     $normalizedUserId,
@@ -204,7 +221,8 @@ class SkillCardService {
                     (int) $card['card_id']
                 );
                 $normalizedCard = $this->normalizeCardRow($card);
-                $normalizedCard['rolled_rarity'] = $rolledRarity;
+                // 保留旧返回字段以兼容现有页面 / Preserve the legacy response field for existing pages
+                $normalizedCard['rolled_rarity'] = (string) $card['rarity'];
                 $cards[] = $normalizedCard;
             }
 
@@ -217,10 +235,16 @@ class SkillCardService {
                 $cards,
                 [
                     'count' => $normalizedCount,
-                    'cost' => ['night' => $totalCost]
+                    'cost' => $totalCost,
+                    'pool' => [
+                        'pool_id' => (int) $pool['pool_id'],
+                        'pool_code' => (string) $pool['pool_code'],
+                        'name' => (string) $pool['name'],
+                        'revision' => (int) $pool['revision']
+                    ]
                 ]
             );
-        } catch (DomainException $e) {
+        } catch (DomainException | InvalidArgumentException $e) {
             if ($transactionStarted) {
                 $this->db->rollback();
             }
@@ -855,126 +879,6 @@ class SkillCardService {
     }
 
     /**
-     * 锁定夜静静库存并扣除抽卡费用 / Locks night-crystal inventory and consumes the draw cost
-     *
-     * @param int $userId 玩家ID / User ID
-     * @param int $amount 夜静静数量 / Night-crystal amount
-     */
-    private function consumeNightCrystal($userId, $amount): void {
-        $query = "SELECT night_crystal
-                  FROM resources
-                  WHERE user_id = ?
-                  FOR UPDATE";
-        $stmt = $this->db->prepare($query);
-
-        if (!$stmt) {
-            throw new RuntimeException('无法读取夜静静 / Unable to read night crystals');
-        }
-
-        $stmt->bind_param('i', $userId);
-        $this->executeOrFail($stmt, '无法读取夜静静 / Unable to read night crystals');
-        $result = $stmt->get_result();
-        $row = $result ? $result->fetch_assoc() : null;
-        $stmt->close();
-
-        if (!$row) {
-            throw new DomainException('玩家资源记录不存在 / User resource record does not exist');
-        }
-
-        if ((int) $row['night_crystal'] < $amount) {
-            throw new DomainException('夜静静不足 / Insufficient night crystals');
-        }
-
-        $update = "UPDATE resources
-                   SET night_crystal = night_crystal - ?
-                   WHERE user_id = ?";
-        $stmt = $this->db->prepare($update);
-
-        if (!$stmt) {
-            throw new RuntimeException('无法扣除夜静静 / Unable to consume night crystals');
-        }
-
-        $stmt->bind_param('ii', $amount, $userId);
-        $this->executeOrFail(
-            $stmt,
-            '无法扣除夜静静 / Unable to consume night crystals'
-        );
-        $stmt->close();
-    }
-
-    /**
-     * 按稀有度及相邻稀有度抽取启用中的卡 / Selects an active card using the rolled and adjacent rarities
-     *
-     * @param string $rolledRarity 抽中的稀有度 / Rolled rarity
-     * @return array|null 技能卡行 / Skill-card row
-     */
-    private function selectCardWithFallback($rolledRarity) {
-        foreach ($this->getRarityFallbackOrder($rolledRarity) as $rarity) {
-            $query = "SELECT card_id, card_code, name, description, rarity,
-                             element, activation_type, category, effect_json,
-                             base_cooldown, max_level, is_active
-                      FROM skill_card_catalog
-                      WHERE rarity = ? AND is_active = 1
-                      ORDER BY RAND()
-                      LIMIT 1";
-            $stmt = $this->db->prepare($query);
-
-            if (!$stmt) {
-                throw new RuntimeException(
-                    '无法从目录选择技能卡 / Unable to select a skill card from the catalog'
-                );
-            }
-
-            $stmt->bind_param('s', $rarity);
-            $this->executeOrFail(
-                $stmt,
-                '无法从目录选择技能卡 / Unable to select a skill card from the catalog'
-            );
-            $result = $stmt->get_result();
-            $row = $result ? $result->fetch_assoc() : null;
-            $stmt->close();
-
-            if ($row) {
-                return $row;
-            }
-        }
-
-        return null;
-    }
-
-    /**
-     * 获取稀有度安全回退顺序，同距离优先较低稀有度 / Gets a safe rarity fallback order, preferring the lower rarity at equal distance
-     *
-     * @param string $rarity 目标稀有度 / Target rarity
-     * @return array 回退顺序 / Fallback order
-     */
-    private function getRarityFallbackOrder($rarity): array {
-        $index = array_search($rarity, self::RARITIES, true);
-
-        if ($index === false) {
-            throw new InvalidArgumentException('稀有度无效 / Invalid rarity');
-        }
-
-        $order = [$rarity];
-        $rarityCount = count(self::RARITIES);
-
-        for ($distance = 1; $distance < $rarityCount; $distance++) {
-            $lowerIndex = $index - $distance;
-            $higherIndex = $index + $distance;
-
-            if ($lowerIndex >= 0) {
-                $order[] = self::RARITIES[$lowerIndex];
-            }
-
-            if ($higherIndex < $rarityCount) {
-                $order[] = self::RARITIES[$higherIndex];
-            }
-        }
-
-        return $order;
-    }
-
-    /**
      * 增加技能卡库存 / Increases skill-card inventory
      *
      * @param int $userId 玩家ID / User ID
@@ -1562,19 +1466,56 @@ class SkillCardService {
      * @param int $userId 玩家ID / User ID
      * @param int $cardId 技能卡ID / Skill card ID
      * @param string $rarity 实际稀有度 / Actual rarity
+     * @param array $pool 卡池快照 / Pool snapshot
+     * @param array $poolEntry 成员权重快照 / Entry weight snapshot
      */
-    private function recordDraw($userId, $cardId, $rarity): void {
+    private function recordDraw(
+        $userId,
+        $cardId,
+        $rarity,
+        array $pool,
+        array $poolEntry
+    ): void {
         $query = "INSERT INTO skill_draw_history
-                    (user_id, card_id, rarity, cost_night)
-                  VALUES (?, ?, ?, ?)";
+                    (user_id, card_id, rarity, cost_night, pool_id,
+                     pool_code_snapshot, pool_revision, entry_weight,
+                     total_weight, cost_json)
+                  VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)";
         $stmt = $this->db->prepare($query);
 
         if (!$stmt) {
             throw new RuntimeException('无法记录技能卡抽取 / Unable to record skill-card draw');
         }
 
-        $cost = self::DRAW_COST_NIGHT;
-        $stmt->bind_param('iisi', $userId, $cardId, $rarity, $cost);
+        $costNight = (int) ($pool['cost']['night'] ?? 0);
+        $poolId = (int) $pool['pool_id'];
+        $poolCode = (string) $pool['pool_code'];
+        $poolRevision = (int) $pool['revision'];
+        $entryWeight = (int) $poolEntry['entry_weight'];
+        $totalWeight = (int) $poolEntry['total_weight'];
+        $costJson = json_encode(
+            $pool['cost'],
+            JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES
+        );
+        if ($costJson === false) {
+            $stmt->close();
+            throw new RuntimeException(
+                '无法记录卡池成本快照 / Unable to encode pool cost snapshot'
+            );
+        }
+        $stmt->bind_param(
+            'iisiisiiis',
+            $userId,
+            $cardId,
+            $rarity,
+            $costNight,
+            $poolId,
+            $poolCode,
+            $poolRevision,
+            $entryWeight,
+            $totalWeight,
+            $costJson
+        );
         $this->executeOrFail(
             $stmt,
             '无法记录技能卡抽取 / Unable to record skill-card draw'

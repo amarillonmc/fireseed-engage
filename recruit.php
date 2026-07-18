@@ -2,7 +2,6 @@
 // 种火集结号 - 武将招募页面 / Fireseed Engage - General recruitment page
 
 require_once 'includes/init.php';
-require_once 'includes/classes/GameRules.php';
 require_once 'includes/classes/RecruitmentService.php';
 require_once 'includes/gameplay_ui.php';
 
@@ -21,11 +20,15 @@ if (!$user->isValid()) {
 
 $userId = (int) $user->getUserId();
 $recruitmentService = new RecruitmentService();
-$poolResult = $recruitmentService->getPool();
-$pool = !empty($poolResult['success']) ? $poolResult['generals'] : [];
+$templatePoolResult = $recruitmentService->getPool();
+$publicTemplates = !empty($templatePoolResult['success'])
+    && isset($templatePoolResult['generals'])
+    && is_array($templatePoolResult['generals'])
+    ? $templatePoolResult['generals']
+    : [];
 $starterTemplates = [];
 
-foreach ($pool as $template) {
+foreach ($publicTemplates as $template) {
     if (in_array($template['rarity'], ['S', 'SS', 'P'], true)) {
         $starterTemplates[] = $template;
     }
@@ -34,6 +37,30 @@ foreach ($pool as $template) {
 $starterTemplateIds = array_map(function ($template) {
     return (int) $template['general_id'];
 }, $starterTemplates);
+$drawPoolsResult = $recruitmentService->getDrawPools();
+$drawPools = !empty($drawPoolsResult['success'])
+    && isset($drawPoolsResult['pools'])
+    && is_array($drawPoolsResult['pools'])
+    ? $drawPoolsResult['pools']
+    : [];
+$drawPoolWarnings = isset($drawPoolsResult['warnings'])
+    && is_array($drawPoolsResult['warnings'])
+    ? $drawPoolsResult['warnings']
+    : [];
+$allowedDrawCountsByPool = [];
+
+// 仅接受当前页面实际列出的池与次数 / Accept only pools and counts listed by this page
+foreach ($drawPools as $drawPool) {
+    $drawPoolId = isset($drawPool['pool_id']) ? (int) $drawPool['pool_id'] : 0;
+    $allowedCounts = isset($drawPool['allowed_counts'])
+        && is_array($drawPool['allowed_counts'])
+        ? array_values(array_map('intval', $drawPool['allowed_counts']))
+        : [];
+    if ($drawPoolId > 0 && !empty($allowedCounts)) {
+        $allowedDrawCountsByPool[$drawPoolId] = $allowedCounts;
+    }
+}
+
 $operationResult = null;
 
 if (isset($_SERVER['REQUEST_METHOD']) && $_SERVER['REQUEST_METHOD'] === 'POST') {
@@ -43,7 +70,9 @@ if (isset($_SERVER['REQUEST_METHOD']) && $_SERVER['REQUEST_METHOD'] === 'POST') 
             'message' => '请求验证失败，请刷新页面后重试 / Request verification failed; refresh and try again'
         ];
     } else {
-        $action = isset($_POST['action']) ? (string) $_POST['action'] : '';
+        $action = isset($_POST['action']) && is_scalar($_POST['action'])
+            ? (string) $_POST['action']
+            : '';
 
         if ($action === 'starter') {
             $templateId = isset($_POST['template_id'])
@@ -62,15 +91,32 @@ if (isset($_SERVER['REQUEST_METHOD']) && $_SERVER['REQUEST_METHOD'] === 'POST') 
                 );
             }
         } elseif ($action === 'recruit') {
-            $recruitType = isset($_POST['recruit_type'])
-                ? (string) $_POST['recruit_type']
+            $poolIdInput = isset($_POST['pool_id']) && is_scalar($_POST['pool_id'])
+                ? (string) $_POST['pool_id']
                 : '';
-            $recruitCount = isset($_POST['recruit_count'])
-                ? (int) $_POST['recruit_count']
-                : 0;
+            $countInput = isset($_POST['recruit_count'])
+                && is_scalar($_POST['recruit_count'])
+                ? (string) $_POST['recruit_count']
+                : '';
+            $drawPoolId = filter_var(
+                $poolIdInput,
+                FILTER_VALIDATE_INT,
+                ['options' => ['min_range' => 1]]
+            );
+            $recruitCount = filter_var(
+                $countInput,
+                FILTER_VALIDATE_INT,
+                ['options' => ['min_range' => 1, 'max_range' => 100]]
+            );
 
-            if (!in_array($recruitType, ['normal', 'advanced', 'resonance'], true)
-                || !in_array($recruitCount, [1, 10], true)) {
+            if ($drawPoolId === false
+                || $recruitCount === false
+                || !isset($allowedDrawCountsByPool[(int) $drawPoolId])
+                || !in_array(
+                    (int) $recruitCount,
+                    $allowedDrawCountsByPool[(int) $drawPoolId],
+                    true
+                )) {
                 $operationResult = [
                     'success' => false,
                     'message' => '招募参数无效 / Invalid recruitment parameters'
@@ -78,8 +124,8 @@ if (isset($_SERVER['REQUEST_METHOD']) && $_SERVER['REQUEST_METHOD'] === 'POST') 
             } else {
                 $operationResult = $recruitmentService->recruit(
                     $userId,
-                    $recruitType,
-                    $recruitCount
+                    (int) $drawPoolId,
+                    (int) $recruitCount
                 );
             }
         } else {
@@ -95,35 +141,6 @@ $starterRemaining = $recruitmentService->starterRemaining($userId);
 $user = new User($userId);
 $resource = new Resource($userId);
 $pageTitle = '武将招募';
-$recruitOptions = [
-    'normal' => [
-        'name' => '普通招募',
-        'description' => '以四系基础晶体寻找常规战力。',
-        'unit_cost' => [
-            'bright' => 100,
-            'warm' => 100,
-            'cold' => 100,
-            'green' => 100
-        ]
-    ],
-    'advanced' => [
-        'name' => '高级招募',
-        'description' => '追加昼夜晶体，稳定获得更高稀有度。',
-        'unit_cost' => [
-            'bright' => 500,
-            'warm' => 500,
-            'cold' => 500,
-            'green' => 500,
-            'day' => 100,
-            'night' => 100
-        ]
-    ],
-    'resonance' => [
-        'name' => '回路共鸣',
-        'description' => '消耗游戏内积累的思考回路，不含付费货币。',
-        'unit_cost' => ['circuit_points' => 5]
-    ]
-];
 ?>
 <!DOCTYPE html>
 <html lang="zh-CN">
@@ -161,6 +178,39 @@ $recruitOptions = [
             margin: 8px 0;
             padding-left: 20px;
         }
+        .pool-schedule,
+        .pool-revision {
+            color: #666;
+            font-size: 0.92rem;
+        }
+        .pool-entry-list {
+            list-style: none;
+            margin: 8px 0 14px;
+            padding: 0;
+            max-height: 320px;
+            overflow-y: auto;
+            border-top: 1px solid #e3e3e3;
+        }
+        .pool-entry-list li {
+            display: flex;
+            justify-content: space-between;
+            gap: 12px;
+            padding: 7px 0;
+            border-bottom: 1px solid #e3e3e3;
+        }
+        .pool-entry-probability {
+            white-space: nowrap;
+            font-variant-numeric: tabular-nums;
+        }
+        .featured {
+            display: inline-block;
+            border-radius: 3px;
+            padding: 1px 6px;
+            background: #c0392b;
+            color: #fff;
+            font-size: 0.8rem;
+            font-weight: bold;
+        }
         .button-row {
             display: flex;
             flex-wrap: wrap;
@@ -188,9 +238,19 @@ $recruitOptions = [
     <main>
         <?php renderGameplayResourceBar($resource); ?>
         <?php renderGameplayNotice($operationResult); ?>
-        <?php if (empty($poolResult['success'])): ?>
-            <?php renderGameplayNotice($poolResult); ?>
+        <?php if (empty($templatePoolResult['success'])): ?>
+            <?php renderGameplayNotice($templatePoolResult); ?>
         <?php endif; ?>
+        <?php if (empty($drawPoolsResult['success'])): ?>
+            <?php renderGameplayNotice($drawPoolsResult); ?>
+        <?php endif; ?>
+        <?php foreach ($drawPoolWarnings as $drawPoolWarning): ?>
+            <?php if (is_scalar($drawPoolWarning)): ?>
+                <div class="message warning">
+                    <?php echo escapeHtml((string) $drawPoolWarning); ?>
+                </div>
+            <?php endif; ?>
+        <?php endforeach; ?>
 
         <?php if ($operationResult && !empty($operationResult['generals'])): ?>
             <section class="recruit-panel">
@@ -270,42 +330,98 @@ $recruitOptions = [
 
         <section class="recruit-panel">
             <h3>非付费招募</h3>
-            <div class="recruit-grid">
-                <?php foreach ($recruitOptions as $type => $option): ?>
+            <?php if (!empty($drawPoolsResult['success']) && empty($drawPools)): ?>
+                <p>当前没有开放的武将卡池，请稍后再来。</p>
+            <?php elseif (!empty($drawPools)): ?>
+                <div class="recruit-grid">
+                <?php foreach ($drawPools as $drawPool): ?>
                     <?php
-                    $probabilities = GameRules::getGeneralRecruitmentProbabilities($type);
+                    $poolId = (int) ($drawPool['pool_id'] ?? 0);
+                    $unitCost = isset($drawPool['cost']) && is_array($drawPool['cost'])
+                        ? $drawPool['cost']
+                        : [];
+                    $allowedCounts = isset($drawPool['allowed_counts'])
+                        && is_array($drawPool['allowed_counts'])
+                        ? $drawPool['allowed_counts']
+                        : [];
+                    $rarityProbabilities = isset($drawPool['rarity_probabilities'])
+                        && is_array($drawPool['rarity_probabilities'])
+                        ? $drawPool['rarity_probabilities']
+                        : [];
+                    $entries = isset($drawPool['entries']) && is_array($drawPool['entries'])
+                        ? $drawPool['entries']
+                        : [];
                     ?>
                     <article class="starter-card">
-                        <h4><?php echo escapeHtml($option['name']); ?></h4>
-                        <p><?php echo escapeHtml($option['description']); ?></p>
-                        <p><strong>每次消耗：</strong><?php echo escapeHtml(formatGameplayBundle($option['unit_cost'])); ?></p>
-                        <p><strong>公开概率：</strong></p>
+                        <h4><?php echo escapeHtml((string) ($drawPool['name'] ?? '武将卡池')); ?></h4>
+                        <p><?php echo escapeHtml((string) ($drawPool['description'] ?? '')); ?></p>
+                        <p class="pool-schedule">
+                            <?php echo escapeHtml(formatGameplayPoolSchedule($drawPool)); ?>
+                        </p>
+                        <p class="pool-revision">
+                            配置版本：r<?php echo number_format((int) ($drawPool['revision'] ?? 1)); ?>
+                        </p>
+                        <p>
+                            <strong>每次消耗：</strong>
+                            <?php echo escapeHtml(empty($unitCost) ? '免费' : formatGameplayBundle($unitCost)); ?>
+                        </p>
+                        <p><strong>稀有度概率：</strong></p>
                         <ul class="compact-list">
-                            <?php foreach ($probabilities as $rarity => $chance): ?>
-                                <?php if ((float) $chance > 0): ?>
-                                    <li><?php echo escapeHtml($rarity); ?>：<?php echo escapeHtml($chance); ?>%</li>
+                            <?php foreach ($rarityProbabilities as $rarity => $probability): ?>
+                                <?php if (is_numeric($probability) && (float) $probability > 0): ?>
+                                    <li>
+                                        <?php echo escapeHtml((string) $rarity); ?>：
+                                        <?php echo escapeHtml(formatGameplayPoolProbability($probability)); ?>
+                                    </li>
                                 <?php endif; ?>
                             <?php endforeach; ?>
                         </ul>
+                        <details>
+                            <summary>卡池内容与单卡实际概率（<?php echo number_format(count($entries)); ?>）</summary>
+                            <ul class="pool-entry-list">
+                                <?php foreach ($entries as $entry): ?>
+                                    <li>
+                                        <span>
+                                            <?php echo escapeHtml((string) ($entry['name'] ?? '未知武将')); ?>
+                                            <span class="rarity">
+                                                <?php echo escapeHtml((string) ($entry['rarity'] ?? '')); ?>
+                                            </span>
+                                            <?php if (!empty($entry['is_featured'])): ?>
+                                                <span class="featured">UP</span>
+                                            <?php endif; ?>
+                                        </span>
+                                        <strong class="pool-entry-probability">
+                                            <?php echo escapeHtml(formatGameplayPoolProbability($entry['probability'] ?? 0)); ?>
+                                        </strong>
+                                    </li>
+                                <?php endforeach; ?>
+                            </ul>
+                        </details>
                         <div class="button-row">
-                            <?php foreach ([1, 10] as $count): ?>
+                            <?php foreach ($allowedCounts as $count): ?>
+                                <?php
+                                $normalizedCount = (int) $count;
+                                $totalCost = multiplyGameplayPoolCost(
+                                    $unitCost,
+                                    $normalizedCount
+                                );
+                                ?>
                                 <form method="post" action="recruit.php">
                                     <?php echo csrfField(); ?>
                                     <input type="hidden" name="action" value="recruit">
-                                    <input type="hidden" name="recruit_type" value="<?php echo escapeHtml($type); ?>">
-                                    <input type="hidden" name="recruit_count" value="<?php echo $count; ?>">
+                                    <input type="hidden" name="pool_id" value="<?php echo $poolId; ?>">
+                                    <input type="hidden" name="recruit_count" value="<?php echo $normalizedCount; ?>">
                                     <button type="submit">
-                                        招募 <?php echo $count; ?> 次
-                                        （<?php echo escapeHtml(formatGameplayBundle(array_map(function ($amount) use ($count) {
-                                            return (int) $amount * $count;
-                                        }, $option['unit_cost']))); ?>）
+                                        招募 <?php echo number_format($normalizedCount); ?> 次
+                                        （<?php echo escapeHtml(empty($totalCost) ? '免费' : formatGameplayBundle($totalCost)); ?>）
                                     </button>
                                 </form>
                             <?php endforeach; ?>
                         </div>
                     </article>
                 <?php endforeach; ?>
-            </div>
+                </div>
+            <?php endif; ?>
         </section>
     </main>
     <?php renderGameplayFooter(); ?>

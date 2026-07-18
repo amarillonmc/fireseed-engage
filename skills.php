@@ -2,7 +2,6 @@
 // 种火集结号 - 技能卡管理页面 / Fireseed Engage - Skill-card management page
 
 require_once 'includes/init.php';
-require_once 'includes/classes/GameRules.php';
 require_once 'includes/classes/SkillCardService.php';
 require_once 'includes/gameplay_ui.php';
 
@@ -59,6 +58,30 @@ if (!$user->isValid()) {
 
 $userId = (int) $user->getUserId();
 $skillService = new SkillCardService();
+$drawPoolsResult = $skillService->getDrawPools();
+$drawPools = !empty($drawPoolsResult['success'])
+    && isset($drawPoolsResult['pools'])
+    && is_array($drawPoolsResult['pools'])
+    ? $drawPoolsResult['pools']
+    : [];
+$drawPoolWarnings = isset($drawPoolsResult['warnings'])
+    && is_array($drawPoolsResult['warnings'])
+    ? $drawPoolsResult['warnings']
+    : [];
+$allowedDrawCountsByPool = [];
+
+// 仅接受当前页面实际列出的池与次数 / Accept only pools and counts listed by this page
+foreach ($drawPools as $drawPool) {
+    $drawPoolId = isset($drawPool['pool_id']) ? (int) $drawPool['pool_id'] : 0;
+    $allowedCounts = isset($drawPool['allowed_counts'])
+        && is_array($drawPool['allowed_counts'])
+        ? array_values(array_map('intval', $drawPool['allowed_counts']))
+        : [];
+    if ($drawPoolId > 0 && !empty($allowedCounts)) {
+        $allowedDrawCountsByPool[$drawPoolId] = $allowedCounts;
+    }
+}
+
 $operationResult = null;
 
 if (isset($_SERVER['REQUEST_METHOD']) && $_SERVER['REQUEST_METHOD'] === 'POST') {
@@ -68,17 +91,47 @@ if (isset($_SERVER['REQUEST_METHOD']) && $_SERVER['REQUEST_METHOD'] === 'POST') 
             'message' => '请求验证失败，请刷新页面后重试 / Request verification failed; refresh and try again'
         ];
     } else {
-        $action = isset($_POST['action']) ? (string) $_POST['action'] : '';
+        $action = isset($_POST['action']) && is_scalar($_POST['action'])
+            ? (string) $_POST['action']
+            : '';
 
         if ($action === 'draw') {
-            $count = isset($_POST['draw_count']) ? (int) $_POST['draw_count'] : 0;
-            if (!in_array($count, [1, 10], true)) {
+            $poolIdInput = isset($_POST['pool_id']) && is_scalar($_POST['pool_id'])
+                ? (string) $_POST['pool_id']
+                : '';
+            $countInput = isset($_POST['draw_count'])
+                && is_scalar($_POST['draw_count'])
+                ? (string) $_POST['draw_count']
+                : '';
+            $drawPoolId = filter_var(
+                $poolIdInput,
+                FILTER_VALIDATE_INT,
+                ['options' => ['min_range' => 1]]
+            );
+            $count = filter_var(
+                $countInput,
+                FILTER_VALIDATE_INT,
+                ['options' => ['min_range' => 1, 'max_range' => 100]]
+            );
+
+            if ($drawPoolId === false
+                || $count === false
+                || !isset($allowedDrawCountsByPool[(int) $drawPoolId])
+                || !in_array(
+                    (int) $count,
+                    $allowedDrawCountsByPool[(int) $drawPoolId],
+                    true
+                )) {
                 $operationResult = [
                     'success' => false,
-                    'message' => '技能卡抽取次数无效 / Invalid skill-card draw count'
+                    'message' => '技能卡抽取参数无效 / Invalid skill-card draw parameters'
                 ];
             } else {
-                $operationResult = $skillService->draw($userId, $count);
+                $operationResult = $skillService->draw(
+                    $userId,
+                    (int) $count,
+                    (int) $drawPoolId
+                );
             }
         } elseif ($action === 'equip') {
             $operationResult = $skillService->equip(
@@ -138,6 +191,8 @@ if ($walletStmt) {
 $equippedByGeneral = [];
 $equippedQuery = "SELECT gs.skill_id, gs.general_id, gs.skill_name, gs.slot,
                          gs.skill_level, gs.skill_effect, esc.card_id,
+                         c.name AS catalog_name,
+                         c.effect_json AS catalog_effect_json,
                          c.rarity, c.activation_type, c.max_level,
                          c.base_cooldown, cd.ready_at
                   FROM general_skills gs
@@ -154,8 +209,13 @@ if ($equippedStmt) {
     if ($equippedStmt->execute()) {
         $equippedResult = $equippedStmt->get_result();
         while ($equippedResult && ($row = $equippedResult->fetch_assoc())) {
-            $effects = json_decode((string) $row['skill_effect'], true);
+            // 已映射技能始终展示目录权威定义；旧快照仅保留兼容用途 / Mapped skills always display the authoritative catalog definition; the legacy snapshot remains for compatibility
+            $effects = json_decode(
+                (string) $row['catalog_effect_json'],
+                true
+            );
             $row['effects'] = is_array($effects) ? $effects : [];
+            $row['skill_name'] = (string) $row['catalog_name'];
             $generalKey = (int) $row['general_id'];
             if (!isset($equippedByGeneral[$generalKey])) {
                 $equippedByGeneral[$generalKey] = [];
@@ -169,7 +229,6 @@ if ($equippedStmt) {
 $user = new User($userId);
 $resource = new Resource($userId);
 $pageTitle = '技能卡管理';
-$skillProbabilities = GameRules::getSkillCardProbabilities();
 ?>
 <!DOCTYPE html>
 <html lang="zh-CN">
@@ -203,6 +262,43 @@ $skillProbabilities = GameRules::getSkillCardProbabilities();
             padding: 2px 7px;
             background: #333;
             color: #fff;
+            font-weight: bold;
+        }
+        .compact-list {
+            margin: 8px 0;
+            padding-left: 20px;
+        }
+        .pool-schedule,
+        .pool-revision {
+            color: #666;
+            font-size: 0.92rem;
+        }
+        .pool-entry-list {
+            list-style: none;
+            margin: 8px 0 14px;
+            padding: 0;
+            max-height: 320px;
+            overflow-y: auto;
+            border-top: 1px solid #e3e3e3;
+        }
+        .pool-entry-list li {
+            display: flex;
+            justify-content: space-between;
+            gap: 12px;
+            padding: 7px 0;
+            border-bottom: 1px solid #e3e3e3;
+        }
+        .pool-entry-probability {
+            white-space: nowrap;
+            font-variant-numeric: tabular-nums;
+        }
+        .featured {
+            display: inline-block;
+            border-radius: 3px;
+            padding: 1px 6px;
+            background: #c0392b;
+            color: #fff;
+            font-size: 0.8rem;
             font-weight: bold;
         }
         .button-row,
@@ -242,6 +338,16 @@ $skillProbabilities = GameRules::getSkillCardProbabilities();
     <main>
         <?php renderGameplayResourceBar($resource); ?>
         <?php renderGameplayNotice($operationResult); ?>
+        <?php if (empty($drawPoolsResult['success'])): ?>
+            <?php renderGameplayNotice($drawPoolsResult); ?>
+        <?php endif; ?>
+        <?php foreach ($drawPoolWarnings as $drawPoolWarning): ?>
+            <?php if (is_scalar($drawPoolWarning)): ?>
+                <div class="message warning">
+                    <?php echo escapeHtml((string) $drawPoolWarning); ?>
+                </div>
+            <?php endif; ?>
+        <?php endforeach; ?>
 
         <?php if ($operationResult && !empty($operationResult['cards'])): ?>
             <section class="skill-section">
@@ -263,23 +369,98 @@ $skillProbabilities = GameRules::getSkillCardProbabilities();
 
         <section class="skill-section">
             <h3>技能卡抽取</h3>
-            <p>每次消耗夜静静 × 250；十连消耗夜静静 × 2,500。</p>
-            <p>
-                <?php foreach ($skillProbabilities as $rarity => $chance): ?>
-                    <span class="rarity"><?php echo escapeHtml($rarity); ?></span>
-                    <?php echo escapeHtml($chance); ?>%
+            <?php if (!empty($drawPoolsResult['success']) && empty($drawPools)): ?>
+                <p>当前没有开放的技能卡池，请稍后再来。</p>
+            <?php elseif (!empty($drawPools)): ?>
+                <div class="skill-grid">
+                <?php foreach ($drawPools as $drawPool): ?>
+                    <?php
+                    $poolId = (int) ($drawPool['pool_id'] ?? 0);
+                    $unitCost = isset($drawPool['cost']) && is_array($drawPool['cost'])
+                        ? $drawPool['cost']
+                        : [];
+                    $allowedCounts = isset($drawPool['allowed_counts'])
+                        && is_array($drawPool['allowed_counts'])
+                        ? $drawPool['allowed_counts']
+                        : [];
+                    $rarityProbabilities = isset($drawPool['rarity_probabilities'])
+                        && is_array($drawPool['rarity_probabilities'])
+                        ? $drawPool['rarity_probabilities']
+                        : [];
+                    $entries = isset($drawPool['entries']) && is_array($drawPool['entries'])
+                        ? $drawPool['entries']
+                        : [];
+                    ?>
+                    <article class="skill-card">
+                        <h4><?php echo escapeHtml((string) ($drawPool['name'] ?? '技能卡池')); ?></h4>
+                        <p><?php echo escapeHtml((string) ($drawPool['description'] ?? '')); ?></p>
+                        <p class="pool-schedule">
+                            <?php echo escapeHtml(formatGameplayPoolSchedule($drawPool)); ?>
+                        </p>
+                        <p class="pool-revision">
+                            配置版本：r<?php echo number_format((int) ($drawPool['revision'] ?? 1)); ?>
+                        </p>
+                        <p>
+                            <strong>每次消耗：</strong>
+                            <?php echo escapeHtml(empty($unitCost) ? '免费' : formatGameplayBundle($unitCost)); ?>
+                        </p>
+                        <p><strong>稀有度概率：</strong></p>
+                        <ul class="compact-list">
+                            <?php foreach ($rarityProbabilities as $rarity => $probability): ?>
+                                <?php if (is_numeric($probability) && (float) $probability > 0): ?>
+                                    <li>
+                                        <?php echo escapeHtml((string) $rarity); ?>：
+                                        <?php echo escapeHtml(formatGameplayPoolProbability($probability)); ?>
+                                    </li>
+                                <?php endif; ?>
+                            <?php endforeach; ?>
+                        </ul>
+                        <details>
+                            <summary>卡池内容与单卡实际概率（<?php echo number_format(count($entries)); ?>）</summary>
+                            <ul class="pool-entry-list">
+                                <?php foreach ($entries as $entry): ?>
+                                    <li>
+                                        <span>
+                                            <?php echo escapeHtml((string) ($entry['name'] ?? '未知技能卡')); ?>
+                                            <span class="rarity">
+                                                <?php echo escapeHtml((string) ($entry['rarity'] ?? '')); ?>
+                                            </span>
+                                            <?php if (!empty($entry['is_featured'])): ?>
+                                                <span class="featured">UP</span>
+                                            <?php endif; ?>
+                                        </span>
+                                        <strong class="pool-entry-probability">
+                                            <?php echo escapeHtml(formatGameplayPoolProbability($entry['probability'] ?? 0)); ?>
+                                        </strong>
+                                    </li>
+                                <?php endforeach; ?>
+                            </ul>
+                        </details>
+                        <div class="button-row">
+                            <?php foreach ($allowedCounts as $count): ?>
+                                <?php
+                                $normalizedCount = (int) $count;
+                                $totalCost = multiplyGameplayPoolCost(
+                                    $unitCost,
+                                    $normalizedCount
+                                );
+                                ?>
+                                <form method="post" action="skills.php">
+                                    <?php echo csrfField(); ?>
+                                    <input type="hidden" name="action" value="draw">
+                                    <input type="hidden" name="pool_id" value="<?php echo $poolId; ?>">
+                                    <input type="hidden" name="draw_count" value="<?php echo $normalizedCount; ?>">
+                                    <button type="submit">
+                                        抽取 <?php echo number_format($normalizedCount); ?> 次
+                                        （<?php echo escapeHtml(empty($totalCost) ? '免费' : formatGameplayBundle($totalCost)); ?>）
+                                    </button>
+                                </form>
+                            <?php endforeach; ?>
+                        </div>
+                    </article>
                 <?php endforeach; ?>
-            </p>
-            <div class="button-row">
-                <?php foreach ([1, 10] as $count): ?>
-                    <form method="post" action="skills.php">
-                        <?php echo csrfField(); ?>
-                        <input type="hidden" name="action" value="draw">
-                        <input type="hidden" name="draw_count" value="<?php echo $count; ?>">
-                        <button type="submit">抽取 <?php echo $count; ?> 次</button>
-                    </form>
-                <?php endforeach; ?>
-            </div>
+                </div>
+            <?php endif; ?>
         </section>
 
         <section class="skill-section">
@@ -287,7 +468,7 @@ $skillProbabilities = GameRules::getSkillCardProbabilities();
             <?php if (empty($inventoryResult['success'])): ?>
                 <?php renderGameplayNotice($inventoryResult); ?>
             <?php elseif (empty($inventory)): ?>
-                <p>库存为空，可先使用夜静静抽取技能卡。</p>
+                <p>库存为空，可先从当前开放卡池抽取技能卡。</p>
             <?php else: ?>
                 <div class="skill-grid">
                     <?php foreach ($inventory as $card): ?>

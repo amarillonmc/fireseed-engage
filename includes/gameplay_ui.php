@@ -150,6 +150,67 @@ function formatGameplayBundle($bundle) {
 }
 
 /**
+ * 格式化公开卡池概率，最多保留六位小数 / Format a published pool probability with up to six decimals
+ * @param mixed $probability 百分比数值 / Percentage value
+ * @return string 可读百分比 / Readable percentage
+ */
+function formatGameplayPoolProbability($probability) {
+    $value = is_numeric($probability) && is_finite((float) $probability)
+        ? max(0.0, min(100.0, (float) $probability))
+        : 0.0;
+    $formatted = rtrim(rtrim(number_format($value, 6, '.', ''), '0'), '.');
+
+    return ($formatted === '' ? '0' : $formatted) . '%';
+}
+
+/**
+ * 格式化开放卡池排期 / Format an open pool schedule
+ * @param array $pool 卡池数据 / Pool data
+ * @return string 排期说明 / Schedule description
+ */
+function formatGameplayPoolSchedule(array $pool) {
+    $startsAt = isset($pool['starts_at']) && is_scalar($pool['starts_at'])
+        ? trim((string) $pool['starts_at'])
+        : '';
+    $endsAt = isset($pool['ends_at']) && is_scalar($pool['ends_at'])
+        ? trim((string) $pool['ends_at'])
+        : '';
+
+    if ($startsAt === '' && $endsAt === '') {
+        return '常驻开放 / Permanently available';
+    }
+    if ($startsAt !== '' && $endsAt !== '') {
+        return '开放期间：' . $startsAt . ' 至 ' . $endsAt
+            . ' / Available from ' . $startsAt . ' to ' . $endsAt;
+    }
+    if ($startsAt !== '') {
+        return '自 ' . $startsAt . ' 起开放 / Available from ' . $startsAt;
+    }
+
+    return '开放至 ' . $endsAt . ' / Available until ' . $endsAt;
+}
+
+/**
+ * 计算页面展示用的多抽总成本 / Calculate a multi-draw total for display
+ * @param array $unitCost 每抽成本 / Per-draw cost
+ * @param int $count 抽取次数 / Draw count
+ * @return array 总成本 / Total cost
+ */
+function multiplyGameplayPoolCost(array $unitCost, $count) {
+    $normalizedCount = max(1, (int) $count);
+    $total = [];
+
+    foreach ($unitCost as $key => $amount) {
+        if (!is_numeric($amount) || (int) $amount <= 0) {
+            continue;
+        }
+        $total[(string) $key] = (int) $amount * $normalizedCount;
+    }
+
+    return $total;
+}
+
+/**
  * 渲染扩展玩法页脚 / Render the expansion footer
  * @return void
  */

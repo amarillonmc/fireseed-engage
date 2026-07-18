@@ -6,8 +6,11 @@ class Army {
      * 军队百分比加成上限，防止异常技能数据产生无界数值 / Maximum army bonus percentage to bound malformed skill data
      */
     const MAX_ASSIGNED_GENERAL_BONUS_PERCENT = 1000;
+    const MAX_DIRECTIONAL_GENERAL_BONUS_PERCENT = 1000;
     const MAX_DAMAGE_REDUCTION_PERCENT = 75;
     const MAX_SCOUT_RANGE_BONUS = 15;
+    const DEFAULT_ELEMENT_STACK_CAP = 3;
+    const MAX_ELEMENT_STACK_CAP = 100;
 
     private $db;
     private $armyId;
@@ -683,6 +686,7 @@ class Army {
         
         $totalAttack = 0.0;
         $totalDefense = 0.0;
+        $bonuses = $this->getActiveGeneralBonuses();
         
         foreach ($this->units as $unit) {
             $soldierType = $unit['soldier_type'];
@@ -693,16 +697,21 @@ class Army {
             $baseAttack = $this->getSoldierBaseAttack($soldierType);
             $baseDefense = $this->getSoldierBaseDefense($soldierType);
             
-            $totalAttack += $baseAttack * $level * $quantity;
-            $totalDefense += $baseDefense * $level * $quantity;
+            $totalAttack += self::applyUnitPercentageBonus(
+                $baseAttack * $level * $quantity,
+                $bonuses,
+                $soldierType,
+                'attack'
+            );
+            $totalDefense += self::applyUnitPercentageBonus(
+                $baseDefense * $level * $quantity,
+                $bonuses,
+                $soldierType,
+                'defense'
+            );
         }
 
-        // 每名存活且已编入本军的武将只结算一次军队加成 / Apply each living assigned general's army bonus exactly once
-        $bonuses = $this->getActiveGeneralBonuses();
-        $attackPower = $totalAttack * (1 + $bonuses['attack'] / 100);
-        $defensePower = $totalDefense * (1 + $bonuses['defense'] / 100);
-
-        return (int) round($attackPower + $defensePower);
+        return (int) round($totalAttack + $totalDefense);
     }
     
     /**
@@ -713,20 +722,22 @@ class Army {
         if (!$this->isValid || empty($this->units)) {
             return 0;
         }
-        
-        $minSpeed = PHP_FLOAT_MAX;
-        
+
+        $baseSpeedsByType = [];
+        $soldierTypes = [];
         foreach ($this->units as $unit) {
             $soldierType = $unit['soldier_type'];
-            $movementSpeed = $this->getSoldierMovementSpeed($soldierType);
-            
-            if ($movementSpeed < $minSpeed) {
-                $minSpeed = $movementSpeed;
-            }
+            $soldierTypes[] = $soldierType;
+            $baseSpeedsByType[$soldierType] =
+                $this->getSoldierMovementSpeed($soldierType);
         }
-        
+
         $bonuses = $this->getActiveGeneralBonuses();
-        return $minSpeed * (1 + $bonuses['speed'] / 100);
+        return self::calculateSlowestMovementSpeed(
+            $baseSpeedsByType,
+            $soldierTypes,
+            $bonuses
+        );
     }
 
     /**
@@ -762,28 +773,16 @@ class Army {
     }
 
     /**
-     * 汇总本军存活武将的军队加成 / Aggregate army bonuses from living assigned generals
-     * @return array 攻击、守备与速度百分比 / Attack, defense, and speed percentages
+     * 汇总本军存活武将的全局与定向加成 / Aggregate global and targeted bonuses from living assigned generals
+     * @return array 全局、兵种、元素及旧效果加成 / Global, unit, element, and legacy bonuses
      */
     private function getActiveGeneralBonuses() {
         if ($this->generalBonusCache !== null) {
             return $this->generalBonusCache;
         }
 
-        $bonuses = [
-            'attack' => 0.0,
-            'defense' => 0.0,
-            'speed' => 0.0,
-            'damage_reduction' => 0.0,
-            'scout_range' => 0.0
-        ];
-        $caps = [
-            'attack' => self::MAX_ASSIGNED_GENERAL_BONUS_PERCENT,
-            'defense' => self::MAX_ASSIGNED_GENERAL_BONUS_PERCENT,
-            'speed' => self::MAX_ASSIGNED_GENERAL_BONUS_PERCENT,
-            'damage_reduction' => self::MAX_DAMAGE_REDUCTION_PERCENT,
-            'scout_range' => self::MAX_SCOUT_RANGE_BONUS
-        ];
+        $generalBonusSets = [];
+        $livingGeneralElements = [];
         foreach (General::getArmyGenerals($this->armyId) as $general) {
             if (!$general->isValid()
                 || (int) $general->getOwnerId() !== (int) $this->ownerId
@@ -791,20 +790,367 @@ class Army {
                 continue;
             }
 
-            $generalBonus = $general->getBonus('army');
-            foreach (array_keys($bonuses) as $type) {
-                if (isset($generalBonus[$type]) && is_numeric($generalBonus[$type])) {
-                    $bonuses[$type] += max(0.0, (float) $generalBonus[$type]);
-                    $bonuses[$type] = min(
-                        $caps[$type],
-                        $bonuses[$type]
-                    );
+            $generalBonusSets[] = $general->getBonus('army');
+            $livingGeneralElements[] = $general->getElement();
+        }
+
+        $this->generalBonusCache = self::aggregateArmyBonusRules(
+            $generalBonusSets,
+            $livingGeneralElements
+        );
+        return $this->generalBonusCache;
+    }
+
+    /**
+     * 返回受支持兵种 / Return supported soldier types
+     * @return array 兵种键 / Soldier-type keys
+     */
+    public static function getSupportedSoldierTypes() {
+        return ['pawn', 'knight', 'rook', 'bishop', 'golem', 'scout'];
+    }
+
+    /**
+     * 返回元素键与中文元素名映射 / Return the element-key to Chinese-name map
+     * @return array 元素映射 / Element map
+     */
+    public static function getElementNameMap() {
+        return [
+            'bright' => '亮晶晶',
+            'warm' => '暖洋洋',
+            'cold' => '冷冰冰',
+            'green' => '郁萌萌',
+            'day' => '昼闪闪',
+            'night' => '夜静静'
+        ];
+    }
+
+    /**
+     * 统计存活参战武将的元素层数 / Count element stacks among living participating generals
+     * @param array $elements 武将元素名 / General element names
+     * @param mixed $stackCap 层数上限，空值使用配置 / Stack cap, null to use configuration
+     * @return array 各元素层数 / Stack count for each element
+     */
+    public static function countElementStacks(
+        array $elements,
+        $stackCap = null
+    ) {
+        $elementMap = self::getElementNameMap();
+        $elementKeysByName = array_flip($elementMap);
+        $counts = array_fill_keys(array_keys($elementMap), 0);
+        $safeStackCap = self::resolveElementStackCap($stackCap);
+
+        foreach ($elements as $element) {
+            if (!is_string($element)) {
+                continue;
+            }
+
+            $element = trim($element);
+            $elementKey = isset($elementMap[$element])
+                ? $element
+                : (isset($elementKeysByName[$element])
+                    ? $elementKeysByName[$element]
+                    : null);
+            if ($elementKey === null
+                || $counts[$elementKey] >= $safeStackCap) {
+                continue;
+            }
+            $counts[$elementKey]++;
+        }
+
+        return $counts;
+    }
+
+    /**
+     * 汇总全局、兵种及元素共鸣加成 / Aggregate global, unit-specific, and elemental resonance bonuses
+     * @param array $generalBonusSets 存活武将加成集合 / Living-general bonus sets
+     * @param array $livingGeneralElements 存活武将元素 / Living-general elements
+     * @param mixed $elementStackCap 元素层数上限 / Element stack cap
+     * @return array 可用于逐兵种结算的加成规则 / Bonus rules for per-unit calculation
+     */
+    public static function aggregateArmyBonusRules(
+        array $generalBonusSets,
+        array $livingGeneralElements,
+        $elementStackCap = null
+    ) {
+        $combatStats = ['attack', 'defense', 'speed'];
+        $soldierTypes = self::getSupportedSoldierTypes();
+        $elementMap = self::getElementNameMap();
+        $globalBonuses = [
+            'attack' => 0.0,
+            'defense' => 0.0,
+            'speed' => 0.0,
+            'damage_reduction' => 0.0,
+            'scout_range' => 0.0
+        ];
+        $globalCaps = [
+            'attack' => self::MAX_ASSIGNED_GENERAL_BONUS_PERCENT,
+            'defense' => self::MAX_ASSIGNED_GENERAL_BONUS_PERCENT,
+            'speed' => self::MAX_ASSIGNED_GENERAL_BONUS_PERCENT,
+            'damage_reduction' => self::MAX_DAMAGE_REDUCTION_PERCENT,
+            'scout_range' => self::MAX_SCOUT_RANGE_BONUS
+        ];
+        $unitBonuses = [];
+        $elementPerBonuses = [];
+
+        foreach ($soldierTypes as $soldierType) {
+            $unitBonuses[$soldierType] = array_fill_keys(
+                $combatStats,
+                0.0
+            );
+        }
+        foreach (array_keys($elementMap) as $elementKey) {
+            $elementPerBonuses[$elementKey] = array_fill_keys(
+                $combatStats,
+                0.0
+            );
+        }
+
+        foreach ($generalBonusSets as $generalBonus) {
+            if (!is_array($generalBonus)) {
+                continue;
+            }
+
+            foreach ($globalCaps as $bonusType => $cap) {
+                if (!array_key_exists($bonusType, $generalBonus)) {
+                    continue;
+                }
+                $globalBonuses[$bonusType] = self::boundedBonusAdd(
+                    $globalBonuses[$bonusType],
+                    $generalBonus[$bonusType],
+                    $cap
+                );
+            }
+
+            foreach ($combatStats as $stat) {
+                foreach ($soldierTypes as $soldierType) {
+                    $effectKey = 'unit_' . $stat . '_' . $soldierType;
+                    if (!array_key_exists($effectKey, $generalBonus)) {
+                        continue;
+                    }
+                    $unitBonuses[$soldierType][$stat] =
+                        self::boundedBonusAdd(
+                            $unitBonuses[$soldierType][$stat],
+                            $generalBonus[$effectKey],
+                            self::MAX_DIRECTIONAL_GENERAL_BONUS_PERCENT
+                        );
+                }
+
+                foreach (array_keys($elementMap) as $elementKey) {
+                    $effectKey = 'element_' . $stat
+                        . '_per_' . $elementKey;
+                    if (!array_key_exists($effectKey, $generalBonus)) {
+                        continue;
+                    }
+                    $elementPerBonuses[$elementKey][$stat] =
+                        self::boundedBonusAdd(
+                            $elementPerBonuses[$elementKey][$stat],
+                            $generalBonus[$effectKey],
+                            self::MAX_DIRECTIONAL_GENERAL_BONUS_PERCENT
+                        );
                 }
             }
         }
 
-        $this->generalBonusCache = $bonuses;
-        return $bonuses;
+        $elementStacks = self::countElementStacks(
+            $livingGeneralElements,
+            $elementStackCap
+        );
+        $elementBonuses = array_fill_keys($combatStats, 0.0);
+        foreach ($combatStats as $stat) {
+            foreach (array_keys($elementMap) as $elementKey) {
+                $stackedValue = $elementPerBonuses[$elementKey][$stat]
+                    * $elementStacks[$elementKey];
+                $elementBonuses[$stat] = self::boundedBonusAdd(
+                    $elementBonuses[$stat],
+                    $stackedValue,
+                    self::MAX_DIRECTIONAL_GENERAL_BONUS_PERCENT
+                );
+            }
+        }
+
+        $directionalBonuses = [];
+        foreach ($soldierTypes as $soldierType) {
+            $directionalBonuses[$soldierType] = [];
+            foreach ($combatStats as $stat) {
+                $directionalBonuses[$soldierType][$stat] =
+                    self::boundedBonusAdd(
+                        $unitBonuses[$soldierType][$stat],
+                        $elementBonuses[$stat],
+                        self::MAX_DIRECTIONAL_GENERAL_BONUS_PERCENT
+                    );
+            }
+        }
+
+        $globalBonuses['directional'] = $directionalBonuses;
+        $globalBonuses['element_stacks'] = $elementStacks;
+        return $globalBonuses;
+    }
+
+    /**
+     * 获取某兵种某属性的全局与定向加成总和 / Get the separately capped global and directional bonus for one unit stat
+     * @param array $bonusRules 汇总加成规则 / Aggregated bonus rules
+     * @param string $soldierType 兵种 / Soldier type
+     * @param string $stat 属性 / Stat
+     * @return float 百分比加成 / Percentage bonus
+     */
+    public static function getUnitBonusPercent(
+        array $bonusRules,
+        $soldierType,
+        $stat
+    ) {
+        if (!in_array(
+            $soldierType,
+            self::getSupportedSoldierTypes(),
+            true
+        ) || !in_array($stat, ['attack', 'defense', 'speed'], true)) {
+            return 0.0;
+        }
+
+        $global = isset($bonusRules[$stat])
+            ? self::normalizeBonusValue(
+                $bonusRules[$stat],
+                self::MAX_ASSIGNED_GENERAL_BONUS_PERCENT
+            )
+            : 0.0;
+        $directional = isset(
+            $bonusRules['directional'][$soldierType][$stat]
+        )
+            ? self::normalizeBonusValue(
+                $bonusRules['directional'][$soldierType][$stat],
+                self::MAX_DIRECTIONAL_GENERAL_BONUS_PERCENT
+            )
+            : 0.0;
+
+        return $global + $directional;
+    }
+
+    /**
+     * 对单一兵种属性应用加成 / Apply bonuses to one unit stat
+     * @param mixed $baseValue 基础总值 / Base total
+     * @param array $bonusRules 汇总加成规则 / Aggregated bonus rules
+     * @param string $soldierType 兵种 / Soldier type
+     * @param string $stat 属性 / Stat
+     * @return float 加成后总值 / Modified total
+     */
+    public static function applyUnitPercentageBonus(
+        $baseValue,
+        array $bonusRules,
+        $soldierType,
+        $stat
+    ) {
+        if (!is_numeric($baseValue)
+            || !is_finite((float) $baseValue)
+            || (float) $baseValue <= 0.0) {
+            return 0.0;
+        }
+
+        $bonusPercent = self::getUnitBonusPercent(
+            $bonusRules,
+            $soldierType,
+            $stat
+        );
+        return (float) $baseValue * (1 + $bonusPercent / 100);
+    }
+
+    /**
+     * 逐兵种加速后取得混编军队最慢速度 / Apply per-unit speed bonuses before selecting the mixed army's slowest speed
+     * @param array $baseSpeedsByType 各兵种基础速度 / Base speeds by soldier type
+     * @param array $soldierTypes 本军兵种 / Soldier types present in the army
+     * @param array $bonusRules 汇总加成规则 / Aggregated bonus rules
+     * @return float 军队移动速度 / Army movement speed
+     */
+    public static function calculateSlowestMovementSpeed(
+        array $baseSpeedsByType,
+        array $soldierTypes,
+        array $bonusRules
+    ) {
+        $minimumSpeed = PHP_FLOAT_MAX;
+        $hasValidSpeed = false;
+
+        foreach ($soldierTypes as $soldierType) {
+            if (!isset($baseSpeedsByType[$soldierType])
+                || !is_numeric($baseSpeedsByType[$soldierType])) {
+                continue;
+            }
+
+            $baseSpeed = (float) $baseSpeedsByType[$soldierType];
+            if (!is_finite($baseSpeed) || $baseSpeed <= 0.0) {
+                continue;
+            }
+
+            $adjustedSpeed = self::applyUnitPercentageBonus(
+                $baseSpeed,
+                $bonusRules,
+                $soldierType,
+                'speed'
+            );
+            $minimumSpeed = min($minimumSpeed, $adjustedSpeed);
+            $hasValidSpeed = true;
+        }
+
+        return $hasValidSpeed ? $minimumSpeed : 0.0;
+    }
+
+    /**
+     * 解析元素叠层安全上限 / Resolve a safe elemental stack cap
+     * @param mixed $stackCap 指定上限 / Requested cap
+     * @return int 安全层数上限 / Safe stack cap
+     */
+    private static function resolveElementStackCap($stackCap) {
+        if ($stackCap === null) {
+            $stackCap = self::DEFAULT_ELEMENT_STACK_CAP;
+        }
+        if (!is_numeric($stackCap)
+            || !is_finite((float) $stackCap)
+            || (float) $stackCap < 0.0) {
+            return self::DEFAULT_ELEMENT_STACK_CAP;
+        }
+
+        return min(
+            self::MAX_ELEMENT_STACK_CAP,
+            max(0, (int) $stackCap)
+        );
+    }
+
+    /**
+     * 将加成标准化为有限非负值 / Normalize a bonus to a finite non-negative value
+     * @param mixed $value 原值 / Raw value
+     * @param float $cap 上限 / Cap
+     * @return float 标准化值 / Normalized value
+     */
+    private static function normalizeBonusValue($value, $cap) {
+        if (!is_numeric($value)
+            || !is_finite((float) $value)
+            || (float) $value <= 0.0) {
+            return 0.0;
+        }
+
+        return min(max(0.0, (float) $cap), (float) $value);
+    }
+
+    /**
+     * 在安全上限内累加加成 / Add a bonus within a safe cap
+     * @param mixed $current 当前值 / Current value
+     * @param mixed $addition 新增值 / Added value
+     * @param float $cap 上限 / Cap
+     * @return float 累加值 / Bounded sum
+     */
+    private static function boundedBonusAdd(
+        $current,
+        $addition,
+        $cap
+    ) {
+        $safeCap = max(0.0, (float) $cap);
+        $safeCurrent = self::normalizeBonusValue(
+            $current,
+            $safeCap
+        );
+        $safeAddition = self::normalizeBonusValue(
+            $addition,
+            $safeCap
+        );
+
+        return min($safeCap, $safeCurrent + $safeAddition);
     }
     
     /**

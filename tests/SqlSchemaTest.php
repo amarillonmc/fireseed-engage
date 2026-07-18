@@ -4,8 +4,13 @@
 $root = dirname(__DIR__);
 $freshPath = $root . '/sql/gameplay_expansion.sql';
 $upgradePath = $root . '/sql/upgrade_20260717_gameplay_expansion.sql';
+$cardPoolUpgradePath = $root . '/sql/upgrade_20260717_card_pool_resources.sql';
 $freshSql = file_get_contents($freshPath);
-$upgradeSql = file_get_contents($upgradePath);
+$baseUpgradeSql = file_get_contents($upgradePath);
+$cardPoolUpgradeSql = file_get_contents($cardPoolUpgradePath);
+$upgradeSql = $baseUpgradeSql === false || $cardPoolUpgradeSql === false
+    ? false
+    : $baseUpgradeSql . "\n" . $cardPoolUpgradeSql;
 $assertions = 0;
 
 /**
@@ -91,7 +96,9 @@ function hasBalancedSqlParentheses($sql) {
 }
 
 assertSql($freshSql !== false, 'Fresh expansion SQL must be readable');
-assertSql($upgradeSql !== false, 'Upgrade SQL must be readable');
+assertSql($baseUpgradeSql !== false, 'Base gameplay upgrade SQL must be readable');
+assertSql($cardPoolUpgradeSql !== false, 'Card-pool resource upgrade SQL must be readable');
+assertSql($upgradeSql !== false, 'Complete upgrade chain must be readable');
 assertSql(hasBalancedSqlParentheses($freshSql), 'Fresh expansion SQL parentheses must balance');
 assertSql(hasBalancedSqlParentheses($upgradeSql), 'Upgrade SQL parentheses must balance');
 assertSql(

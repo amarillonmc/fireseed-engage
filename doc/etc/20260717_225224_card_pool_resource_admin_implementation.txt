@@ -1,0 +1,262 @@
+种火集结号 - 后台资源层、可配置卡池与原作式技能数值适配
+Fireseed Engage - Admin resource layer, configurable card pools, and original-inspired skill curves
+
+完成时间 / Completed at
+2026-07-17 22:52:24 -04:00
+
+一、目标 / Goals
+
+1. 将后台明确分为“数值层”与“资源层”。
+   Split administration visibly into a numeric layer and a resource layer.
+2. 资源层继续使用既有武将卡目录与技能卡目录，并新增独立卡池管理。
+   Keep the existing general/skill catalogs and add independent pool management.
+3. 卡池可配置类型、名称、代码、说明、每抽成本、允许抽取次数、开放时间、
+   排序、成员、整数权重、UP标记与发布状态。
+   Pools configure type, identity, description, per-draw cost, allowed counts,
+   schedule, ordering, entries, integer weights, featured flags, and status.
+4. 玩家抽取必须使用后台已发布配置，不再使用运行时硬编码出率、成本或
+   ORDER BY RAND() 同稀有度随机。
+   Player draws must use published administration data instead of runtime
+   hard-coded rates/costs or uniform ORDER BY RAND() selection.
+5. 全新安装和旧库升级均获得可直接使用、但仍可由管理员编辑的预设内容。
+   Fresh installations and legacy upgrades both receive usable, editable seeds.
+
+二、后台结构 / Administration structure
+
+- admin/index.php
+  后台首页显示数值层与资源层两个区块，并移除指向不存在页面的旧链接。
+  The admin home now exposes numeric and resource sections and removes stale links.
+
+- admin/resources.php
+  新增资源层入口，汇总公共武将模板、技能卡和未归档/已发布卡池数量。
+  Adds the resource-layer entry with catalog and pool counts.
+
+- admin/card_pools.php
+  新增完整的卡池生命周期管理：
+  Adds the complete pool lifecycle:
+
+  * 创建草稿 / Create drafts
+  * 编辑元数据、成本、次数和排期 / Edit metadata, costs, counts, and schedule
+  * 增加、修改、移除成员 / Add, update, and remove entries
+  * 显示逐卡概率和稀有度汇总概率 / Show per-card and rarity odds
+  * 发布前校验非空、正权重及目录资源有效性
+    Validate non-empty, positive-weight, active catalog content before publishing
+  * 发布、归档及恢复草稿 / Publish, archive, and restore drafts
+  * 已发布池每次实质修改递增 revision
+    Increment the revision for every material published-pool change
+
+  从卡池移除成员不会停用或删除目录卡片。
+  Removing an entry from a pool does not disable or delete its catalog card.
+
+- includes/classes/AdminManager.php
+  新增 manage/create/edit/publish/archive_card_pools 权限。
+  Adds manage/create/edit/publish/archive_card_pools permissions.
+  查看、创建和草稿编辑要求管理员等级3；发布、修改已发布池和归档要求等级4。
+  Viewing/creating/draft editing requires level 3; publishing, live editing,
+  and archiving require level 4.
+
+所有写操作均使用 CSRF、预处理语句、事务和行锁；操作完成后写入管理员日志。
+All mutations use CSRF checks, prepared statements, transactions, and row locks,
+then record administrator audit events.
+
+三、数据库模型 / Database model
+
+新增表 / New tables:
+
+- card_pools
+  保存池代码、类型、成本JSON、允许次数JSON、状态、排期、排序、修订号及
+  创建/更新管理员。
+  Stores identity, type, cost/count JSON, status, schedule, order, revision,
+  and administrator audit ownership.
+
+- general_pool_entries
+  以 (pool_id, general_id) 为主键保存武将成员、整数权重和UP标记。
+  Stores general entries, integer weights, and featured flags.
+
+- skill_pool_entries
+  以 (pool_id, card_id) 为主键保存技能卡成员、整数权重和UP标记。
+  Stores skill-card entries, integer weights, and featured flags.
+
+recruitment_history 与 skill_draw_history 新增：
+recruitment_history and skill_draw_history now record:
+
+- pool_id
+- pool_code_snapshot
+- pool_revision
+- entry_weight
+- total_weight
+- cost_json
+
+这些字段使历史抽取在卡池日后修改或归档后仍可审计。
+These fields keep past draws auditable after later pool edits or archival.
+
+四、运行时抽取 / Runtime draws
+
+- includes/classes/CardPoolService.php
+  统一处理开放池读取、排期/状态/次数校验、成员有效性、公开概率、加权选择、
+  成本标准化与事务内扣款。
+  Centralizes pool availability, schedule/status/count validation, entry
+  integrity, published odds, weighted selection, cost normalization, and
+  transactional charging.
+
+  支持的成本均为游戏内可获得资源：
+  Supported costs are earned in-game resources only:
+
+  bright, warm, cold, green, day, night, circuit_points,
+  skill_points, merit_points, arena_tokens
+
+  不存在 Premium 或课金货币键。
+  No Premium or paid-currency key exists.
+
+- RecruitmentService 与 SkillCardService
+  抽取时锁定卡池及成员快照，按直接整数权重选择，不进行跨稀有度回退；
+  无效或停用成员会使已发布池暂停，而不会静默改变出率。
+  Draws lock the pool/entry snapshot and select by direct integer weight with
+  no cross-rarity fallback. Invalid or disabled entries make a published pool
+  unavailable instead of silently changing its odds.
+
+- recruit.php 与 skills.php
+  动态显示开放卡池、成本、排期、稀有度概率、逐卡概率、UP标记和允许次数。
+  Dynamically show open pools, costs, schedules, rarity/per-card odds,
+  featured flags, and allowed counts.
+  POST只接受当前页面列出的池与次数，服务层会在事务中再次权威校验。
+  POST accepts only listed pools/counts, followed by authoritative service
+  validation inside the transaction.
+
+旧调用名称 normal、advanced、resonance、default/standard 仍映射到安装预设池，
+以兼容既有调用方。
+Legacy names normal, advanced, resonance, and default/standard still map to the
+seeded pools for caller compatibility.
+
+五、安装预设 / Installation seeds
+
+资料站没有公布可验证的原作抽卡概率，因此没有把卡片数量或页面排序冒充出率。
+The archive does not publish verifiable original draw odds, so catalog counts
+or page order are not presented as gacha rates.
+
+预设池沿用本项目此前的非课金概率，后台可随时修改：
+Seed pools preserve this project's prior non-paid rates and remain editable:
+
+- 常规契约 / general_normal
+  B 70%, A 25%, S 5%
+  每抽：bright/warm/cold/green 各100
+  Per draw: 100 each bright/warm/cold/green
+
+- 高级契约 / general_advanced
+  A 70%, S 25%, SS 5%
+  每抽：bright/warm/cold/green 各500，day/night 各100
+  Per draw: 500 each bright/warm/cold/green and 100 each day/night
+
+- 回路共鸣 / general_resonance
+  S 50%, SS 35%, P 15%
+  每抽：circuit_points 5
+  Per draw: 5 circuit_points
+
+- 夜静技能卡池 / skill_standard
+  B 55%, A 30%, S 10%, SS 4%, P 1%
+  每抽：night 250
+  Per draw: 250 night
+
+同一稀有度内的安装卡片初始等权；迁移使用 INSERT IGNORE，因此重跑不会覆盖
+管理员已调整的成员权重。
+Installation cards start equally weighted within a rarity. Migration uses
+INSERT IGNORE so reruns do not overwrite administrator-tuned entry weights.
+
+六、原作数值模型适配 / Original-inspired numerical adaptation
+
+参考资料 / References:
+
+- https://view.xzz.jp/cards
+- https://view.xzz.jp/skillList
+- https://view.xzz.jp/skill/d63b0554355faa558fa6f66b4879cf1d
+- https://view.xzz.jp/skill/87e1cc2ec3c9b848a1bce748b738020c
+- https://view.xzz.jp/skill/dc53e3afb1a786ca6b775c41fff4822a
+
+保留本项目六元素、六兵种及OC虚构层，只移植可验证的数值结构：
+The project keeps its six elements, six units, and OC fiction while adapting
+only verifiable numerical structures:
+
+1. 兵种攻击曲线 / Unit attack curve
+   COST × [8,11,13,16,19,22,26,30,35,40]%，Lv1-Lv10。
+
+2. 兵种速度曲线 / Unit speed curve
+   COST × [9,11,13,16,19,22,26,30,35,40]%，Lv1-Lv10。
+
+3. 原作势力豪击改为元素豪击 / Faction assault becomes elemental assault
+   每名同队匹配元素武将提供
+   [6,7,8,9,10,11,12,13,15,17]%，Lv1-Lv10；
+   默认最多计算三名存活参战武将。
+   Each matching participating general grants
+   [6,7,8,9,10,11,12,13,15,17]% from Lv1-Lv10,
+   capped at three living participating generals by default.
+
+结构化效果JSON支持：
+Structured effect JSON supports:
+
+{"mode":"level_values","values":[...]}
+{"mode":"cost_level_values","values":[...]}
+
+定向效果键支持 unit_attack_*, unit_defense_*, unit_speed_* 以及
+element_attack_per_*, element_defense_per_*, element_speed_per_*。
+Directional keys support unit_attack_*, unit_defense_*, unit_speed_* and
+element_attack_per_*, element_defense_per_*, element_speed_per_*.
+
+新增十八张原作式技能范本与十二张非IP武将数值范本（G015-G026）。
+Adds eighteen original-inspired skill templates and twelve non-IP general
+stat archetypes (G015-G026).
+
+映射到技能目录的被动技能以 skill_card_catalog.effect_json 为权威定义；
+后台修改后战斗计算与技能页面均读取新定义。无目录映射的旧技能继续使用
+general_skills.skill_effect 快照。
+Mapped passive skills use skill_card_catalog.effect_json as the authoritative
+definition, so administration edits affect combat and display consistently.
+Unmapped legacy skills retain their general_skills.skill_effect snapshot.
+
+七、安装与升级 / Installation and upgrade
+
+全新安装：
+Fresh installation:
+
+install.php 会继续载入 sql/gameplay_expansion.sql，自动创建表、预设卡片与卡池。
+install.php continues to load sql/gameplay_expansion.sql and creates tables,
+seed cards, and pools automatically.
+
+旧数据库：
+Existing database:
+
+先备份数据库，再依次执行：
+Back up the database, then run in order:
+
+mysql -u root -p fireseed_engage < sql/upgrade_20260717_gameplay_expansion.sql
+mysql -u root -p fireseed_engage < sql/upgrade_20260717_card_pool_resources.sql
+
+第二份迁移可重复执行，且会把旧系统中所有启用公共武将和启用技能卡按其稀有度
+加入对应预设池，从而保留升级前“启用内容均可抽”的行为。
+The second migration is rerunnable and places every active public general and
+active skill card from the legacy system into matching seed pools, preserving
+the prior behavior that all active catalog content was drawable.
+
+八、验证 / Validation
+
+- PHP语法检查覆盖全部修改PHP文件。
+  PHP lint covers every changed PHP file.
+- 新增 CardPoolRulesTest：
+  权重边界、成本白名单、免费池、次数规范化及异常输入。
+  Adds CardPoolRulesTest for weight boundaries, cost allow-list, free pools,
+  count normalization, and invalid inputs.
+- 新增 CardPoolIntegrationInvariantTest：
+  后台层级、CRUD动作、安全边界、运行时调用、历史快照、界面概率及安装种子。
+  Adds CardPoolIntegrationInvariantTest for admin layers/actions/security,
+  runtime wiring, history snapshots, UI odds, and seeds.
+- 新增 SkillTargetingRulesTest：
+  等级/COST曲线、元素层数、兵种定向结算、混编速度及安全上限。
+  Adds SkillTargetingRulesTest for level/COST curves, element stacks,
+  unit targeting, mixed-army speed, and safety caps.
+- SqlSchemaTest 同时校验基础玩法迁移和新增卡池资源迁移组成的升级链。
+  SqlSchemaTest validates the combined base-gameplay and card-pool migration chain.
+
+本机没有可用 mysql 客户端或已安装测试库，因此未执行真实数据库迁移或浏览器端
+登录态验收；SQL已通过仓库的模式一致性、括号与关键约束静态检查。
+No usable mysql client or installed test database was available locally, so a
+live migration and authenticated browser acceptance test were not run. SQL
+passes the repository's schema-parity, balance, and key-constraint static checks.

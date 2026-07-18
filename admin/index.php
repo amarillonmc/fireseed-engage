@@ -103,6 +103,26 @@ $pageTitle = '管理后台';
             grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
             gap: 15px;
         }
+
+        .admin-layer {
+            margin-bottom: 20px;
+        }
+
+        .admin-layer:last-child {
+            margin-bottom: 0;
+        }
+
+        .admin-layer-title {
+            margin: 0 0 12px;
+            color: #2c3e50;
+            font-size: 18px;
+        }
+
+        .admin-layer-description {
+            margin: -4px 0 14px;
+            color: #7f8c8d;
+            font-size: 14px;
+        }
         
         .nav-link {
             display: flex;
@@ -320,51 +340,72 @@ $pageTitle = '管理后台';
                 </div>
             </div>
 
-            <!-- 导航菜单 -->
+            <!-- 分层后台导航 / Layered administration navigation -->
             <div class="admin-nav">
+                <section class="admin-layer" aria-labelledby="numeric-layer-title">
+                    <h2 id="numeric-layer-title" class="admin-layer-title">📊 数值层</h2>
+                    <p class="admin-layer-description">管理游戏规则、玩家数值与世界数据。</p>
+                    <div class="nav-links">
+                    <?php if ($adminManager->hasPermission('view_users')): ?>
+                        <a href="users.php" class="nav-link">
+                            <span class="nav-icon">👥</span>
+                            <span class="nav-text">用户管理</span>
+                        </a>
+                    <?php endif; ?>
+                    <?php if ($adminManager->hasPermission('edit_game_config')): ?>
+                        <a href="config.php" class="nav-link">
+                            <span class="nav-icon">⚙️</span>
+                            <span class="nav-text">系统配置</span>
+                        </a>
+                    <?php endif; ?>
+                    <?php if ($adminManager->hasPermission('manage_map')): ?>
+                        <a href="map.php" class="nav-link">
+                            <span class="nav-icon">🗺️</span>
+                            <span class="nav-text">地图管理</span>
+                        </a>
+                    <?php endif; ?>
+                    </div>
+                </section>
+
+                <section class="admin-layer" aria-labelledby="resource-layer-title">
+                    <h2 id="resource-layer-title" class="admin-layer-title">🗃️ 资源层</h2>
+                    <p class="admin-layer-description">管理可抽取武将、技能卡及其卡池和出率。</p>
+                    <div class="nav-links">
+                    <?php if (
+                        $adminManager->hasPermission('manage_generals')
+                        || $adminManager->hasPermission('manage_skills')
+                        || $adminManager->hasPermission('manage_card_pools')
+                    ): ?>
+                        <a href="resources.php" class="nav-link">
+                            <span class="nav-icon">🗂️</span>
+                            <span class="nav-text">资源管理</span>
+                        </a>
+                    <?php endif; ?>
+                    <?php if ($adminManager->hasPermission('manage_generals')): ?>
+                        <a href="generals.php" class="nav-link">
+                            <span class="nav-icon">⚔️</span>
+                            <span class="nav-text">武将卡目录</span>
+                        </a>
+                    <?php endif; ?>
+                    <?php if ($adminManager->hasPermission('manage_skills')): ?>
+                        <a href="skills.php" class="nav-link">
+                            <span class="nav-icon">✨</span>
+                            <span class="nav-text">技能卡目录</span>
+                        </a>
+                    <?php endif; ?>
+                    <?php if ($adminManager->hasPermission('manage_card_pools')): ?>
+                        <a href="card_pools.php" class="nav-link">
+                            <span class="nav-icon">🎴</span>
+                            <span class="nav-text">卡池管理</span>
+                        </a>
+                    <?php endif; ?>
+                    </div>
+                </section>
+
                 <div class="nav-links">
-                    <a href="users.php" class="nav-link">
-                        <span class="nav-icon">👥</span>
-                        <span class="nav-text">用户管理</span>
-                    </a>
-                    <a href="config.php" class="nav-link">
-                        <span class="nav-icon">⚙️</span>
-                        <span class="nav-text">系统配置</span>
-                    </a>
-                    <a href="map.php" class="nav-link">
-                        <span class="nav-icon">🗺️</span>
-                        <span class="nav-text">地图管理</span>
-                    </a>
-                    <a href="logs.php" class="nav-link">
-                        <span class="nav-icon">📋</span>
-                        <span class="nav-text">操作日志</span>
-                    </a>
-                    <a href="skills.php" class="nav-link">
-                        <span class="nav-icon">✨</span>
-                        <span class="nav-text">技能管理</span>
-                    </a>
-                    <a href="generals.php" class="nav-link">
-                        <span class="nav-icon">⚔️</span>
-                        <span class="nav-text">武将管理</span>
-                    </a>
-                    <a href="logs.php" class="nav-link">
-                        <span class="nav-icon">📋</span>
-                        <span class="nav-text">操作日志</span>
-                    </a>
-                        <span class="nav-icon">🎮</span>
-                        <span class="nav-text">游戏数据</span>
-                    </a>
-                    <a href="maintenance.php" class="nav-link">
-                        <span class="nav-icon">🔧</span>
-                        <span class="nav-text">系统维护</span>
-                    </a>
                     <a href="../index.php" class="nav-link">
                         <span class="nav-icon">🏠</span>
                         <span class="nav-text">返回游戏</span>
-                    </a>
-                    <a href="../logout.php" class="nav-link">
-                        <span class="nav-icon">🚪</span>
-                        <span class="nav-text">退出登录</span>
                     </a>
                 </div>
             </div>
@@ -418,9 +459,6 @@ $pageTitle = '管理后台';
                     </div>
                     <?php endforeach; ?>
                     
-                    <div style="text-align: center; margin-top: 20px;">
-                        <a href="logs.php" class="action-button">查看全部日志</a>
-                    </div>
                     <?php else: ?>
                     <div style="text-align: center; color: #7f8c8d; padding: 20px;">
                         暂无操作日志
@@ -470,17 +508,14 @@ $pageTitle = '管理后台';
                         </a>
                         <?php endif; ?>
                         
-                        <?php if ($adminManager->hasPermission('reset_game')): ?>
-                        <a href="maintenance.php" class="action-button danger">
-                            <span style="margin-right: 10px;">🔄</span>
-                            游戏重置
-                        </a>
-                        <?php endif; ?>
-                        
-                        <?php if ($adminManager->hasPermission('system_maintenance')): ?>
-                        <a href="maintenance.php" class="action-button success">
-                            <span style="margin-right: 10px;">🔧</span>
-                            系统维护
+                        <?php if (
+                            $adminManager->hasPermission('manage_generals')
+                            || $adminManager->hasPermission('manage_skills')
+                            || $adminManager->hasPermission('manage_card_pools')
+                        ): ?>
+                        <a href="resources.php" class="action-button success">
+                            <span style="margin-right: 10px;">🗃️</span>
+                            资源管理
                         </a>
                         <?php endif; ?>
                     </div>

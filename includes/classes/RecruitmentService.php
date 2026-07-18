@@ -6,7 +6,6 @@
  */
 class RecruitmentService {
     private const STARTER_LIMIT = 5;
-    private const VALID_COUNTS = [1, 5, 10];
     private const RARITIES = ['B', 'A', 'S', 'SS', 'P'];
     private const DUPLICATE_SKILL_POINTS = [
         'B' => 1,
@@ -17,12 +16,14 @@ class RecruitmentService {
     ];
 
     private $db;
+    private $cardPoolService;
 
     /**
      * 创建武将招募服务 / Creates the general recruitment service
      */
     public function __construct() {
         $this->db = Database::getInstance()->getConnection();
+        $this->cardPoolService = new CardPoolService($this->db);
     }
 
     /**
@@ -91,6 +92,15 @@ class RecruitmentService {
                 '公共武将池读取失败 / Failed to load the public general pool'
             );
         }
+    }
+
+    /**
+     * 获取当前开放的武将卡池 / Gets currently open general pools
+     *
+     * @return array 结构化卡池结果 / Structured pool result
+     */
+    public function getDrawPools(): array {
+        return $this->cardPoolService->getAvailablePools('general');
     }
 
     /**
@@ -239,58 +249,55 @@ class RecruitmentService {
      * 使用游戏内资源进行武将招募 / Recruits generals with earned in-game resources
      *
      * @param int $userId 玩家ID / User ID
-     * @param string $type 招募类型 / Recruitment type
-     * @param int $count 招募次数，仅允许1、5或10 / Draw count, limited to 1, 5, or 10
+     * @param mixed $poolIdentifier 卡池ID、代码或旧渠道名 / Pool ID, code, or legacy channel name
+     * @param int $count 招募次数 / Draw count
      * @return array 结构化招募结果 / Structured recruitment result
      */
-    public function recruit($userId, $type, $count = 1): array {
+    public function recruit($userId, $poolIdentifier, $count = 1): array {
         $normalizedUserId = (int) $userId;
-        $normalizedType = strtolower(trim((string) $type));
         $normalizedCount = is_numeric($count) ? (int) $count : 0;
 
         if ($normalizedUserId <= 0) {
             return $this->result(false, '玩家无效 / Invalid user');
         }
 
-        if (!in_array($normalizedType, ['normal', 'advanced', 'resonance'], true)) {
-            return $this->result(false, '招募类型无效 / Invalid recruitment type');
-        }
-
         if (!is_numeric($count)
             || (float) $count !== (float) $normalizedCount
-            || !in_array($normalizedCount, self::VALID_COUNTS, true)) {
+            || $normalizedCount < 1
+            || $normalizedCount > 100) {
             return $this->result(
                 false,
-                '招募次数只能为1、5或10 / Recruitment count must be 1, 5, or 10'
+                '招募次数无效 / Invalid recruitment count'
             );
         }
 
         $transactionStarted = false;
 
         try {
-            $cost = $this->getRecruitmentCost($normalizedType, $normalizedCount);
             $this->beginTransaction();
             $transactionStarted = true;
             $this->lockUser($normalizedUserId);
-            $this->consumeRecruitmentCost(
+            $pool = $this->cardPoolService->lockPoolForDraw(
+                'general',
+                $poolIdentifier,
+                $normalizedCount
+            );
+            $cost = $this->cardPoolService->consumeCost(
                 $normalizedUserId,
-                $normalizedType,
-                $cost
+                $pool['cost'],
+                $normalizedCount
+            );
+            $recruitType = CardPoolService::getRecruitmentHistoryType(
+                $pool['pool_code']
             );
 
             $generals = [];
 
             for ($index = 0; $index < $normalizedCount; $index++) {
-                $rolledRarity = GameRules::rollGeneralRarity($normalizedType);
-                $template = $this->selectTemplateWithFallback(
-                    $rolledRarity
+                $selectedEntry = CardPoolService::selectWeightedEntry(
+                    $pool['entries']
                 );
-
-                if ($template === null) {
-                    throw new DomainException(
-                        '没有可用的公共武将模板 / No eligible public general template is available'
-                    );
-                }
+                $template = $selectedEntry;
 
                 $ownedGeneral = $this->getOwnedGeneralForTemplateLocked(
                     $normalizedUserId,
@@ -301,18 +308,23 @@ class RecruitmentService {
                         $normalizedUserId,
                         $template,
                         $ownedGeneral,
-                        $normalizedType
+                        $recruitType,
+                        $pool,
+                        $selectedEntry
                     );
                 } else {
                     $general = $this->cloneTemplate(
                         $normalizedUserId,
                         $template,
-                        $normalizedType
+                        $recruitType,
+                        $pool,
+                        $selectedEntry
                     );
                     $general['duplicate'] = false;
                     $general['duplicate_skill_points'] = 0;
                 }
-                $general['rolled_rarity'] = $rolledRarity;
+                // 保留旧返回字段以兼容现有页面 / Preserve the legacy response field for existing pages
+                $general['rolled_rarity'] = (string) $template['rarity'];
                 $generals[] = $general;
             }
 
@@ -324,12 +336,18 @@ class RecruitmentService {
                 '武将招募成功 / General recruitment successful',
                 $generals,
                 [
-                    'recruit_type' => $normalizedType,
+                    'recruit_type' => $recruitType,
                     'count' => $normalizedCount,
-                    'cost' => $cost
+                    'cost' => $cost,
+                    'pool' => [
+                        'pool_id' => (int) $pool['pool_id'],
+                        'pool_code' => (string) $pool['pool_code'],
+                        'name' => (string) $pool['name'],
+                        'revision' => (int) $pool['revision']
+                    ]
                 ]
             );
-        } catch (DomainException $e) {
+        } catch (DomainException | InvalidArgumentException $e) {
             if ($transactionStarted) {
                 $this->db->rollback();
             }
@@ -493,48 +511,6 @@ class RecruitmentService {
     }
 
     /**
-     * 按稀有度及相邻稀有度选择可用模板 / Selects an eligible template using the rolled and adjacent rarities
-     *
-     * @param string $rolledRarity 抽中的稀有度 / Rolled rarity
-     * @return array|null 模板行 / Template row
-     */
-    private function selectTemplateWithFallback($rolledRarity) {
-        foreach ($this->getRarityFallbackOrder($rolledRarity) as $rarity) {
-            $query = "SELECT g.general_id, g.name, g.source, g.rarity, g.cost,
-                             g.element, g.level, g.hp, g.max_hp, g.attack,
-                             g.defense, g.speed, g.intelligence, g.is_active
-                      FROM generals g
-                      WHERE g.owner_id = 0
-                        AND g.is_active = 1
-                        AND g.rarity = ?
-                      ORDER BY RAND()
-                      LIMIT 1";
-            $stmt = $this->db->prepare($query);
-
-            if (!$stmt) {
-                throw new RuntimeException(
-                    '无法从公共池选择武将 / Unable to select a general from the public pool'
-                );
-            }
-
-            $stmt->bind_param('s', $rarity);
-            $this->executeOrFail(
-                $stmt,
-                '无法从公共池选择武将 / Unable to select a general from the public pool'
-            );
-            $result = $stmt->get_result();
-            $row = $result ? $result->fetch_assoc() : null;
-            $stmt->close();
-
-            if ($row) {
-                return $row;
-            }
-        }
-
-        return null;
-    }
-
-    /**
      * 查找玩家已拥有的同模板武将并锁定记录 / Find and lock a general already owned from the same template
      * @param int $userId 玩家ID / User ID
      * @param int $templateGeneralId 模板武将ID / Template general ID
@@ -580,13 +556,17 @@ class RecruitmentService {
      * @param array $template 模板数据 / Template data
      * @param array $ownedGeneral 已拥有武将 / Existing general
      * @param string $recruitType 招募类型 / Recruitment type
+     * @param array|null $pool 卡池快照 / Pool snapshot
+     * @param array|null $poolEntry 成员权重快照 / Entry weight snapshot
      * @return array 转化结果 / Conversion result
      */
     private function convertDuplicateTemplate(
         $userId,
         $template,
         $ownedGeneral,
-        $recruitType
+        $recruitType,
+        $pool = null,
+        $poolEntry = null
     ) {
         $rarity = (string) $template['rarity'];
         $skillPoints = isset(self::DUPLICATE_SKILL_POINTS[$rarity])
@@ -618,7 +598,9 @@ class RecruitmentService {
             (int) $template['general_id'],
             $generalId,
             $recruitType,
-            $rarity
+            $rarity,
+            $pool,
+            $poolEntry
         );
         $this->recordGameplayEvent(
             $userId,
@@ -643,221 +625,22 @@ class RecruitmentService {
     }
 
     /**
-     * 获取稀有度安全回退顺序，同距离优先较低稀有度 / Gets a safe rarity fallback order, preferring the lower rarity at equal distance
-     *
-     * @param string $rarity 目标稀有度 / Target rarity
-     * @return array 回退顺序 / Fallback order
-     */
-    private function getRarityFallbackOrder($rarity): array {
-        $index = array_search($rarity, self::RARITIES, true);
-
-        if ($index === false) {
-            throw new InvalidArgumentException('稀有度无效 / Invalid rarity');
-        }
-
-        $order = [$rarity];
-        $rarityCount = count(self::RARITIES);
-
-        for ($distance = 1; $distance < $rarityCount; $distance++) {
-            $lowerIndex = $index - $distance;
-            $higherIndex = $index + $distance;
-
-            if ($lowerIndex >= 0) {
-                $order[] = self::RARITIES[$lowerIndex];
-            }
-
-            if ($higherIndex < $rarityCount) {
-                $order[] = self::RARITIES[$higherIndex];
-            }
-        }
-
-        return $order;
-    }
-
-    /**
-     * 获取指定招募次数的总费用 / Gets total recruitment cost for the requested draw count
-     *
-     * @param string $type 招募类型 / Recruitment type
-     * @param int $count 招募次数 / Draw count
-     * @return array 总费用 / Total cost
-     */
-    private function getRecruitmentCost($type, $count): array {
-        if ($type === 'normal') {
-            return [
-                'bright' => 100 * $count,
-                'warm' => 100 * $count,
-                'cold' => 100 * $count,
-                'green' => 100 * $count
-            ];
-        }
-
-        if ($type === 'advanced') {
-            return [
-                'bright' => 500 * $count,
-                'warm' => 500 * $count,
-                'cold' => 500 * $count,
-                'green' => 500 * $count,
-                'day' => 100 * $count,
-                'night' => 100 * $count
-            ];
-        }
-
-        return ['circuit_points' => 5 * $count];
-    }
-
-    /**
-     * 锁定并扣除招募费用 / Locks and consumes recruitment cost
-     *
-     * @param int $userId 玩家ID / User ID
-     * @param string $type 招募类型 / Recruitment type
-     * @param array $cost 总费用 / Total cost
-     */
-    private function consumeRecruitmentCost($userId, $type, array $cost): void {
-        if ($type === 'resonance') {
-            $query = "SELECT circuit_points
-                      FROM users
-                      WHERE user_id = ?
-                      FOR UPDATE";
-            $stmt = $this->db->prepare($query);
-
-            if (!$stmt) {
-                throw new RuntimeException('无法读取思考回路 / Unable to read circuit points');
-            }
-
-            $stmt->bind_param('i', $userId);
-            $this->executeOrFail(
-                $stmt,
-                '无法读取思考回路 / Unable to read circuit points'
-            );
-            $result = $stmt->get_result();
-            $row = $result ? $result->fetch_assoc() : null;
-            $stmt->close();
-
-            if (!$row || (int) $row['circuit_points'] < $cost['circuit_points']) {
-                throw new DomainException('思考回路不足 / Insufficient circuit points');
-            }
-
-            $update = "UPDATE users
-                       SET circuit_points = circuit_points - ?
-                       WHERE user_id = ?";
-            $stmt = $this->db->prepare($update);
-
-            if (!$stmt) {
-                throw new RuntimeException('无法扣除思考回路 / Unable to consume circuit points');
-            }
-
-            $stmt->bind_param('ii', $cost['circuit_points'], $userId);
-            $this->executeOrFail(
-                $stmt,
-                '无法扣除思考回路 / Unable to consume circuit points'
-            );
-            $stmt->close();
-            return;
-        }
-
-        $query = "SELECT bright_crystal, warm_crystal, cold_crystal,
-                         green_crystal, day_crystal, night_crystal
-                  FROM resources
-                  WHERE user_id = ?
-                  FOR UPDATE";
-        $stmt = $this->db->prepare($query);
-
-        if (!$stmt) {
-            throw new RuntimeException('无法读取玩家资源 / Unable to read user resources');
-        }
-
-        $stmt->bind_param('i', $userId);
-        $this->executeOrFail(
-            $stmt,
-            '无法读取玩家资源 / Unable to read user resources'
-        );
-        $result = $stmt->get_result();
-        $resources = $result ? $result->fetch_assoc() : null;
-        $stmt->close();
-
-        if (!$resources) {
-            throw new DomainException('玩家资源记录不存在 / User resource record does not exist');
-        }
-
-        $columns = [
-            'bright' => 'bright_crystal',
-            'warm' => 'warm_crystal',
-            'cold' => 'cold_crystal',
-            'green' => 'green_crystal',
-            'day' => 'day_crystal',
-            'night' => 'night_crystal'
-        ];
-
-        foreach ($cost as $resourceType => $amount) {
-            if ((int) $resources[$columns[$resourceType]] < $amount) {
-                throw new DomainException('招募资源不足 / Insufficient recruitment resources');
-            }
-        }
-
-        if ($type === 'normal') {
-            $update = "UPDATE resources
-                       SET bright_crystal = bright_crystal - ?,
-                           warm_crystal = warm_crystal - ?,
-                           cold_crystal = cold_crystal - ?,
-                           green_crystal = green_crystal - ?
-                       WHERE user_id = ?";
-            $stmt = $this->db->prepare($update);
-
-            if (!$stmt) {
-                throw new RuntimeException('无法扣除招募资源 / Unable to consume recruitment resources');
-            }
-
-            $stmt->bind_param(
-                'iiiii',
-                $cost['bright'],
-                $cost['warm'],
-                $cost['cold'],
-                $cost['green'],
-                $userId
-            );
-        } else {
-            $update = "UPDATE resources
-                       SET bright_crystal = bright_crystal - ?,
-                           warm_crystal = warm_crystal - ?,
-                           cold_crystal = cold_crystal - ?,
-                           green_crystal = green_crystal - ?,
-                           day_crystal = day_crystal - ?,
-                           night_crystal = night_crystal - ?
-                       WHERE user_id = ?";
-            $stmt = $this->db->prepare($update);
-
-            if (!$stmt) {
-                throw new RuntimeException('无法扣除招募资源 / Unable to consume recruitment resources');
-            }
-
-            $stmt->bind_param(
-                'iiiiiii',
-                $cost['bright'],
-                $cost['warm'],
-                $cost['cold'],
-                $cost['green'],
-                $cost['day'],
-                $cost['night'],
-                $userId
-            );
-        }
-
-        $this->executeOrFail(
-            $stmt,
-            '无法扣除招募资源 / Unable to consume recruitment resources'
-        );
-        $stmt->close();
-    }
-
-    /**
      * 克隆模板、固有技能并记录招募与事件 / Clones a template and inherent skills, then records recruitment and its event
      *
      * @param int $userId 玩家ID / User ID
      * @param array $template 模板行 / Template row
      * @param string $recruitType 招募类型 / Recruitment type
+     * @param array|null $pool 卡池快照 / Pool snapshot
+     * @param array|null $poolEntry 成员权重快照 / Entry weight snapshot
      * @return array 新武将数据 / New general data
      */
-    private function cloneTemplate($userId, array $template, $recruitType): array {
+    private function cloneTemplate(
+        $userId,
+        array $template,
+        $recruitType,
+        $pool = null,
+        $poolEntry = null
+    ): array {
         $query = "INSERT INTO generals
                     (owner_id, name, source, rarity, cost, element, level, hp,
                      max_hp, attack, defense, speed, intelligence, is_active)
@@ -918,7 +701,9 @@ class RecruitmentService {
             (int) $template['general_id'],
             $generalId,
             $recruitType,
-            $rarity
+            $rarity,
+            $pool,
+            $poolEntry
         );
         $this->recordGameplayEvent(
             $userId,
@@ -1040,30 +825,64 @@ class RecruitmentService {
      * @param int $generalId 新武将ID / New general ID
      * @param string $recruitType 招募类型 / Recruitment type
      * @param string $rarity 实际稀有度 / Actual rarity
+     * @param array|null $pool 卡池快照 / Pool snapshot
+     * @param array|null $poolEntry 成员权重快照 / Entry weight snapshot
      */
     private function recordRecruitment(
         $userId,
         $templateGeneralId,
         $generalId,
         $recruitType,
-        $rarity
+        $rarity,
+        $pool = null,
+        $poolEntry = null
     ): void {
         $query = "INSERT INTO recruitment_history
-                    (user_id, template_general_id, general_id, recruit_type, rarity)
-                  VALUES (?, ?, ?, ?, ?)";
+                    (user_id, template_general_id, general_id, recruit_type,
+                     rarity, pool_id, pool_code_snapshot, pool_revision,
+                     entry_weight, total_weight, cost_json)
+                  VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)";
         $stmt = $this->db->prepare($query);
 
         if (!$stmt) {
             throw new RuntimeException('无法记录招募历史 / Unable to record recruitment history');
         }
 
+        $poolId = is_array($pool) ? (int) $pool['pool_id'] : null;
+        $poolCode = is_array($pool) ? (string) $pool['pool_code'] : null;
+        $poolRevision = is_array($pool) ? (int) $pool['revision'] : null;
+        $entryWeight = is_array($poolEntry)
+            ? (int) $poolEntry['entry_weight']
+            : null;
+        $totalWeight = is_array($poolEntry)
+            ? (int) $poolEntry['total_weight']
+            : null;
+        $costJson = is_array($pool)
+            ? json_encode(
+                $pool['cost'],
+                JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES
+            )
+            : null;
+        if (is_array($pool) && $costJson === false) {
+            $stmt->close();
+            throw new RuntimeException(
+                '无法记录卡池成本快照 / Unable to encode pool cost snapshot'
+            );
+        }
+
         $stmt->bind_param(
-            'iiiss',
+            'iiissisiiis',
             $userId,
             $templateGeneralId,
             $generalId,
             $recruitType,
-            $rarity
+            $rarity,
+            $poolId,
+            $poolCode,
+            $poolRevision,
+            $entryWeight,
+            $totalWeight,
+            $costJson
         );
         $this->executeOrFail(
             $stmt,

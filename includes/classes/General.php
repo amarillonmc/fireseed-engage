@@ -484,12 +484,12 @@ class General {
      */
     private function getApplicableSkillEffect($skill) {
         $baseEffect = $skill->getEffect();
-        if (!is_array($baseEffect)) {
-            return [];
-        }
+        $baseEffect = is_array($baseEffect) ? $baseEffect : [];
 
         $query = "SELECT mapped.card_id, card.activation_type, card.is_active,
-                         active.effect_json, active.expires_at
+                         card.effect_json AS catalog_effect_json,
+                         active.effect_json AS active_effect_json,
+                         active.expires_at
                   FROM equipped_skill_cards mapped
                   LEFT JOIN skill_card_catalog card
                     ON card.card_id = mapped.card_id
@@ -529,16 +529,150 @@ class General {
             return [];
         }
         if ($row['activation_type'] === 'active') {
-            $activeEffect = $row['effect_json']
-                ? json_decode($row['effect_json'], true)
+            $activeEffect = $row['active_effect_json']
+                ? json_decode($row['active_effect_json'], true)
                 : [];
             return is_array($activeEffect) ? $activeEffect : [];
         }
 
         return $this->scalePassiveEffect(
-            $baseEffect,
+            self::selectPassiveEffectDefinition(
+                $row['catalog_effect_json'],
+                $baseEffect,
+                true
+            ),
             $skill->getSkillLevel()
         );
+    }
+
+    /**
+     * 选择映射技能的权威效果定义 / Select the authoritative effect definition for a mapped skill
+     * @param mixed $catalogEffectJson 目录效果JSON / Catalog effect JSON
+     * @param array $legacyEffect 旧技能快照 / Legacy skill snapshot
+     * @param bool $hasCatalogMapping 是否存在目录映射 / Whether a catalog mapping exists
+     * @return array 权威效果定义 / Authoritative effect definition
+     */
+    public static function selectPassiveEffectDefinition(
+        $catalogEffectJson,
+        array $legacyEffect,
+        $hasCatalogMapping
+    ) {
+        if (!$hasCatalogMapping) {
+            return $legacyEffect;
+        }
+
+        if (!is_string($catalogEffectJson)
+            || trim($catalogEffectJson) === '') {
+            return [];
+        }
+
+        $catalogEffect = json_decode($catalogEffectJson, true);
+        return is_array($catalogEffect) ? $catalogEffect : [];
+    }
+
+    /**
+     * 解析按等级或COST变化的被动效果描述符 / Resolve a level- or COST-scaled passive-effect descriptor
+     * @param mixed $descriptor 效果描述符 / Effect descriptor
+     * @param int $skillLevel 技能等级 / Skill level
+     * @param mixed $generalCost 武将COST / General COST
+     * @return float|null 合法效果值，非法时为空 / Valid effect value, or null when invalid
+     */
+    public static function resolvePassiveEffectDescriptor(
+        $descriptor,
+        $skillLevel,
+        $generalCost
+    ) {
+        if (!is_array($descriptor)
+            || !isset($descriptor['mode'], $descriptor['values'])
+            || !is_string($descriptor['mode'])
+            || !is_array($descriptor['values'])) {
+            return null;
+        }
+
+        $mode = $descriptor['mode'];
+        if (!in_array(
+            $mode,
+            ['level_values', 'cost_level_values'],
+            true
+        )) {
+            return null;
+        }
+
+        $levelIndex = max(1, (int) $skillLevel) - 1;
+        if (!array_key_exists($levelIndex, $descriptor['values'])) {
+            return null;
+        }
+
+        $levelValue = $descriptor['values'][$levelIndex];
+        if ((!is_int($levelValue) && !is_float($levelValue))
+            || !is_finite((float) $levelValue)
+            || (float) $levelValue < 0.0) {
+            return null;
+        }
+
+        $resolvedValue = (float) $levelValue;
+        if ($mode === 'cost_level_values') {
+            if (!is_numeric($generalCost)
+                || !is_finite((float) $generalCost)
+                || (float) $generalCost < 0.0) {
+                return null;
+            }
+            $resolvedValue *= (float) $generalCost;
+        }
+
+        if (!is_finite($resolvedValue) || $resolvedValue < 0.0) {
+            return null;
+        }
+
+        return $resolvedValue;
+    }
+
+    /**
+     * 缩放一组被动效果值 / Scale a passive-effect set
+     * @param array $effect 基础效果 / Base effects
+     * @param int $skillLevel 技能等级 / Skill level
+     * @param int $intelligence 武将智力 / General intelligence
+     * @param mixed $generalCost 武将COST / General COST
+     * @return array 缩放后的效果 / Scaled effects
+     */
+    public static function scalePassiveEffectValues(
+        array $effect,
+        $skillLevel,
+        $intelligence,
+        $generalCost
+    ) {
+        $levelFactor = 1 + max(1, (int) $skillLevel) * 0.2;
+        $intelligenceFactor = 1
+            + max(0, (int) $intelligence) * 0.01;
+        $scaled = [];
+
+        foreach ($effect as $effectType => $effectValue) {
+            if ($effectType === 'duration') {
+                continue;
+            }
+
+            // 旧平面数值继续使用既有等级与智力缩放 / Keep legacy flat numbers on their existing level-and-intelligence scaling
+            if (is_numeric($effectValue)) {
+                $scaled[$effectType] = round(
+                    (float) $effectValue
+                        * $levelFactor
+                        * $intelligenceFactor,
+                    2
+                );
+                continue;
+            }
+
+            $resolvedValue = self::resolvePassiveEffectDescriptor(
+                $effectValue,
+                $skillLevel,
+                $generalCost
+            );
+            if ($resolvedValue !== null) {
+                $scaled[$effectType] = round($resolvedValue, 2);
+            }
+        }
+
+        return $scaled;
     }
 
     /**
@@ -548,21 +682,12 @@ class General {
      * @return array 缩放后的效果 / Scaled effects
      */
     private function scalePassiveEffect($effect, $skillLevel) {
-        $levelFactor = 1 + max(1, (int) $skillLevel) * 0.2;
-        $intelligenceFactor = 1 + max(0, (int) $this->intelligence) * 0.01;
-        $scaled = [];
-
-        foreach ($effect as $effectType => $effectValue) {
-            if ($effectType === 'duration' || !is_numeric($effectValue)) {
-                continue;
-            }
-            $scaled[$effectType] = round(
-                (float) $effectValue * $levelFactor * $intelligenceFactor,
-                2
-            );
-        }
-
-        return $scaled;
+        return self::scalePassiveEffectValues(
+            is_array($effect) ? $effect : [],
+            $skillLevel,
+            $this->intelligence,
+            $this->cost
+        );
     }
 
     /**

@@ -43,6 +43,11 @@ class AdminManager {
         'create_skills' => 3,        // 创建技能
         'edit_skills' => 3,          // 编辑技能
         'delete_skills' => 4,        // 删除技能
+        'manage_card_pools' => 3,    // 查看卡池 / View card pools
+        'create_card_pools' => 3,    // 创建卡池草稿 / Create card-pool drafts
+        'edit_card_pools' => 3,      // 编辑卡池草稿 / Edit card-pool drafts
+        'publish_card_pools' => 4,   // 发布及修改已发布卡池 / Publish and edit published pools
+        'archive_card_pools' => 4,   // 归档与恢复卡池 / Archive and restore card pools
         'reset_game' => 6,           // 重置游戏
         'manage_admins' => 7,        // 管理管理员
         'system_maintenance' => 8,   // 系统维护
