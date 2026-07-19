@@ -65,12 +65,25 @@ VALUES
   ('season_start_bright_grant', '1000', '每赛季开始向既有玩家发放的亮晶晶 / Bright Crystals granted to each existing player at season start', 0, 'resources'),
   ('season_start_night_grant', '1000', '每赛季开始向既有玩家发放的夜静静 / Night Crystals granted to each existing player at season start', 0, 'resources'),
   ('resource_territory_occupation_cost', '2', '占领资源地所需思考回路；空地始终免费 / Circuit cost for resource occupation; empty land is always free', 0, 'map'),
+  ('map_resource_tile_ratio', '0.50', '大地图资源点临时占比 / Provisional world resource-node tile ratio', 0, 'map'),
+  ('map_resource_amount_min', '5000', '资源点临时最小储量 / Provisional minimum resource-node amount', 0, 'map'),
+  ('map_resource_amount_max', '10000', '资源点临时最大储量 / Provisional maximum resource-node amount', 0, 'map'),
   ('map_resource_weight_bright', '4', '亮晶晶大地图资源点临时权重 / Provisional Bright world-node weight', 0, 'map'),
   ('map_resource_weight_warm', '23', '暖洋洋大地图资源点临时权重 / Provisional Warm world-node weight', 0, 'map'),
   ('map_resource_weight_cold', '23', '冷冰冰大地图资源点临时权重 / Provisional Cold world-node weight', 0, 'map'),
   ('map_resource_weight_green', '23', '郁萌萌大地图资源点临时权重 / Provisional Green world-node weight', 0, 'map'),
   ('map_resource_weight_day', '23', '昼闪闪大地图资源点临时权重 / Provisional Day world-node weight', 0, 'map'),
-  ('map_resource_weight_night', '4', '夜静静大地图资源点临时权重 / Provisional Night world-node weight', 0, 'map');
+  ('map_resource_weight_night', '4', '夜静静大地图资源点临时权重 / Provisional Night world-node weight', 0, 'map'),
+  ('map_npc_fort_tile_ratio', '0.25', '大地图NPC据点临时占比 / Provisional NPC-fort tile ratio', 0, 'map'),
+  ('map_npc_fort_weight_level_1', '27', '一级NPC据点临时权重 / Provisional level-one NPC-fort weight', 0, 'map'),
+  ('map_npc_fort_weight_level_2', '20', '二级NPC据点临时权重 / Provisional level-two NPC-fort weight', 0, 'map'),
+  ('map_npc_fort_weight_level_3', '15', '三级NPC据点临时权重 / Provisional level-three NPC-fort weight', 0, 'map'),
+  ('map_npc_fort_weight_level_4', '12', '四级NPC据点临时权重 / Provisional level-four NPC-fort weight', 0, 'map'),
+  ('map_npc_fort_weight_level_5', '9', '五级NPC据点临时权重 / Provisional level-five NPC-fort weight', 0, 'map'),
+  ('map_npc_fort_weight_level_6', '7', '六级NPC据点临时权重 / Provisional level-six NPC-fort weight', 0, 'map'),
+  ('map_npc_fort_weight_level_7', '5', '七级NPC据点临时权重 / Provisional level-seven NPC-fort weight', 0, 'map'),
+  ('map_npc_fort_weight_level_8', '3', '八级NPC据点临时权重 / Provisional level-eight NPC-fort weight', 0, 'map'),
+  ('map_npc_fort_weight_level_9', '2', '九级NPC据点临时权重 / Provisional level-nine NPC-fort weight', 0, 'map');
 
 -- 升级前的已占领资源地都支付硬编码的两点成本；完成标记写入前可安全重跑。 / Legacy owned resources paid the former hard-coded cost of two; reruns remain safe until the completion marker is written.
 UPDATE `map_tiles`

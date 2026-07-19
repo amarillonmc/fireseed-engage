@@ -20,6 +20,91 @@ PREPARE fireseed_statement FROM @fireseed_sql;
 EXECUTE fireseed_statement;
 DEALLOCATE PREPARE fireseed_statement;
 
+-- 为六系资源保存不足一单位的产量，避免短轮询吞掉低速产出与科研加成。 / Preserve sub-unit production for all six resources so short polling cannot discard slow output or research bonuses.
+SET @fireseed_sql = IF(
+  EXISTS(
+    SELECT 1 FROM information_schema.columns
+    WHERE table_schema = DATABASE()
+      AND table_name = 'resources'
+      AND column_name = 'bright_production_remainder'
+  ),
+  'SELECT 1',
+  'ALTER TABLE `resources` ADD COLUMN `bright_production_remainder` decimal(20,6) NOT NULL DEFAULT 0 AFTER `bright_crystal`'
+);
+PREPARE fireseed_statement FROM @fireseed_sql;
+EXECUTE fireseed_statement;
+DEALLOCATE PREPARE fireseed_statement;
+
+SET @fireseed_sql = IF(
+  EXISTS(
+    SELECT 1 FROM information_schema.columns
+    WHERE table_schema = DATABASE()
+      AND table_name = 'resources'
+      AND column_name = 'warm_production_remainder'
+  ),
+  'SELECT 1',
+  'ALTER TABLE `resources` ADD COLUMN `warm_production_remainder` decimal(20,6) NOT NULL DEFAULT 0 AFTER `warm_crystal`'
+);
+PREPARE fireseed_statement FROM @fireseed_sql;
+EXECUTE fireseed_statement;
+DEALLOCATE PREPARE fireseed_statement;
+
+SET @fireseed_sql = IF(
+  EXISTS(
+    SELECT 1 FROM information_schema.columns
+    WHERE table_schema = DATABASE()
+      AND table_name = 'resources'
+      AND column_name = 'cold_production_remainder'
+  ),
+  'SELECT 1',
+  'ALTER TABLE `resources` ADD COLUMN `cold_production_remainder` decimal(20,6) NOT NULL DEFAULT 0 AFTER `cold_crystal`'
+);
+PREPARE fireseed_statement FROM @fireseed_sql;
+EXECUTE fireseed_statement;
+DEALLOCATE PREPARE fireseed_statement;
+
+SET @fireseed_sql = IF(
+  EXISTS(
+    SELECT 1 FROM information_schema.columns
+    WHERE table_schema = DATABASE()
+      AND table_name = 'resources'
+      AND column_name = 'green_production_remainder'
+  ),
+  'SELECT 1',
+  'ALTER TABLE `resources` ADD COLUMN `green_production_remainder` decimal(20,6) NOT NULL DEFAULT 0 AFTER `green_crystal`'
+);
+PREPARE fireseed_statement FROM @fireseed_sql;
+EXECUTE fireseed_statement;
+DEALLOCATE PREPARE fireseed_statement;
+
+SET @fireseed_sql = IF(
+  EXISTS(
+    SELECT 1 FROM information_schema.columns
+    WHERE table_schema = DATABASE()
+      AND table_name = 'resources'
+      AND column_name = 'day_production_remainder'
+  ),
+  'SELECT 1',
+  'ALTER TABLE `resources` ADD COLUMN `day_production_remainder` decimal(20,6) NOT NULL DEFAULT 0 AFTER `day_crystal`'
+);
+PREPARE fireseed_statement FROM @fireseed_sql;
+EXECUTE fireseed_statement;
+DEALLOCATE PREPARE fireseed_statement;
+
+SET @fireseed_sql = IF(
+  EXISTS(
+    SELECT 1 FROM information_schema.columns
+    WHERE table_schema = DATABASE()
+      AND table_name = 'resources'
+      AND column_name = 'night_production_remainder'
+  ),
+  'SELECT 1',
+  'ALTER TABLE `resources` ADD COLUMN `night_production_remainder` decimal(20,6) NOT NULL DEFAULT 0 AFTER `night_crystal`'
+);
+PREPARE fireseed_statement FROM @fireseed_sql;
+EXECUTE fireseed_statement;
+DEALLOCATE PREPARE fireseed_statement;
+
 SET @fireseed_sql = IF(
   EXISTS(
     SELECT 1 FROM information_schema.columns

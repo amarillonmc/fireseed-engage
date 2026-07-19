@@ -22,6 +22,7 @@ $files = [
     'game_config' => '/includes/classes/GameConfig.php',
     'admin_config' => '/admin/config.php',
     'fresh_pool_sql' => '/sql/gameplay_expansion.sql',
+    'fresh_resource_sql' => '/sql/resources.sql',
     'upgrade_sql' => '/sql/upgrade_20260719_research_economy.sql'
 ];
 $sources = [];
@@ -147,7 +148,7 @@ foreach ([
     'resource' => ['resource_production_', 'resource_storage'],
     'city' => ['training_speed', 'build_speed', 'city_defense'],
     'army' => ['soldier_attack', 'soldier_defense'],
-    'general' => ['getMaxGeneralCost()'],
+    'general' => ['max_general_cost'],
     'subbase' => ['getDerivedPlayerLimits']
 ] as $sourceName => $needles) {
     foreach ($needles as $needle) {
@@ -169,6 +170,43 @@ assertResearchEconomy(
             "'persistent_resource_production_multiplier'"
         ) !== false,
     'Persistent currencies must use independent storage and slower configurable production'
+);
+foreach ([
+    'bright',
+    'warm',
+    'cold',
+    'green',
+    'day',
+    'night'
+] as $resourceType) {
+    assertResearchEconomy(
+        strpos(
+            $sources['fresh_resource_sql'],
+            "`{$resourceType}_production_remainder` decimal(20,6)"
+        ) !== false
+            && strpos(
+                $sources['upgrade_sql'],
+                "`{$resourceType}_production_remainder`"
+            ) !== false,
+        "Fresh and upgraded wallets must persist {$resourceType} production remainder"
+    );
+}
+assertResearchEconomy(
+    strpos($sources['resource'], 'intdiv($elapsedSeconds, $productionInterval)')
+        !== false
+        && strpos(
+            $sources['resource'],
+            '$settledAt = $lastUpdate + $settledSeconds'
+        ) !== false
+        && strpos(
+            $sources['resource'],
+            'self::splitProductionAccrual('
+        ) !== false
+        && strpos(
+            $sources['facility'],
+            'return (int) floor(City::applyPercentageBonus'
+        ) === false,
+    'Production settlement must preserve partial time and fractional output'
 );
 foreach ([
     'build',
@@ -251,6 +289,26 @@ assertResearchEconomy(
             'SET level = ?, max_circuit_points = ?, max_general_cost = ?'
         ) === false,
     'Compatibility player level must not change progression caps'
+);
+
+$generalAssignment = extractResearchSection(
+    $sources['general'],
+    'public function assignGeneral(',
+    'public function unassignGeneral('
+);
+assertResearchEconomy(
+    $generalAssignment !== ''
+        && strpos($generalAssignment, 'begin_transaction()') !== false
+        && strpos($generalAssignment, 'lockSeasonForWorldAction(') !== false
+        && strpos($generalAssignment, 'SELECT max_general_cost') !== false
+        && substr_count($generalAssignment, 'FOR UPDATE') >= 4
+        && strpos(
+            $generalAssignment,
+            'INSERT INTO general_assignments'
+        ) !== false
+        && strpos($generalAssignment, 'getCityGenerals(') === false
+        && strpos($generalAssignment, 'getArmyGenerals(') === false,
+    'General assignment must serialize cap validation and insertion under row locks'
 );
 
 foreach ([

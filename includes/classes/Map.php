@@ -580,7 +580,7 @@ class Map {
     }
 
     /**
-     * 原子占领相邻格子并扣除两点思考回路 / Atomically occupy an adjacent tile and charge two circuit points
+     * 原子占领相邻格；仅资源地扣除可配置思考回路 / Atomically occupy an adjacent tile and charge the configured cost only for a resource node
      * @param int $userId 用户ID / User ID
      * @param int $x X坐标 / X coordinate
      * @param int $y Y坐标 / Y coordinate

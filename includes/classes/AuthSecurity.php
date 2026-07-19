@@ -323,15 +323,23 @@ class AuthSecurity {
             $updatedAttempts
         ));
 
-        rewind($handle);
-        ftruncate($handle, 0);
-        fwrite(
-            $handle,
-            json_encode(['attempts' => $updatedAttempts])
-        );
-        fflush($handle);
+        $payload = json_encode(['attempts' => $updatedAttempts]);
+        $writeSucceeded = is_string($payload)
+            && rewind($handle)
+            && ftruncate($handle, 0);
+        $bytesWritten = $writeSucceeded
+            ? fwrite($handle, $payload)
+            : false;
+        $writeSucceeded = $writeSucceeded
+            && $bytesWritten === strlen($payload)
+            && fflush($handle);
         flock($handle, LOCK_UN);
         fclose($handle);
+
+        if (!$writeSucceeded) {
+            error_log('Unable to persist a login throttle record.');
+            return null;
+        }
 
         return $updatedAttempts;
     }

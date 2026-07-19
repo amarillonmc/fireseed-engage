@@ -268,6 +268,23 @@ assertCardPoolIntegration(
     'Pool administration must cover pool and member lifecycle actions'
 );
 assertCardPoolIntegration(
+    strpos($files['admin_pools'], "general: '{\"bright\": 100}'")
+        !== false
+        && strpos(
+            $files['admin_pools'],
+            "skill: '{\"night\": 100}'"
+        ) !== false
+        && strpos(
+            $files['admin_pools'],
+            '技能卡池只能使用 night（夜静静）。'
+        ) !== false
+        && strpos(
+            $files['admin_pools'],
+            '可用键：bright、warm、cold'
+        ) === false,
+    'Pool creation defaults and help must match the enforced currency boundary'
+);
+assertCardPoolIntegration(
     strpos($files['admin_pools'], 'validateCsrfToken()') !== false
         && strpos($files['admin_pools'], 'begin_transaction()') !== false
         && strpos($files['admin_pools'], 'FOR UPDATE') !== false,

@@ -8,6 +8,7 @@ $map = file_get_contents($root . '/includes/classes/Map.php');
 $battle = file_get_contents($root . '/includes/classes/Battle.php');
 $generator = file_get_contents($root . '/includes/classes/MapGenerator.php');
 $season = file_get_contents($root . '/includes/classes/SeasonService.php');
+$seasonPage = file_get_contents($root . '/season.php');
 $subBase = file_get_contents($root . '/includes/classes/SubBaseService.php');
 $vassal = file_get_contents($root . '/includes/classes/VassalService.php');
 $mapPage = file_get_contents($root . '/map.php');
@@ -128,14 +129,41 @@ foreach ([
     'map_resource_weight_green',
     'map_resource_weight_day',
     'map_resource_weight_night',
+    'map_resource_tile_ratio',
+    'map_resource_amount_min',
+    'map_resource_amount_max',
+    'map_npc_fort_tile_ratio',
+    'map_npc_fort_weight_level_1',
+    'map_npc_fort_weight_level_2',
+    'map_npc_fort_weight_level_3',
+    'map_npc_fort_weight_level_4',
+    'map_npc_fort_weight_level_5',
+    'map_npc_fort_weight_level_6',
+    'map_npc_fort_weight_level_7',
+    'map_npc_fort_weight_level_8',
+    'map_npc_fort_weight_level_9',
     'season_start_bright_grant',
     'season_start_night_grant'
 ] as $configKey) {
     assertWorldSeasonRule(
-        strpos($gameConfig, "'{$configKey}'") !== false,
-        "Fresh configuration must seed {$configKey}"
+        strpos($gameConfig, "'{$configKey}'") !== false
+            && strpos($upgradeSql, "'{$configKey}'") !== false,
+        "Fresh and upgraded configuration must seed {$configKey}"
     );
 }
+assertWorldSeasonRule(
+    strpos($generator, "'map_resource_tile_ratio'") !== false
+        && strpos($generator, "'map_resource_amount_min'") !== false
+        && strpos($generator, "'map_resource_amount_max'") !== false
+        && strpos($generator, "'map_npc_fort_tile_ratio'") !== false
+        && strpos(
+            $generator,
+            "'map_npc_fort_weight_level_' . \$level"
+        ) !== false
+        && strpos($generator, 'FLOOR(5000 + RAND() * 5001)') === false
+        && strpos($generator, '(MAP_WIDTH * MAP_HEIGHT) * 0.25') === false,
+    'Provisional world-generation values must come from central configuration'
+);
 
 assertWorldSeasonRule(
     strpos($generator, 'regenerateMapInCurrentTransaction') !== false
@@ -151,6 +179,10 @@ foreach ([
     'DELETE FROM cities',
     "t.scope = 'seasonal'",
     'SET warm_crystal = ?',
+    'warm_production_remainder = 0',
+    'cold_production_remainder = 0',
+    'green_production_remainder = 0',
+    'day_production_remainder = 0',
     'skill_points = skill_points',
     'SET contribution = 0',
     'SET level = 1, experience = 0',
@@ -179,6 +211,22 @@ assertWorldSeasonRule(
         && strpos($season, 'DELETE FROM user_skill_cards') === false
         && strpos($season, 'DELETE FROM user_items') === false,
     'Season reset must preserve card, general, skill, and long-term item progression'
+);
+assertWorldSeasonRule(
+    strpos(
+        $seasonPage,
+        '账号、亮晶晶与夜静静、武将与技能卡成长'
+    ) !== false
+        && strpos(
+            $seasonPage,
+            '玩家武将、城池、资源与联盟关系在赛季重置后保留'
+        ) === false,
+    'Season page must explain the actual persistent and seasonal-reset assets'
+);
+assertWorldSeasonRule(
+    strpos($season, 'bright_production_remainder = 0') === false
+        && strpos($season, 'night_production_remainder = 0') === false,
+    'Season reset must preserve Bright and Night fractional production'
 );
 
 echo "World and season rule tests passed: {$assertions} assertions.\n";

@@ -134,6 +134,11 @@ assertReleaseGate(
         && strpos($logout, 'validateCsrfToken()') !== false,
     'Player login must rotate sessions, throttle failures, and expose CSRF-safe logout'
 );
+assertReleaseGate(
+    strpos($authSecurity, '$bytesWritten === strlen($payload)') !== false
+        && strpos($authSecurity, 'if (!$writeSucceeded)') !== false,
+    'Login throttling must detect truncated or failed record writes'
+);
 
 require_once $authSecurityPath;
 

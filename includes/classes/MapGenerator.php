@@ -184,8 +184,41 @@ class MapGenerator {
             );
         }
 
-        // 资源点约占地图的一半；权重只负责六系之间的份额。 / Nodes cover half the map; weights split that total among types.
-        $totalResourcePoints = (int) floor((MAP_WIDTH * MAP_HEIGHT) * 0.50);
+        // 占比、资源量和六系权重均为内测临时基准，可在后台统一调节 / Tile share, amounts, and six-type weights are provisional beta settings managed centrally
+        $resourceTileRatio = max(
+            0.0,
+            min(
+                1.0,
+                (float) $this->readNumericConfig(
+                    'map_resource_tile_ratio',
+                    0.50
+                )
+            )
+        );
+        $resourceAmountMin = max(
+            0,
+            min(
+                2000000000,
+                (int) $this->readNumericConfig(
+                    'map_resource_amount_min',
+                    5000
+                )
+            )
+        );
+        $resourceAmountMax = max(
+            $resourceAmountMin,
+            min(
+                2000000000,
+                (int) $this->readNumericConfig(
+                    'map_resource_amount_max',
+                    10000
+                )
+            )
+        );
+        $resourceAmountRange = $resourceAmountMax - $resourceAmountMin;
+        $totalResourcePoints = (int) floor(
+            (MAP_WIDTH * MAP_HEIGHT) * $resourceTileRatio
+        );
         $quotas = self::calculateWeightedQuotas(
             $totalResourcePoints,
             $weights
@@ -198,7 +231,10 @@ class MapGenerator {
             $escapedType = $this->db->real_escape_string($type);
             $query = "UPDATE map_tiles
                       SET type = 'resource', subtype = '$escapedType',
-                          resource_amount = FLOOR(5000 + RAND() * 5001)
+                          resource_amount = FLOOR(
+                            $resourceAmountMin
+                            + RAND() * " . ($resourceAmountRange + 1) . "
+                          )
                       WHERE type = 'empty'
                       ORDER BY RAND()
                       LIMIT $quota";
@@ -293,31 +329,56 @@ class MapGenerator {
     }
     
     /**
-     * 生成NPC城池
+     * 生成NPC城池 / Generate NPC forts
+     * @return void
      */
     private function generateNpcForts() {
-        // NPC据点约占地图四分之一 / NPC forts cover about one quarter of the map
-        $npcFortCount = (int) floor((MAP_WIDTH * MAP_HEIGHT) * 0.25);
+        $npcFortRatio = max(
+            0.0,
+            min(
+                1.0,
+                (float) $this->readNumericConfig(
+                    'map_npc_fort_tile_ratio',
+                    0.25
+                )
+            )
+        );
+        $npcFortCount = (int) floor(
+            (MAP_WIDTH * MAP_HEIGHT) * $npcFortRatio
+        );
 
-        // 九级据点以低等级为主 / Nine fort levels are weighted toward lower levels
-        $levelDistribution = [
-            1 => 0.27,
-            2 => 0.20,
-            3 => 0.15,
-            4 => 0.12,
-            5 => 0.09,
-            6 => 0.07,
-            7 => 0.05,
-            8 => 0.03,
-            9 => 0.02
+        // 九级据点分布也是内测临时基准，权重为零时退化为均匀分布 / The nine-level beta distribution is configurable and falls back to equal quotas when every weight is zero
+        $defaultLevelWeights = [
+            1 => 27,
+            2 => 20,
+            3 => 15,
+            4 => 12,
+            5 => 9,
+            6 => 7,
+            7 => 5,
+            8 => 3,
+            9 => 2
         ];
+        $levelWeights = [];
+        foreach ($defaultLevelWeights as $level => $defaultWeight) {
+            $levelWeights[$level] = max(
+                0,
+                min(
+                    1000000,
+                    (int) $this->readNumericConfig(
+                        'map_npc_fort_weight_level_' . $level,
+                        $defaultWeight
+                    )
+                )
+            );
+        }
+        $levelQuotas = self::calculateWeightedQuotas(
+            $npcFortCount,
+            $levelWeights
+        );
 
-        $assigned = 0;
-        foreach ($levelDistribution as $level => $probability) {
-            $quota = $level === 9
-                ? $npcFortCount - $assigned
-                : (int) floor($npcFortCount * $probability);
-            $assigned += $quota;
+        foreach ($levelQuotas as $level => $quota) {
+            $level = max(1, min(9, (int) $level));
             $garrison = (int) round(
                 NPC_FORT_BASE_GARRISON * pow(NPC_FORT_GARRISON_COEFFICIENT, $level - 1)
             );

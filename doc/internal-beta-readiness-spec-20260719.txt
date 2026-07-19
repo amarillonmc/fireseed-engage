@@ -48,6 +48,8 @@ Fireseed Engage - Internal Beta Readiness and Seasonal Mechanics Specification (
    Grant every player one configurable Bright and Night season-start reward per season; new accounts receive the account-start grant only once.
 6. 任务、成就和活动可以继续产出亮晶晶与夜静静。
    Quests, achievements, and events may continue to award Bright and Night Crystals.
+7. 低速产出与科研百分比加成必须累计小数余数；频繁在线轮询不得降低实际产量。
+   Slow production and percentage research bonuses must carry fractional remainders; frequent online polling may not reduce effective output.
 
 五、科研与长期成长 / Research and long-term progression
 

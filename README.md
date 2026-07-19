@@ -65,9 +65,9 @@ Copy `config/local.php.example` to `config/local.php` for manual deployment. Env
 4. `sql/upgrade_20260719_world_season.sql`
 5. `sql/upgrade_20260719_research_economy.sql`
 
-升级脚本设计为可重复执行，但上线前仍应在数据库副本上演练。完成后运行测试和冒烟流程，确认无误后恢复定时任务并关闭维护模式。若升级失败，不要尝试手工执行降级 SQL；保持定时任务暂停，并恢复代码版本和升级前数据库快照。
+升级脚本设计为可重复执行，但上线前仍应在数据库副本上演练。本内测候选版应始终重新执行两份 `20260719` 脚本：其中的结构与配置协调步骤可重复执行，一次性数据变换仍由完成标记保护。完成后运行测试和冒烟流程，确认无误后恢复定时任务并关闭维护模式。若升级失败，不要尝试手工执行降级 SQL；保持定时任务暂停，并恢复代码版本和升级前数据库快照。
 
-Before switching code on a legacy deployment, move the old tracked database/site/admin settings into untracked `config/local.php` (mode `0600` on POSIX) or matching `FIRESEED_*` variables, verify the target database, and preserve `config/installed.lock` or keep the installer blocked at the web server. Then enable maintenance mode, stop cron, and back up the database, code, local configuration, and runtime environment. Apply only pending migrations in the order above, validate on a copy first, and resume cron only after smoke testing. If rollback is required, keep cron stopped and restore both code/configuration and the pre-upgrade snapshot.
+Before switching code on a legacy deployment, move the old tracked database/site/admin settings into untracked `config/local.php` (mode `0600` on POSIX) or matching `FIRESEED_*` variables, verify the target database, and preserve `config/installed.lock` or keep the installer blocked at the web server. Then enable maintenance mode, stop cron, and back up the database, code, local configuration, and runtime environment. Apply migrations in the order above and rerun both `20260719` scripts for this beta candidate; their structural reconciliation is idempotent while completion markers still guard one-time transforms. Validate on a copy first and resume cron only after smoke testing. If rollback is required, keep cron stopped and restore both code/configuration and the pre-upgrade snapshot.
 
 ## Web 服务器保护 / Web-server protection
 

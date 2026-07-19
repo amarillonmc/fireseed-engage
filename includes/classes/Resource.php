@@ -410,8 +410,12 @@ class Resource {
             }
             $stmt->close();
 
-            $query = "SELECT bright_crystal, warm_crystal, cold_crystal,
-                             green_crystal, day_crystal, night_crystal,
+            $query = "SELECT bright_crystal, bright_production_remainder,
+                             warm_crystal, warm_production_remainder,
+                             cold_crystal, cold_production_remainder,
+                             green_crystal, green_production_remainder,
+                             day_crystal, day_production_remainder,
+                             night_crystal, night_production_remainder,
                              last_update
                       FROM resources
                       WHERE user_id = ?
@@ -433,18 +437,26 @@ class Resource {
                 $lastUpdate = $now;
             }
             $elapsedSeconds = max(0, $now - $lastUpdate);
-            if ($elapsedSeconds < 1) {
+            $productionInterval = max(
+                1,
+                (int) RESOURCE_PRODUCTION_INTERVAL
+            );
+            $completedTicks = intdiv($elapsedSeconds, $productionInterval);
+            if ($completedTicks < 1) {
                 $db->commit();
                 return false;
             }
+            // 只推进已经完整结算的周期，保留不足一个周期的离线时间 / Advance only complete ticks so sub-interval offline time remains accrued
+            $settledSeconds = $completedTicks * $productionInterval;
+            $settledAt = $lastUpdate + $settledSeconds;
 
             $production = [
-                'bright' => 0,
-                'warm' => 0,
-                'cold' => 0,
-                'green' => 0,
-                'day' => 0,
-                'night' => 0
+                'bright' => 0.0,
+                'warm' => 0.0,
+                'cold' => 0.0,
+                'green' => 0.0,
+                'day' => 0.0,
+                'night' => 0.0
             ];
             $technologyEffects = TechnologyEffectService::getUserEffects($userId);
             foreach ($cityIds as $cityId) {
@@ -467,7 +479,7 @@ class Resource {
                         continue;
                     }
                     $produced = $facility->calculateResourceProduction(
-                        $elapsedSeconds,
+                        $settledSeconds,
                         $cityBonuses['production']
                     );
                     $effectKey = 'resource_production_' . $resourceType;
@@ -476,10 +488,29 @@ class Resource {
                         $technologyEffects[$effectKey] ?? 0.0
                     );
                     $production[$resourceType] = min(
-                        2147483647,
-                        $production[$resourceType] + max(0, (int) $produced)
+                        2147483647.999999,
+                        $production[$resourceType]
+                            + max(0.0, (float) $produced)
                     );
                 }
+            }
+
+            $remainderColumns = [
+                'bright' => 'bright_production_remainder',
+                'warm' => 'warm_production_remainder',
+                'cold' => 'cold_production_remainder',
+                'green' => 'green_production_remainder',
+                'day' => 'day_production_remainder',
+                'night' => 'night_production_remainder'
+            ];
+            $settledProduction = [];
+            foreach ($production as $resourceType => $produced) {
+                $remainderColumn = $remainderColumns[$resourceType];
+                $settledProduction[$resourceType] =
+                    self::splitProductionAccrual(
+                        $produced,
+                        $resourceRow[$remainderColumn]
+                    );
             }
 
             $storageCapacity = max(
@@ -490,30 +521,42 @@ class Resource {
             $persistentCapacity = 2147483647;
             $query = "UPDATE resources
                       SET bright_crystal = LEAST(?, bright_crystal + ?),
+                          bright_production_remainder = ?,
                           warm_crystal = LEAST(?, warm_crystal + ?),
+                          warm_production_remainder = ?,
                           cold_crystal = LEAST(?, cold_crystal + ?),
+                          cold_production_remainder = ?,
                           green_crystal = LEAST(?, green_crystal + ?),
+                          green_production_remainder = ?,
                           day_crystal = LEAST(?, day_crystal + ?),
+                          day_production_remainder = ?,
                           night_crystal = LEAST(?, night_crystal + ?),
+                          night_production_remainder = ?,
                           last_update = ?
                       WHERE user_id = ?";
             $stmt = $db->prepare($query);
-            $nowDate = date('Y-m-d H:i:s', $now);
+            $settledDate = date('Y-m-d H:i:s', $settledAt);
             $stmt->bind_param(
-                'iiiiiiiiiiiisi',
+                'iidiidiidiidiidiidsi',
                 $persistentCapacity,
-                $production['bright'],
+                $settledProduction['bright']['whole'],
+                $settledProduction['bright']['remainder'],
                 $storageCapacity,
-                $production['warm'],
+                $settledProduction['warm']['whole'],
+                $settledProduction['warm']['remainder'],
                 $storageCapacity,
-                $production['cold'],
+                $settledProduction['cold']['whole'],
+                $settledProduction['cold']['remainder'],
                 $storageCapacity,
-                $production['green'],
+                $settledProduction['green']['whole'],
+                $settledProduction['green']['remainder'],
                 $storageCapacity,
-                $production['day'],
+                $settledProduction['day']['whole'],
+                $settledProduction['day']['remainder'],
                 $persistentCapacity,
-                $production['night'],
-                $nowDate,
+                $settledProduction['night']['whole'],
+                $settledProduction['night']['remainder'],
+                $settledDate,
                 $userId
             );
             if (!$stmt->execute() || $stmt->affected_rows !== 1) {
@@ -531,6 +574,36 @@ class Resource {
             error_log('Resource production update failed: ' . $e->getMessage());
             return false;
         }
+    }
+
+    /**
+     * 将小数产量拆为本次入账整数与下一次余数 / Split fractional production into credited units and a carried remainder
+     * @param int|float $produced 本次计算产量 / Production calculated now
+     * @param int|float $remainder 上次保留余数 / Previously carried remainder
+     * @return array{whole:int,remainder:float} 入账量与余数 / Credited amount and remainder
+     */
+    public static function splitProductionAccrual($produced, $remainder) {
+        $safeProduced = is_numeric($produced)
+            ? max(0.0, (float) $produced)
+            : 0.0;
+        $safeRemainder = is_numeric($remainder)
+            ? max(0.0, min(0.999999, (float) $remainder))
+            : 0.0;
+        // 数据库以六位小数保存余数，先按相同精度归一化可避免浮点边界吞掉整点 / Match the six-decimal database precision before splitting to avoid losing a whole unit at floating-point boundaries
+        $accrued = round(
+            min(2147483647.999999, $safeProduced + $safeRemainder),
+            6
+        );
+        $whole = min(2147483647, (int) floor($accrued));
+        $nextRemainder = round(
+            max(0.0, min(0.999999, $accrued - $whole)),
+            6
+        );
+
+        return [
+            'whole' => $whole,
+            'remainder' => $nextRemainder
+        ];
     }
 
     /**

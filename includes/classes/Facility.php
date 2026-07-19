@@ -796,14 +796,17 @@ class Facility {
      * 计算指定时长内的资源产量 / Calculate resource production for an elapsed duration
      * @param int $seconds 经过的秒数 / Elapsed seconds
      * @param float|null $productionBonus 已汇总的驻城生产百分比 / Pre-aggregated assigned-general production percentage
-     * @return int 产出的资源数量 / Produced resource amount
+     * @return float 产出的资源数量 / Produced resource amount
      */
     public function calculateResourceProduction($seconds, $productionBonus = null) {
         if (!$this->isValid || $this->type !== 'resource_production' || $seconds <= 0) {
-            return 0;
+            return 0.0;
         }
 
-        $productionTicks = floor($seconds / RESOURCE_PRODUCTION_INTERVAL);
+        $productionTicks = intdiv(
+            max(0, (int) $seconds),
+            max(1, (int) RESOURCE_PRODUCTION_INTERVAL)
+        );
         $baseProduction = $productionTicks * $this->getEffectValue();
 
         if ($productionBonus === null) {
@@ -815,7 +818,10 @@ class Facility {
         }
 
         // 在累计产量上应用驻城百分比，避免逐 tick 舍入损失 / Apply the city percentage after accumulation to avoid per-tick rounding loss
-        return (int) floor(City::applyPercentageBonus($baseProduction, $productionBonus));
+        return (float) City::applyPercentageBonus(
+            $baseProduction,
+            $productionBonus
+        );
     }
 
     /**

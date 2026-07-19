@@ -290,12 +290,25 @@ class GameConfig {
             'initial_max_general_cost' => 10.0,
             'initial_subbase_limit' => 1,
             'resource_territory_occupation_cost' => 2,
+            'map_resource_tile_ratio' => 0.50,
+            'map_resource_amount_min' => 5000,
+            'map_resource_amount_max' => 10000,
             'map_resource_weight_bright' => 4,
             'map_resource_weight_warm' => 23,
             'map_resource_weight_cold' => 23,
             'map_resource_weight_green' => 23,
             'map_resource_weight_day' => 23,
             'map_resource_weight_night' => 4,
+            'map_npc_fort_tile_ratio' => 0.25,
+            'map_npc_fort_weight_level_1' => 27,
+            'map_npc_fort_weight_level_2' => 20,
+            'map_npc_fort_weight_level_3' => 15,
+            'map_npc_fort_weight_level_4' => 12,
+            'map_npc_fort_weight_level_5' => 9,
+            'map_npc_fort_weight_level_6' => 7,
+            'map_npc_fort_weight_level_7' => 5,
+            'map_npc_fort_weight_level_8' => 3,
+            'map_npc_fort_weight_level_9' => 2,
             'vassal_release_resource_rate' => 0.70,
             'vassal_release_relocation_mode' => 'outer',
             'vassal_release_lose_all_territory' => 1,
@@ -430,6 +443,21 @@ class GameConfig {
                 'min' => 0,
                 'max' => 1000000
             ],
+            'map_resource_tile_ratio' => [
+                'type' => 'float',
+                'min' => 0.0,
+                'max' => 1.0
+            ],
+            'map_resource_amount_min' => [
+                'type' => 'int',
+                'min' => 0,
+                'max' => 2000000000
+            ],
+            'map_resource_amount_max' => [
+                'type' => 'int',
+                'min' => 0,
+                'max' => 2000000000
+            ],
             'map_resource_weight_bright' => [
                 'type' => 'int',
                 'min' => 0,
@@ -460,6 +488,11 @@ class GameConfig {
                 'min' => 0,
                 'max' => 1000000
             ],
+            'map_npc_fort_tile_ratio' => [
+                'type' => 'float',
+                'min' => 0.0,
+                'max' => 1.0
+            ],
             'victory_condition_days' => ['type' => 'int', 'min' => 1, 'max' => 365],
             'vassal_release_resource_rate' => ['type' => 'float', 'min' => 0.0, 'max' => 1.0],
             'vassal_release_relocation_mode' => [
@@ -473,6 +506,13 @@ class GameConfig {
                 'values' => ['image', 'emoji_fallback']
             ]
         ];
+        for ($level = 1; $level <= 9; $level++) {
+            $validationRules['map_npc_fort_weight_level_' . $level] = [
+                'type' => 'int',
+                'min' => 0,
+                'max' => 1000000
+            ];
+        }
         
         if (!isset($validationRules[$key])) {
             return true; // 没有验证规则的配置默认通过

@@ -389,69 +389,198 @@ class General {
             return false;
         }
 
-        // 检查分配类型是否有效
+        // 检查分配类型是否有效 / Validate the assignment type
         $validTypes = ['city', 'army'];
-        if (!in_array($assignmentType, $validTypes)) {
+        $targetId = (int) $targetId;
+        if (!in_array($assignmentType, $validTypes, true) || $targetId <= 0) {
             return false;
         }
 
-        // 检查目标是否存在
-        if ($assignmentType == 'city') {
-            $city = new City($targetId);
-            if (!$city->isValid() || $city->getOwnerId() != $this->ownerId) {
-                return false;
-            }
-
-            // 检查城池是否已达武将上限
-            $cityGenerals = self::getCityGenerals($targetId);
-            if (count($cityGenerals) >= $city->getLevel()) {
-                return false;
-            }
-            $targetGenerals = $cityGenerals;
-        } else if ($assignmentType == 'army') {
-            $army = new Army($targetId);
-            if (!$army->isValid() || $army->getOwnerId() != $this->ownerId) {
-                return false;
-            }
-
-            // 检查军队是否已达武将上限
-            $armyGenerals = self::getArmyGenerals($targetId);
-            if (count($armyGenerals) >= 1 + $army->getLevel()) {
-                return false;
-            }
-            $targetGenerals = $armyGenerals;
-        }
-
-        // 每个编制目标的武将COST总和受基础值与永久科研限制 / Each assignment target obeys the base-plus-permanent-research general COST cap
-        $assignedCost = 0.0;
-        foreach ($targetGenerals as $assignedGeneral) {
-            if ((int) $assignedGeneral->getGeneralId() === (int) $this->generalId) {
-                continue;
-            }
-            $assignedCost += max(0.0, (float) $assignedGeneral->getCost());
-        }
-        $owner = new User($this->ownerId);
-        if (!$owner->isValid()
-            || $assignedCost + max(0.0, (float) $this->cost)
-                > (float) $owner->getMaxGeneralCost() + 0.000001) {
+        if (!$this->db->begin_transaction()) {
             return false;
         }
 
-        // 如果武将已分配，先取消分配
-        if ($this->assignment) {
-            $this->unassignGeneral();
-        }
+        try {
+            lockSeasonForWorldAction($this->db);
 
-        // 创建新分配
-        $assignment = new GeneralAssignment();
-        $assignmentId = $assignment->createAssignment($this->generalId, $assignmentType, $targetId);
+            // 玩家锁串行化同一账号的全部编制请求，并固定永久科研提供的COST上限 / The player lock serializes roster changes for one account and fixes the permanent-research COST cap
+            $query = "SELECT max_general_cost
+                      FROM users
+                      WHERE user_id = ?
+                      FOR UPDATE";
+            $stmt = $this->db->prepare($query);
+            $ownerId = (int) $this->ownerId;
+            $stmt->bind_param('i', $ownerId);
+            $stmt->execute();
+            $result = $stmt->get_result();
+            $owner = $result ? $result->fetch_assoc() : null;
+            $stmt->close();
+            if (!$owner) {
+                throw new RuntimeException(
+                    '武将所有者不存在 / General owner does not exist'
+                );
+            }
 
-        if ($assignmentId) {
-            $this->assignment = $assignment;
+            if ($assignmentType === 'city') {
+                $query = "SELECT owner_id, level
+                          FROM cities
+                          WHERE city_id = ?
+                          FOR UPDATE";
+            } else {
+                $query = "SELECT owner_id, level
+                          FROM armies
+                          WHERE army_id = ?
+                          FOR UPDATE";
+            }
+            $stmt = $this->db->prepare($query);
+            $stmt->bind_param('i', $targetId);
+            $stmt->execute();
+            $result = $stmt->get_result();
+            $target = $result ? $result->fetch_assoc() : null;
+            $stmt->close();
+            if (!$target || (int) $target['owner_id'] !== $ownerId) {
+                throw new RuntimeException(
+                    '编制目标已经失效或易主 / Assignment target is stale or changed owners'
+                );
+            }
+            $assignmentLimit = $assignmentType === 'city'
+                ? max(0, (int) $target['level'])
+                : max(0, 1 + (int) $target['level']);
+
+            // 在目标之后锁内重验武将，和战斗的目标到武将锁序保持一致 / Revalidate and lock the general after the target to match combat's target-to-general order
+            $query = "SELECT owner_id, cost, is_active
+                      FROM generals
+                      WHERE general_id = ?
+                      FOR UPDATE";
+            $stmt = $this->db->prepare($query);
+            $generalId = (int) $this->generalId;
+            $stmt->bind_param('i', $generalId);
+            $stmt->execute();
+            $result = $stmt->get_result();
+            $lockedGeneral = $result ? $result->fetch_assoc() : null;
+            $stmt->close();
+            if (!$lockedGeneral
+                || (int) $lockedGeneral['owner_id'] !== $ownerId
+                || (int) $lockedGeneral['is_active'] !== 1) {
+                throw new RuntimeException(
+                    '武将状态已经变化 / General state has changed'
+                );
+            }
+
+            $query = "SELECT assignment_id, assignment_type, target_id
+                      FROM general_assignments
+                      WHERE general_id = ?
+                      FOR UPDATE";
+            $stmt = $this->db->prepare($query);
+            $stmt->bind_param('i', $generalId);
+            $stmt->execute();
+            $result = $stmt->get_result();
+            $existingAssignment = $result ? $result->fetch_assoc() : null;
+            $stmt->close();
+
+            if ($existingAssignment
+                && $existingAssignment['assignment_type'] === $assignmentType
+                && (int) $existingAssignment['target_id'] === $targetId) {
+                $assignmentId = (int) $existingAssignment['assignment_id'];
+                if (!$this->db->commit()) {
+                    throw new RuntimeException(
+                        '提交武将编制失败 / Failed to commit general assignment'
+                    );
+                }
+                $this->assignment = new GeneralAssignment($assignmentId);
+                return true;
+            }
+
+            // 目标实体锁保证计数、COST校验和插入是一个不可穿透的临界区 / The target row makes count, COST validation, and insertion one indivisible critical section
+            $query = "SELECT ga.assignment_id, g.general_id,
+                             g.cost, g.is_active
+                      FROM general_assignments AS ga
+                      INNER JOIN generals AS g
+                        ON g.general_id = ga.general_id
+                      WHERE ga.assignment_type = ?
+                        AND ga.target_id = ?
+                      ORDER BY ga.assignment_id
+                      FOR UPDATE";
+            $stmt = $this->db->prepare($query);
+            $stmt->bind_param('si', $assignmentType, $targetId);
+            $stmt->execute();
+            $result = $stmt->get_result();
+            $assignedCount = 0;
+            $assignedCost = 0.0;
+            while ($result && ($assignedGeneral = $result->fetch_assoc())) {
+                if ((int) $assignedGeneral['is_active'] !== 1) {
+                    continue;
+                }
+                $assignedCount++;
+                $assignedCost += max(
+                    0.0,
+                    (float) $assignedGeneral['cost']
+                );
+            }
+            $stmt->close();
+
+            $generalCost = max(0.0, (float) $lockedGeneral['cost']);
+            if ($assignedCount >= $assignmentLimit
+                || $assignedCost + $generalCost
+                    > (float) $owner['max_general_cost'] + 0.000001) {
+                $this->db->rollback();
+                return false;
+            }
+
+            if ($existingAssignment) {
+                $query = "DELETE FROM general_assignments
+                          WHERE assignment_id = ? AND general_id = ?";
+                $stmt = $this->db->prepare($query);
+                $existingAssignmentId =
+                    (int) $existingAssignment['assignment_id'];
+                $stmt->bind_param(
+                    'ii',
+                    $existingAssignmentId,
+                    $generalId
+                );
+                $deleted = $stmt->execute()
+                    && $stmt->affected_rows === 1;
+                $stmt->close();
+                if (!$deleted) {
+                    throw new RuntimeException(
+                        '旧武将编制已经变化 / Former general assignment changed'
+                    );
+                }
+            }
+
+            $query = "INSERT INTO general_assignments
+                         (general_id, assignment_type, target_id)
+                      VALUES (?, ?, ?)";
+            $stmt = $this->db->prepare($query);
+            $stmt->bind_param(
+                'isi',
+                $generalId,
+                $assignmentType,
+                $targetId
+            );
+            if (!$stmt->execute() || $stmt->affected_rows !== 1) {
+                $stmt->close();
+                throw new RuntimeException(
+                    '创建武将编制失败 / Failed to create general assignment'
+                );
+            }
+            $assignmentId = (int) $this->db->insert_id;
+            $stmt->close();
+
+            if (!$this->db->commit()) {
+                throw new RuntimeException(
+                    '提交武将编制失败 / Failed to commit general assignment'
+                );
+            }
+            $this->assignment = new GeneralAssignment($assignmentId);
             return true;
+        } catch (Throwable $e) {
+            $this->db->rollback();
+            error_log(
+                'General assignment failed: ' . $e->getMessage()
+            );
+            return false;
         }
-
-        return false;
     }
 
     /**

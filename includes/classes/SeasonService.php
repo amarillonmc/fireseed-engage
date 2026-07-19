@@ -1469,6 +1469,10 @@ class SeasonService {
         $query = "UPDATE resources
                   SET warm_crystal = ?, cold_crystal = ?,
                       green_crystal = ?, day_crystal = ?,
+                      warm_production_remainder = 0,
+                      cold_production_remainder = 0,
+                      green_production_remainder = 0,
+                      day_production_remainder = 0,
                       bright_crystal = bright_crystal + ?,
                       night_crystal = night_crystal + ?,
                       last_update = NOW()";

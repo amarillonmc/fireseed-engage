@@ -73,12 +73,25 @@ Fireseed Engage - Internal-beta gate, research economy, and seasonal mechanics i
 6. 武将、技能卡、长期道具、永久科研、亮夜余额及同盟身份保留；赛季资源、城市、军队、领地、赛季科研与赛季玩法进度重置。
    Persistent cards, items, research, currencies, and alliance identity survive, while seasonal economy, cities, armies, territory, research, and activity progress reset.
 
-六、验证结果 / Validation
+六、双审查后修复 / Post-review fixes
 
-1. 18 个 PHP 测试文件共 854 项断言全部通过。
-   All 18 PHP test files passed with 854 assertions.
-2. 全仓库 138 个 PHP 文件语法检查通过。
-   PHP syntax checks passed for all 138 files.
+1. 六系资源新增定点小数产出余数，并只推进完整生产周期；亮、夜 0.2 倍低速产出及科研百分比不再被三秒轮询取整吞掉。
+   All six resources now carry fixed-precision fractional output and advance only complete production ticks, so three-second polling cannot erase 0.2-rate Bright/Night output or research bonuses.
+2. 武将分配在赛季锁、玩家锁与目标锁下重新读取武将、人数、COST 和永久科研上限，再于同一事务写入，关闭并发超限路径。
+   General assignment now revalidates the general, headcount, COST, and permanent cap under season, player, and target locks before inserting in the same transaction.
+3. 卡池后台会随武将／技能类型切换亮／夜默认成本与帮助文本；赛季页面改为准确展示保留资产和重置资产。
+   Pool administration now switches Bright/Night defaults and help by pool type, while the season page accurately lists persistent and reset assets.
+4. 资源地占比与储量、NPC据点占比及一级至九级分布权重全部集中为可迁移、可校验的临时配置。
+   Resource-node share and amounts plus NPC-fort share and level-one-to-nine weights are now migrated, validated provisional settings.
+5. 标准与规格两路独立审查提出的全部真实 P1/P2 均已修复，并为每项边界补充回归断言。
+   Every confirmed P1/P2 from the independent standards and specification reviews was fixed with regression coverage.
+
+七、验证结果 / Validation
+
+1. 19 个 PHP 测试文件共 887 项断言全部通过。
+   All 19 PHP test files passed with 887 assertions.
+2. 全仓库 139 个 PHP 文件语法检查通过。
+   PHP syntax checks passed for all 139 files.
 3. assets/js 下 2 个 JavaScript 文件语法检查通过。
    JavaScript syntax checks passed for both files under assets/js.
 4. git diff --check 通过；仅报告 Git 的 CRLF 工作区提示，无补丁空白错误。
@@ -86,7 +99,7 @@ Fireseed Engage - Internal-beta gate, research economy, and seasonal mechanics i
 5. 安装与迁移专项审计未发现残留 P1/P2。
    The installer and migration audit found no remaining P1/P2 issue.
 
-七、部署前必做 / Required before player testing
+八、部署前必做 / Required before player testing
 
 1. 在目标版本 MySQL/MariaDB 的数据库副本上分别演练全新安装与既有库迁移。
    Rehearse both fresh installation and legacy migration on a copy using the target MySQL/MariaDB version.
