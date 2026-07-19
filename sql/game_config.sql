@@ -16,7 +16,7 @@ CREATE TABLE `game_config` (
 INSERT INTO `game_config` (`key`, `value`, `description`, `is_constant`, `category`) VALUES
 -- 游戏基础设置
 ('game_name', '种火集结号', '游戏名称', 1, 'basic'),
-('game_version', '1.0.0', '游戏版本', 1, 'basic'),
+('game_version', '0.1.0-beta', '游戏版本', 1, 'basic'),
 ('max_players', '1000', '最大玩家数量', 0, 'basic'),
 ('new_player_registration', '1', '是否允许新玩家注册 (0=关闭, 1=开启)', 0, 'basic'),
 ('maintenance_mode', '0', '维护模式 (0=关闭, 1=开启)', 0, 'basic'),
@@ -31,6 +31,9 @@ INSERT INTO `game_config` (`key`, `value`, `description`, `is_constant`, `catego
 ('initial_green_crystal', '1000', '新玩家初始郁萌萌数量', 0, 'resources'),
 ('initial_day_crystal', '1000', '新玩家初始昼闪闪数量', 0, 'resources'),
 ('initial_night_crystal', '1000', '新玩家初始夜静静数量', 0, 'resources'),
+('season_start_bright_grant', '1000', '每赛季开始向既有玩家发放的亮晶晶 / Bright Crystals granted to each existing player at season start', 0, 'resources'),
+('season_start_night_grant', '1000', '每赛季开始向既有玩家发放的夜静静 / Night Crystals granted to each existing player at season start', 0, 'resources'),
+('persistent_resource_production_multiplier', '0.2', '亮晶晶与夜静静产出器相对四色产出器的基础倍率 / Base output multiplier for Bright and Night producers relative to seasonal producers', 0, 'resources'),
 ('resource_production_rate', '1.0', '资源产出倍率', 0, 'resources'),
 ('resource_collection_interval', '3', '资源收集间隔（秒）', 0, 'resources'),
 
@@ -60,6 +63,7 @@ INSERT INTO `game_config` (`key`, `value`, `description`, `is_constant`, `catego
 ('initial_circuit_points', '1', '新玩家初始思考回路', 0, 'generals'),
 ('initial_max_circuit_points', '10', '新玩家最大思考回路', 0, 'generals'),
 ('initial_max_general_cost', '10.0', '新玩家最大武将费用', 0, 'generals'),
+('initial_subbase_limit', '1', '玩家基础分基地上限（永久科研可提高） / Base sub-base cap before permanent research', 0, 'generals'),
 
 -- 地图相关设置
 ('map_size', '512', '地图大小', 1, 'map'),
@@ -67,10 +71,15 @@ INSERT INTO `game_config` (`key`, `value`, `description`, `is_constant`, `catego
 ('silver_hole_y', '256', '银白之孔Y坐标', 1, 'map'),
 ('npc_respawn_time', '86400', 'NPC城池重生时间（秒）', 0, 'map'),
 ('resource_point_respawn_time', '3600', '资源点重生时间（秒）', 0, 'map'),
+('resource_territory_occupation_cost', '2', '占领资源地所需思考回路；空地始终免费 / Circuit cost for resource occupation; empty land is always free', 0, 'map'),
+('map_resource_weight_bright', '4', '亮晶晶大地图资源点临时权重 / Provisional Bright world-node weight', 0, 'map'),
+('map_resource_weight_warm', '23', '暖洋洋大地图资源点临时权重 / Provisional Warm world-node weight', 0, 'map'),
+('map_resource_weight_cold', '23', '冷冰冰大地图资源点临时权重 / Provisional Cold world-node weight', 0, 'map'),
+('map_resource_weight_green', '23', '郁萌萌大地图资源点临时权重 / Provisional Green world-node weight', 0, 'map'),
+('map_resource_weight_day', '23', '昼闪闪大地图资源点临时权重 / Provisional Day world-node weight', 0, 'map'),
+('map_resource_weight_night', '4', '夜静静大地图资源点临时权重 / Provisional Night world-node weight', 0, 'map'),
 
 -- 游戏平衡设置
-('level_up_circuit_bonus', '2', '升级时思考回路上限增加', 0, 'balance'),
-('level_up_general_cost_bonus', '0.5', '升级时武将费用上限增加', 0, 'balance'),
 ('city_durability_base', '3000', '城池基础耐久度', 0, 'balance'),
 ('victory_condition_days', '30', '胜利条件：占领银白之孔天数', 0, 'balance'),
 
@@ -78,4 +87,6 @@ INSERT INTO `game_config` (`key`, `value`, `description`, `is_constant`, `catego
 ('cron_interval', '60', '定时任务执行间隔（秒）', 0, 'system'),
 ('session_timeout', '86400', '会话超时时间（秒）', 0, 'system'),
 ('log_retention_days', '30', '日志保留天数', 0, 'system'),
-('backup_retention_days', '7', '备份保留天数', 0, 'system');
+('backup_retention_days', '7', '备份保留天数', 0, 'system'),
+('migration_20260719_world_season', 'complete', '全新安装已包含全图与赛季世界升级 / Fresh installation includes the full-map and seasonal-world migration', 1, 'system'),
+('migration_20260719_research_economy', 'complete', '全新安装已包含科研、经济与长期成长升级 / Fresh installation includes the research, economy, and long-term progression migration', 1, 'system');

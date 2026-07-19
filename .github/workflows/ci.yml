@@ -1,0 +1,43 @@
+name: PHP 与规则回归 / PHP and rule regression
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  static-and-rules:
+    name: 静态检查与规则测试 / Static checks and rule tests
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: 检出代码 / Check out source
+        uses: actions/checkout@v4
+
+      - name: 配置 PHP / Set up PHP
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: "8.2"
+          extensions: json, mbstring, mysqli
+          coverage: none
+
+      - name: 检查 PHP 语法 / Check PHP syntax
+        shell: bash
+        run: |
+          find . -type f -name '*.php' -not -path './.git/*' -print0 \
+            | xargs -0 -n1 php -l
+
+      - name: 运行轻量规则测试 / Run lightweight rule tests
+        shell: bash
+        run: |
+          for test_file in tests/*.php; do
+            php "$test_file"
+          done
+
+      - name: 检查 JavaScript 语法 / Check JavaScript syntax
+        shell: bash
+        run: |
+          find assets -type f -name '*.js' -print0 \
+            | xargs -0 -n1 node --check

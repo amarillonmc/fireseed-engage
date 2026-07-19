@@ -1411,11 +1411,7 @@ class Battle {
                     }
                     unset($rewards['capture_city']);
                 } elseif (!empty($rewards['capture_city'])) {
-                    if (!$this->consumeTerritoryOccupationCost($attackerId)) {
-                        // 战斗胜利仍成立，但思考回路不足时不转移控制权 / Victory still stands, but insufficient circuit points prevent ownership transfer
-                        unset($rewards['capture_city']);
-                        $rewards['occupation_blocked'] = true;
-                    } else {
+                    // 思考回路只用于资源地，副城易主不收取回路。 / Circuit is reserved for resource nodes and never charged for a sub-base transfer.
                         $query = "UPDATE cities
                               SET owner_id = ?
                               WHERE city_id = ? AND owner_id = ?
@@ -1470,7 +1466,6 @@ class Battle {
                         }
                         $stmt->close();
                         $territoryCaptured = true;
-                    }
                 }
 
                 // 资源行最后按用户ID锁定并做真实转移，避免先锁资源再锁城池 / Lock resource rows last by user ID and transfer actual loot without minting
@@ -1642,7 +1637,14 @@ class Battle {
                     }
                     $stmt->close();
                 }
-                if (!$this->consumeTerritoryOccupationCost($attackerId)) {
+                $occupationCost = $defender->getType() === 'resource'
+                    ? Map::getResourceOccupationCost()
+                    : 0;
+                if ($defender->getType() === 'resource'
+                    && !$this->consumeResourceOccupationCost(
+                        $attackerId,
+                        $occupationCost
+                    )) {
                     // 兵力胜利不等于自动占领；费用不足时保留原领主 / A military victory does not transfer ownership when the occupation cost is unpaid
                     unset($rewards['tile_control']);
                     $rewards['occupation_blocked'] = true;
@@ -1650,6 +1652,7 @@ class Battle {
                 }
                 $query = "UPDATE map_tiles
                           SET owner_id = ?,
+                              occupation_circuit_cost = ?,
                               last_collection_time = CASE
                                 WHEN type = 'resource' THEN NOW()
                                 ELSE last_collection_time
@@ -1658,8 +1661,9 @@ class Battle {
                             AND type IN ('empty', 'resource')";
                 $stmt = $this->db->prepare($query);
                 $stmt->bind_param(
-                    'iii',
+                    'iiii',
                     $attackerId,
+                    $occupationCost,
                     $tileId,
                     $oldOwnerId
                 );
@@ -1772,10 +1776,13 @@ class Battle {
     }
 
     /**
-     * 原子扣除实际易主所需思考回路 / Atomically consume the circuit-point cost for an actual ownership transfer
+     * 原子扣除资源地易主所需思考回路 / Atomically consume Circuit for a resource-node transfer
+     * @param int $userId 玩家ID / Player ID
+     * @param int $cost 本次应记录的资源地成本 / Cost recorded for this resource transfer
+     * @return bool 是否成功扣除 / Whether the charge succeeded
      */
-    private function consumeTerritoryOccupationCost($userId) {
-        $cost = max(0, (int) TERRITORY_OCCUPATION_COST);
+    private function consumeResourceOccupationCost($userId, $cost) {
+        $cost = max(0, min(2147483647, (int) $cost));
         if ($cost === 0) {
             return true;
         }
@@ -1874,12 +1881,15 @@ class Battle {
             'day' => 'day_crystal',
             'night' => 'night_crystal'
         ];
-        $capacity = max(
+        $seasonalCapacity = max(
             0,
             (int) Resource::getUserResourceStorageCapacity($attackerUserId)
         );
         $actualRewards = [];
         foreach ($columns as $type => $column) {
+            $capacity = in_array($type, ['bright', 'night'], true)
+                ? 2147483647
+                : $seasonalCapacity;
             $requested = isset($requestedRewards[$type])
                 ? max(0, (int) $requestedRewards[$type])
                 : 0;

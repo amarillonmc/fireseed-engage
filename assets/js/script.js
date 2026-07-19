@@ -1,5 +1,26 @@
 // 种火集结号 - 主脚本文件
 
+// 向所有页面脚本导出统一通知函数 / Export the shared notification function for every page script
+function showNotification(message) {
+    const notification = document.createElement('div');
+    notification.className = 'notification';
+    notification.textContent = String(message);
+
+    document.body.appendChild(notification);
+
+    // 3秒后自动移除通知 / Remove the notification after three seconds
+    setTimeout(function() {
+        notification.classList.add('fade-out');
+        setTimeout(function() {
+            if (notification.parentNode) {
+                notification.parentNode.removeChild(notification);
+            }
+        }, 500);
+    }, 3000);
+}
+
+window.showNotification = showNotification;
+
 document.addEventListener('DOMContentLoaded', function() {
     const imageResourceConfig = window.FIRESEED_IMAGE_RESOURCES
         && typeof window.FIRESEED_IMAGE_RESOURCES === 'object'
@@ -389,23 +410,6 @@ document.addEventListener('DOMContentLoaded', function() {
             
             barracksTable.appendChild(row);
         }
-    }
-    
-    // 显示通知
-    function showNotification(message) {
-        const notification = document.createElement('div');
-        notification.className = 'notification';
-        notification.textContent = message;
-        
-        document.body.appendChild(notification);
-        
-        // 3秒后自动移除通知
-        setTimeout(() => {
-            notification.classList.add('fade-out');
-            setTimeout(() => {
-                document.body.removeChild(notification);
-            }, 500);
-        }, 3000);
     }
     
     // 显示训练对话框

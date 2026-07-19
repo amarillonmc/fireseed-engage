@@ -711,6 +711,21 @@ class Army {
             );
         }
 
+        $totalAttack = TechnologyEffectService::applyFractionalBonus(
+            $totalAttack,
+            TechnologyEffectService::getUserEffect(
+                $this->ownerId,
+                'soldier_attack'
+            )
+        );
+        $totalDefense = TechnologyEffectService::applyFractionalBonus(
+            $totalDefense,
+            TechnologyEffectService::getUserEffect(
+                $this->ownerId,
+                'soldier_defense'
+            )
+        );
+
         return (int) round($totalAttack + $totalDefense);
     }
     

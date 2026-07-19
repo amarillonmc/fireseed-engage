@@ -1,6 +1,6 @@
 <?php
-// 包含初始化文件
-require_once 'includes/init.php';
+// 包含初始化文件 / Include the application bootstrap
+require_once __DIR__ . '/includes/init.php';
 
 // 定时任务只允许由命令行执行 / Cron tasks may only run from the command line
 if (PHP_SAPI !== 'cli') {
@@ -21,8 +21,8 @@ register_shutdown_function(function () use ($db) {
     executePreparedSql($db, "SELECT RELEASE_LOCK('fireseed_engage_cron')");
 });
 
-// 设置脚本执行时间限制 / Set the execution time limit
-set_time_limit(300); // 5分钟
+// 赛季原子重建可能需要处理完整512×512世界 / Atomic season reconstruction may process the full 512×512 world
+set_time_limit(1800); // 30分钟 / 30 minutes
 
 // 记录开始时间
 $startTime = microtime(true);
@@ -105,14 +105,27 @@ foreach ($collectionResult['collection_results'] as $userResult) {
 }
 $logMessages[] = "收集的资源总量: " . $totalCollected;
 
-// 6. 维护讨伐战周期 / Maintain the recurring raid cycle
-$challengeService = new ChallengeService();
-$raidCycleResult = $challengeService->maintainRaidCycle();
+// 6. 仅在非冻结期维护讨伐战周期 / Maintain the recurring raid cycle only outside a freeze
+$raidCycleResult = [
+    'success' => true,
+    'message' => '赛季冻结期间暂停 / Paused during the season freeze'
+];
+if (!$worldFrozen) {
+    $challengeService = new ChallengeService();
+    $raidCycleResult = $challengeService->maintainRaidCycle();
+}
 $logMessages[] = "讨伐战周期: " . $raidCycleResult['message'];
 
-// 7. 派遣到期的联盟协同作战 / Dispatch due alliance operations
-$allianceService = new AllianceService();
-$operationResult = $allianceService->processDueOperations();
+// 7. 仅在非冻结期派遣联盟协同作战 / Dispatch alliance operations only outside a freeze
+$operationResult = [
+    'success' => true,
+    'message' => '赛季冻结期间暂停 / Paused during the season freeze',
+    'data' => ['processed' => 0, 'dispatched' => 0]
+];
+if (!$worldFrozen) {
+    $allianceService = new AllianceService();
+    $operationResult = $allianceService->processDueOperations();
+}
 $operationData = isset($operationResult['data']) && is_array($operationResult['data'])
     ? $operationResult['data']
     : [];

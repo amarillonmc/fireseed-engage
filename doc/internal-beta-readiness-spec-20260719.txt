@@ -1,0 +1,79 @@
+种火集结号 - 内测准入与赛季机制实现规格（2026-07-19）
+Fireseed Engage - Internal Beta Readiness and Seasonal Mechanics Specification (2026-07-19)
+
+一、内测准入 / Internal beta gate
+
+1. 修复会阻断排行、地图、军队、领地和后台登录流程的确定性故障。
+   Fix deterministic failures blocking ranking, map, army, territory, and administrator login flows.
+2. 修复后台存储型脚本注入风险，并执行维护模式、关闭注册和最大玩家数配置。
+   Remove the stored-script-injection path in administration and enforce maintenance, registration, and player-cap settings.
+3. 强化会话、登录节流、登出、CSRF、生产错误输出和服务器内部目录保护。
+   Harden sessions, login throttling, logout, CSRF, production error output, and server-internal directory protection.
+4. 地图生成必须在失败时完整回滚，不得提交或报告残缺世界。
+   Map generation must roll back completely on failure and must never commit or report an incomplete world.
+
+二、跨赛季资产 / Cross-season assets
+
+1. 保留玩家账号、亮晶晶、夜静静、武将所有权与成长、技能卡及其成长、长期成长材料和永久科研。
+   Preserve accounts, Bright and Night Crystals, general ownership and progression, skill cards and progression, long-term materials, and permanent research.
+2. 保留同盟本体、基本资料、成员与职位。
+   Preserve alliance identity, profile, membership, and roles.
+3. 重置同盟等级、经验、成员贡献、申请、援助记录、协同作战、外交领地、附庸状态和赛季积分。
+   Reset alliance level, experience, member contribution, applications, aid records, operations, territorial diplomacy, vassalage, and seasonal scores.
+4. 技能点与长期成长道具保留；功勋与竞技场代币按赛季重置。
+   Preserve skill points and long-term progression items; reset merit and arena tokens each season.
+
+三、赛季资产与重建 / Seasonal assets and reconstruction
+
+1. 重置暖洋洋、冷冰冰、郁萌萌、昼闪闪、思考回路余额、城市、设施、士兵、军队、领地、分基地、赛季科研及赛季玩法进度。
+   Reset Warm, Cold, Green, and Day Crystals, current Circuit Points, cities, facilities, soldiers, armies, territories, sub-bases, seasonal research, and seasonal gameplay progress.
+2. 每个新赛季重新生成资源点与 NPC 分布，并重新分配玩家主城。
+   Regenerate resource and NPC distribution and reassign player main cities every season.
+3. 十二门保持在地图十二个钟表方向，银白之孔保持在地图正中央。
+   Keep the Twelve Gateways at the twelve clock directions and the Silver Hole at the exact map center.
+4. 每次赛季重建必须原子完成；任何失败均保留旧世界和旧赛季状态。
+   Every seasonal reconstruction must be atomic; any failure preserves the previous world and season state.
+
+四、资源经济 / Resource economy
+
+1. 亮晶晶和夜静静是可在游戏中获得、跨赛季保留的增值货币，不是付费货币。
+   Bright and Night Crystals are earnable, cross-season value currencies and are not paid currencies.
+2. 武将卡池只消耗亮晶晶；技能卡池只消耗夜静静；商店可同时使用二者。
+   General pools consume only Bright Crystals; skill-card pools consume only Night Crystals; the shop may use both.
+3. 普通建造、设施升级和赛季科研不得消耗亮晶晶或夜静静。
+   Ordinary construction, facility upgrades, and seasonal research must not consume Bright or Night Crystals.
+4. 主基地固定拥有亮、夜产出设施且可以升级；大地图亮、夜资源点显著少于其他四色资源点。
+   Every main base includes upgradeable Bright and Night production facilities; Bright and Night world resource nodes are substantially rarer than the other four.
+5. 每个新赛季向所有玩家发放一次可配置的亮、夜赛季开始奖励；新账号只领取一次账号初始资源。
+   Grant every player one configurable Bright and Night season-start reward per season; new accounts receive the account-start grant only once.
+6. 任务、成就和活动可以继续产出亮晶晶与夜静静。
+   Quests, achievements, and events may continue to award Bright and Night Crystals.
+
+五、科研与长期成长 / Research and long-term progression
+
+1. 赛季科研使用四种赛季资源，效果必须实际接入生产、存储、训练、建造或战斗，并在赛季结束时重置。
+   Seasonal research uses the four seasonal currencies, must affect production, storage, training, construction, or combat in runtime, and resets at season end.
+2. 永久科研使用亮晶晶与夜静静，效果跨赛季保留。
+   Permanent research uses Bright and Night Crystals and persists across seasons.
+3. 玩家等级不再作为成长系统；数据库字段仅为兼容保留。
+   Player level is no longer a progression system; its database field remains only for compatibility.
+4. 思考回路上限、武将 COST 上限和分基地上限改为基础值加永久科研效果。
+   Circuit capacity, general COST capacity, and sub-base capacity become base values plus permanent-research effects.
+
+六、地图、侦察与占领 / Map, scouting, and occupation
+
+1. 删除地图探索和战争迷雾；所有玩家开局即可查看全部地块的基础信息。
+   Remove map exploration and fog of war; every player may view every tile's basic information from the start.
+2. 敌方军队编成、驻军构成和城防细节继续由侦察系统保护。
+   Enemy army composition, garrison composition, and detailed city defense remain protected by scouting.
+3. 占领空地不消耗思考回路；占领资源地消耗可配置的思考回路。
+   Occupying empty land costs no Circuit Points; occupying a resource tile costs a configurable amount.
+4. 放弃资源地或将资源地改建为分基地时，全额返还其占领成本。
+   Abandoning a resource tile or converting it into a sub-base fully refunds its occupation cost.
+
+七、数值来源优先级 / Numeric source precedence
+
+1. 原始角色卡与技能数据文件优先于企划文档，企划文档优先于当前 SQL 种子。
+   Original general-card and skill data files take precedence over design documents, which take precedence over current SQL seeds.
+2. 尚未完成专项讨论的数值必须集中配置，并使用可替换的临时基准，不得散落为不可追踪的魔法数字。
+   Values awaiting dedicated balance review must be centrally configurable provisional baselines rather than scattered, untraceable magic numbers.

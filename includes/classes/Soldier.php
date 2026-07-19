@@ -603,27 +603,23 @@ class Soldier {
             $greenCost = isset($trainingCost['green']) ? (int) $trainingCost['green'] : 0;
             $dayCost = isset($trainingCost['day']) ? (int) $trainingCost['day'] : 0;
             $nightCost = isset($trainingCost['night']) ? (int) $trainingCost['night'] : 0;
-            $nowDate = date('Y-m-d H:i:s');
-
             $query = "UPDATE resources
                       SET bright_crystal = bright_crystal - ?,
                           warm_crystal = warm_crystal - ?,
                           cold_crystal = cold_crystal - ?,
                           green_crystal = green_crystal - ?,
                           day_crystal = day_crystal - ?,
-                          night_crystal = night_crystal - ?,
-                          last_update = ?
+                          night_crystal = night_crystal - ?
                       WHERE user_id = ?";
             $stmt = $db->prepare($query);
             $stmt->bind_param(
-                'iiiiiisi',
+                'iiiiiii',
                 $brightCost,
                 $warmCost,
                 $coldCost,
                 $greenCost,
                 $dayCost,
                 $nightCost,
-                $nowDate,
                 $userId
             );
             if (!$stmt->execute() || $stmt->affected_rows !== 1) {

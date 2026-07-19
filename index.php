@@ -66,6 +66,7 @@ $pageTitle = '主页';
                     <li><a href="internal.php">内政</a></li>
                     <li><a href="ranking.php">排名</a></li>
                     <li><a href="vassal.php">附属</a></li>
+                    <li><a href="logout.php">退出登录</a></li>
                     <li class="circuit-points">
                         <?php echo renderImageResource(
                             'resource_circuit_points',

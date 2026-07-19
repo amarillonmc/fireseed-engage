@@ -13,34 +13,68 @@ if (isset($_SESSION['user_id'])) {
 
 $error = '';
 $success = '';
+$username = '';
 
-// 处理登录请求
+// 处理登录请求 / Process an administrator login request
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
-    $username = $_POST['username'] ?? '';
-    $password = $_POST['password'] ?? '';
+    $username = isset($_POST['username']) && is_scalar($_POST['username'])
+        ? trim((string) $_POST['username'])
+        : '';
+    $password = isset($_POST['password']) && is_scalar($_POST['password'])
+        ? (string) $_POST['password']
+        : '';
     
-    if (empty($username) || empty($password)) {
+    if (!validateCsrfToken()) {
+        $error = '请求已过期，请刷新页面后重试 / Request expired; refresh and try again.';
+    } elseif (empty($username) || empty($password)) {
         $error = '请输入用户名和密码';
     } else {
-        $user = new User();
-        $loginResult = $user->login($username, $password);
-        
-        if ($loginResult === true) {
-            // 检查是否为管理员
-            if ($user->isAdmin()) {
-                // 记录管理员登录日志
-                $user->logAdminAction('admin_login');
-                header('Location: index.php');
-                exit;
-            } else {
-                $error = '您没有管理员权限';
-                // 登出普通用户
-                session_unset();
-                session_destroy();
-                session_start();
-            }
+        $throttle = AuthSecurity::getLoginThrottleStatus(
+            'administrator',
+            $username
+        );
+        if (empty($throttle['allowed'])) {
+            $retryMinutes = max(
+                1,
+                (int) ceil((int) $throttle['retry_after'] / 60)
+            );
+            $error = "登录尝试过多，请在 {$retryMinutes} 分钟后重试"
+                . " / Too many attempts; retry in {$retryMinutes} minute(s).";
         } else {
-            $error = $loginResult;
+            $user = new User();
+            $loginResult = $user->login($username, $password);
+
+            if (is_numeric($loginResult) && (int) $loginResult > 0) {
+                // 后台入口只接受管理员身份 / The admin entry accepts administrators only
+                if ($user->isValid() && $user->isAdmin()) {
+                    AuthSecurity::clearLoginFailures(
+                        'administrator',
+                        $username
+                    );
+                    if (AuthSecurity::establishAuthenticatedSession(
+                        $loginResult
+                    )) {
+                        $user->logAdminAction('admin_login');
+                        header('Location: index.php');
+                        exit;
+                    }
+                    $error = '无法建立安全会话，请稍后重试'
+                        . ' / Unable to establish a secure session; try again later.';
+                } else {
+                    AuthSecurity::recordLoginFailure(
+                        'administrator',
+                        $username
+                    );
+                    $error = '您没有管理员权限';
+                }
+            } else {
+                AuthSecurity::recordLoginFailure(
+                    'administrator',
+                    $username
+                );
+                $error = '管理员用户名或密码错误'
+                    . ' / Invalid administrator username or password.';
+            }
         }
     }
 }
@@ -223,16 +257,18 @@ $pageTitle = '管理员登录';
             </div>
             
             <form method="post">
+                <?php echo csrfField(); ?>
                 <div class="form-group">
                     <label class="form-label">管理员用户名</label>
                     <input type="text" name="username" class="form-input" 
-                           value="<?php echo htmlspecialchars($_POST['username'] ?? ''); ?>" 
-                           required autofocus>
+                           value="<?php echo escapeHtml($username); ?>"
+                           autocomplete="username" required autofocus>
                 </div>
                 
                 <div class="form-group">
                     <label class="form-label">密码</label>
-                    <input type="password" name="password" class="form-input" required>
+                    <input type="password" name="password" class="form-input"
+                           autocomplete="current-password" required>
                 </div>
                 
                 <button type="submit" class="login-button">登录管理后台</button>

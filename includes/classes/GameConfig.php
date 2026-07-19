@@ -224,7 +224,10 @@ class GameConfig {
      * @return bool
      */
     public function batchUpdate($configs) {
-        $this->db->autocommit(false);
+        $previousCache = self::$cache;
+        if (!$this->db->begin_transaction()) {
+            return false;
+        }
         $success = true;
         
         foreach ($configs as $key => $value) {
@@ -233,15 +236,27 @@ class GameConfig {
                 break;
             }
         }
-        
-        if ($success) {
-            $this->db->commit();
-        } else {
-            $this->db->rollback();
+
+        $playerLimitKeys = [
+            'initial_max_circuit_points',
+            'initial_max_general_cost',
+            'initial_subbase_limit'
+        ];
+        if ($success
+            && !empty(array_intersect(array_keys($configs), $playerLimitKeys))
+            && (!class_exists('TechnologyEffectService')
+                || !TechnologyEffectService
+                    ::synchronizeAllPlayerLimitsInCurrentTransaction())) {
+            $success = false;
         }
         
-        $this->db->autocommit(true);
-        return $success;
+        if (!$success || !$this->db->commit()) {
+            $this->db->rollback();
+            self::$cache = $previousCache;
+            return false;
+        }
+
+        return true;
     }
     
     /**
@@ -260,13 +275,27 @@ class GameConfig {
             'initial_green_crystal' => 1000,
             'initial_day_crystal' => 1000,
             'initial_night_crystal' => 1000,
+            'season_start_bright_grant' => 1000,
+            'season_start_night_grant' => 1000,
             'resource_production_rate' => 1.0,
+            'persistent_resource_production_multiplier' => 0.2,
             'building_speed_multiplier' => 1.0,
             'research_speed_multiplier' => 1.0,
             'training_speed_multiplier' => 1.0,
             'battle_damage_multiplier' => 1.0,
             'army_movement_speed' => 1.0,
             'general_recruitment_cost_multiplier' => 1.0,
+            'initial_circuit_points' => 1,
+            'initial_max_circuit_points' => 10,
+            'initial_max_general_cost' => 10.0,
+            'initial_subbase_limit' => 1,
+            'resource_territory_occupation_cost' => 2,
+            'map_resource_weight_bright' => 4,
+            'map_resource_weight_warm' => 23,
+            'map_resource_weight_cold' => 23,
+            'map_resource_weight_green' => 23,
+            'map_resource_weight_day' => 23,
+            'map_resource_weight_night' => 4,
             'vassal_release_resource_rate' => 0.70,
             'vassal_release_relocation_mode' => 'outer',
             'vassal_release_lose_all_territory' => 1,
@@ -274,8 +303,7 @@ class GameConfig {
             'image_display_mode' => 'image'
         ];
         
-        $success = true;
-        
+        $selectedDefaults = [];
         foreach ($defaults as $key => $value) {
             if ($category) {
                 // 检查配置是否属于指定分类
@@ -295,12 +323,11 @@ class GameConfig {
                 $checkStmt->close();
             }
             
-            if (!$this->set($key, $value)) {
-                $success = false;
-            }
+            $selectedDefaults[$key] = $value;
         }
-        
-        return $success;
+
+        return empty($selectedDefaults)
+            || $this->batchUpdate($selectedDefaults);
     }
     
     /**
@@ -322,12 +349,117 @@ class GameConfig {
             'max_players' => ['type' => 'int', 'min' => 1, 'max' => 10000],
             'new_player_registration' => ['type' => 'bool'],
             'maintenance_mode' => ['type' => 'bool'],
+            'initial_bright_crystal' => [
+                'type' => 'int',
+                'min' => 0,
+                'max' => 2000000000
+            ],
+            'initial_warm_crystal' => [
+                'type' => 'int',
+                'min' => 0,
+                'max' => 2000000000
+            ],
+            'initial_cold_crystal' => [
+                'type' => 'int',
+                'min' => 0,
+                'max' => 2000000000
+            ],
+            'initial_green_crystal' => [
+                'type' => 'int',
+                'min' => 0,
+                'max' => 2000000000
+            ],
+            'initial_day_crystal' => [
+                'type' => 'int',
+                'min' => 0,
+                'max' => 2000000000
+            ],
+            'initial_night_crystal' => [
+                'type' => 'int',
+                'min' => 0,
+                'max' => 2000000000
+            ],
+            'season_start_bright_grant' => [
+                'type' => 'int',
+                'min' => 0,
+                'max' => 2000000000
+            ],
+            'season_start_night_grant' => [
+                'type' => 'int',
+                'min' => 0,
+                'max' => 2000000000
+            ],
             'resource_production_rate' => ['type' => 'float', 'min' => 0.1, 'max' => 10.0],
+            'persistent_resource_production_multiplier' => [
+                'type' => 'float',
+                'min' => 0.0,
+                'max' => 1.0
+            ],
             'building_speed_multiplier' => ['type' => 'float', 'min' => 0.1, 'max' => 10.0],
+            'upgrade_speed_multiplier' => [
+                'type' => 'float',
+                'min' => 0.1,
+                'max' => 10.0
+            ],
             'research_speed_multiplier' => ['type' => 'float', 'min' => 0.1, 'max' => 10.0],
             'training_speed_multiplier' => ['type' => 'float', 'min' => 0.1, 'max' => 10.0],
             'battle_damage_multiplier' => ['type' => 'float', 'min' => 0.1, 'max' => 5.0],
             'army_movement_speed' => ['type' => 'float', 'min' => 0.1, 'max' => 10.0],
+            'initial_circuit_points' => [
+                'type' => 'int',
+                'min' => 0,
+                'max' => 1000000
+            ],
+            'initial_max_circuit_points' => [
+                'type' => 'int',
+                'min' => 1,
+                'max' => 1000000
+            ],
+            'initial_max_general_cost' => [
+                'type' => 'float',
+                'min' => 0.0,
+                'max' => 1000000.0
+            ],
+            'initial_subbase_limit' => [
+                'type' => 'int',
+                'min' => 0,
+                'max' => 10000
+            ],
+            'resource_territory_occupation_cost' => [
+                'type' => 'int',
+                'min' => 0,
+                'max' => 1000000
+            ],
+            'map_resource_weight_bright' => [
+                'type' => 'int',
+                'min' => 0,
+                'max' => 1000000
+            ],
+            'map_resource_weight_warm' => [
+                'type' => 'int',
+                'min' => 0,
+                'max' => 1000000
+            ],
+            'map_resource_weight_cold' => [
+                'type' => 'int',
+                'min' => 0,
+                'max' => 1000000
+            ],
+            'map_resource_weight_green' => [
+                'type' => 'int',
+                'min' => 0,
+                'max' => 1000000
+            ],
+            'map_resource_weight_day' => [
+                'type' => 'int',
+                'min' => 0,
+                'max' => 1000000
+            ],
+            'map_resource_weight_night' => [
+                'type' => 'int',
+                'min' => 0,
+                'max' => 1000000
+            ],
             'victory_condition_days' => ['type' => 'int', 'min' => 1, 'max' => 365],
             'vassal_release_resource_rate' => ['type' => 'float', 'min' => 0.0, 'max' => 1.0],
             'vassal_release_relocation_mode' => [

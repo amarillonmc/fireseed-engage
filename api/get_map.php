@@ -56,6 +56,7 @@ $viewerForceOwnerId = $vassalService->getEffectiveForceOwnerId(
     (int) $_SESSION['user_id']
 );
 $forceCache = [];
+$ownerNameCache = [];
 
 // 准备返回数据
 $tileData = [];
@@ -109,9 +110,14 @@ foreach ($tiles as $tile) {
             $data['owner_id'] = $ownerId;
             
             // 获取拥有者名称
-            $owner = new User($ownerId);
-            if ($owner->isValid()) {
-                $data['owner_name'] = $owner->getUsername();
+            if (!array_key_exists((int) $ownerId, $ownerNameCache)) {
+                $owner = new User($ownerId);
+                $ownerNameCache[(int) $ownerId] = $owner->isValid()
+                    ? $owner->getUsername()
+                    : '';
+            }
+            if ($ownerNameCache[(int) $ownerId] !== '') {
+                $data['owner_name'] = $ownerNameCache[(int) $ownerId];
             }
 
             // 物理领主继续经营领地，但地图同时公开其排行榜势力归属。 / The physical owner keeps operating the tile while the map also exposes its ranking-force attribution.

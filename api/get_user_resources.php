@@ -72,9 +72,17 @@ try {
         'resources' => $resources
     ]);
 
-} catch (Exception $e) {
+} catch (Throwable $e) {
+    // 记录内部原因，避免向玩家泄露数据库细节 / Log the internal cause without exposing database details
+    error_log(
+        'Resource endpoint failed for user '
+        . (int) $_SESSION['user_id']
+        . ': '
+        . $e->getMessage()
+    );
+    http_response_code(500);
     echo json_encode([
         'success' => false,
-        'message' => '服务器错误: ' . $e->getMessage()
+        'message' => '服务器暂时无法读取资源，请稍后重试'
     ]);
 }

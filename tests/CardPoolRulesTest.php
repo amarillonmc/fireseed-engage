@@ -75,6 +75,42 @@ try {
         ),
         '多抽成本必须逐项相乘 / Multi-draw costs must multiply every component'
     );
+    assertPoolSame(
+        ['bright' => 500],
+        CardPoolService::normalizePoolCostBundle(
+            'general',
+            ['bright' => 500]
+        ),
+        '武将卡池应只允许亮晶晶 / General pools should allow only Bright Crystals'
+    );
+    assertPoolSame(
+        ['night' => 250],
+        CardPoolService::normalizePoolCostBundle(
+            'skill',
+            ['night' => 250]
+        ),
+        '技能卡池应只允许夜静静 / Skill pools should allow only Night Crystals'
+    );
+    assertPoolThrows(
+        InvalidArgumentException::class,
+        function() {
+            CardPoolService::normalizePoolCostBundle(
+                'general',
+                ['bright' => 500, 'warm' => 1]
+            );
+        },
+        '武将卡池不得混入赛季资源 / General pools must reject seasonal resources'
+    );
+    assertPoolThrows(
+        InvalidArgumentException::class,
+        function() {
+            CardPoolService::normalizePoolCostBundle(
+                'skill',
+                ['bright' => 250]
+            );
+        },
+        '技能卡池不得消耗亮晶晶 / Skill pools must reject Bright Crystals'
+    );
 
     $entries = [
         ['resource_id' => 11, 'weight' => 2],

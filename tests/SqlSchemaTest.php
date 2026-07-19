@@ -6,17 +6,31 @@ $freshPath = $root . '/sql/gameplay_expansion.sql';
 $upgradePath = $root . '/sql/upgrade_20260717_gameplay_expansion.sql';
 $cardPoolUpgradePath = $root . '/sql/upgrade_20260717_card_pool_resources.sql';
 $imageUpgradePath = $root . '/sql/upgrade_20260718_image_resources.sql';
+$worldSeasonUpgradePath =
+    $root . '/sql/upgrade_20260719_world_season.sql';
+$researchEconomyUpgradePath =
+    $root . '/sql/upgrade_20260719_research_economy.sql';
 $gameConfigPath = $root . '/sql/game_config.sql';
+$usersPath = $root . '/sql/users.sql';
+$technologiesPath = $root . '/sql/technologies.sql';
 $freshSql = file_get_contents($freshPath);
 $baseUpgradeSql = file_get_contents($upgradePath);
 $cardPoolUpgradeSql = file_get_contents($cardPoolUpgradePath);
 $imageUpgradeSql = file_get_contents($imageUpgradePath);
+$worldSeasonUpgradeSql = file_get_contents($worldSeasonUpgradePath);
+$researchEconomyUpgradeSql = file_get_contents($researchEconomyUpgradePath);
 $gameConfigSql = file_get_contents($gameConfigPath);
+$usersSql = file_get_contents($usersPath);
+$technologiesSql = file_get_contents($technologiesPath);
 $upgradeSql = $baseUpgradeSql === false
     || $cardPoolUpgradeSql === false
     || $imageUpgradeSql === false
+    || $worldSeasonUpgradeSql === false
+    || $researchEconomyUpgradeSql === false
     ? false
-    : $baseUpgradeSql . "\n" . $cardPoolUpgradeSql . "\n" . $imageUpgradeSql;
+    : $baseUpgradeSql . "\n" . $cardPoolUpgradeSql . "\n"
+        . $imageUpgradeSql . "\n" . $worldSeasonUpgradeSql . "\n"
+        . $researchEconomyUpgradeSql;
 $assertions = 0;
 
 /**
@@ -105,7 +119,17 @@ assertSql($freshSql !== false, 'Fresh expansion SQL must be readable');
 assertSql($baseUpgradeSql !== false, 'Base gameplay upgrade SQL must be readable');
 assertSql($cardPoolUpgradeSql !== false, 'Card-pool resource upgrade SQL must be readable');
 assertSql($imageUpgradeSql !== false, 'Image-resource upgrade SQL must be readable');
+assertSql(
+    $worldSeasonUpgradeSql !== false,
+    'World and season upgrade SQL must be readable'
+);
+assertSql(
+    $researchEconomyUpgradeSql !== false,
+    'Research and economy upgrade SQL must be readable'
+);
 assertSql($gameConfigSql !== false, 'Fresh game configuration SQL must be readable');
+assertSql($usersSql !== false, 'Fresh users SQL must be readable');
+assertSql($technologiesSql !== false, 'Fresh technologies SQL must be readable');
 assertSql($upgradeSql !== false, 'Complete upgrade chain must be readable');
 assertSql(hasBalancedSqlParentheses($freshSql), 'Fresh expansion SQL parentheses must balance');
 assertSql(hasBalancedSqlParentheses($upgradeSql), 'Upgrade SQL parentheses must balance');
@@ -120,6 +144,80 @@ assertSql(
     ) !== false
         && strpos($gameConfigSql, "'display')") !== false,
     'Fresh configuration must default the global image mode to image'
+);
+assertSql(
+    strpos($gameConfigSql, "('game_version', '0.1.0-beta'") !== false,
+    'Fresh configuration must identify the internal-beta version'
+);
+assertSql(
+    strpos(
+        $gameConfigSql,
+        "'migration_20260719_world_season', 'complete'"
+    ) !== false
+        && strpos(
+            $gameConfigSql,
+            "'migration_20260719_research_economy', 'complete'"
+        ) !== false,
+    'Fresh installations must mark both 20260719 data migrations complete'
+);
+assertSql(
+    strpos($usersSql, '`email` varchar(254) NOT NULL') !== false,
+    'Fresh user email storage must match the accepted address length'
+);
+assertSql(
+    strpos(
+        $technologiesSql,
+        "`effect_key` varchar(64) NOT NULL DEFAULT ''"
+    ) !== false,
+    'Fresh technology effect keys must default consistently with runtime seeds'
+);
+foreach ([
+    'world and season' => [
+        $worldSeasonUpgradeSql,
+        'migration_20260719_world_season'
+    ],
+    'research and economy' => [
+        $researchEconomyUpgradeSql,
+        'migration_20260719_research_economy'
+    ]
+] as $migrationName => $migrationData) {
+    [$migrationSql, $markerKey] = $migrationData;
+    assertSql(
+        strpos($migrationSql, 'START TRANSACTION;') !== false
+            && strpos($migrationSql, 'FOR UPDATE;') !== false
+            && strpos($migrationSql, $markerKey) !== false
+            && strpos(
+                $migrationSql,
+                'ON DUPLICATE KEY UPDATE'
+            ) !== false
+            && strrpos($migrationSql, 'COMMIT;')
+                > strrpos($migrationSql, $markerKey),
+        "{$migrationName} migration must lock and atomically persist its completion marker"
+    );
+}
+assertSql(
+    strpos(
+        $researchEconomyUpgradeSql,
+        "technology.`name` = '资源存储提升'"
+    ) !== false
+        && strpos(
+            $researchEconomyUpgradeSql,
+            'user_tech.`level` >= technology.`max_level`'
+        ) !== false
+        && strpos(
+            $researchEconomyUpgradeSql,
+            'user_tech.`research_time` = NULL'
+        ) !== false
+        && preg_match(
+            '/UPDATE\s+`users`\s+AS\s+player.*?'
+            . 'WHERE\s+@fireseed_research_economy_complete\s*=\s*0;/is',
+            $researchEconomyUpgradeSql
+        ) === 1
+        && strpos(
+            $researchEconomyUpgradeSql,
+            'player.`circuit_points` = LEAST'
+        ) === false,
+    'One-time research migration must clamp legacy storage levels, gate cap materialization, and preserve Circuit balances'
 );
 assertSql(
     strpos(

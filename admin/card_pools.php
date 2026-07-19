@@ -237,6 +237,7 @@ function adminPoolValidateMetadata(array $input, $includeIdentity) {
         if (!in_array($poolType, ['general', 'skill'], true)) {
             throw new InvalidArgumentException('卡池类型无效');
         }
+        CardPoolService::normalizePoolCostBundle($poolType, $cost);
         $data['pool_code'] = $poolCode;
         $data['pool_type'] = $poolType;
     }
@@ -350,7 +351,10 @@ function adminPoolLoadActiveResource($db, $poolType, $resourceId) {
  * @return void
  */
 function adminPoolValidatePublishable($db, array $pool) {
-    CardPoolService::normalizeCostBundle((string) $pool['cost_json']);
+    CardPoolService::normalizePoolCostBundle(
+        (string) $pool['pool_type'],
+        (string) $pool['cost_json']
+    );
     CardPoolService::normalizeAllowedCounts(
         (string) $pool['allowed_counts_json']
     );
@@ -698,6 +702,10 @@ if (isset($_SERVER['REQUEST_METHOD'])
                 lockResourceAdministrationBoundary($db);
                 $pool = adminPoolLoadForUpdate($db, $poolId);
                 adminPoolRequireEditable($adminManager, $pool);
+                CardPoolService::normalizePoolCostBundle(
+                    (string) $pool['pool_type'],
+                    $data['cost_json']
+                );
                 $changed = adminPoolMetadataChanged($pool, $data);
 
                 if ($changed) {

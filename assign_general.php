@@ -31,43 +31,62 @@ if (!$general->isValid() || $general->getOwnerId() != $user->getUserId()) {
     exit;
 }
 
-// 处理分配请求
+// 分配与取消分配都要求POST与CSRF令牌 / Assignment and unassignment both require POST and CSRF
 $assignResult = null;
-if (isset($_POST['action']) && $_POST['action'] == 'assign') {
-    $assignmentType = isset($_POST['assignment_type']) ? $_POST['assignment_type'] : '';
-    $targetId = isset($_POST['target_id']) ? intval($_POST['target_id']) : 0;
-    
-    if (!empty($assignmentType) && $targetId > 0) {
-        if ($general->assignGeneral($assignmentType, $targetId)) {
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && !validateCsrfToken()) {
+    $assignResult = [
+        'success' => false,
+        'message' => '请求已过期，请刷新页面后重试'
+            . ' / Request expired; refresh and try again.'
+    ];
+} elseif ($_SERVER['REQUEST_METHOD'] === 'POST') {
+    $action = isset($_POST['action']) && is_scalar($_POST['action'])
+        ? (string) $_POST['action']
+        : '';
+
+    if ($action === 'assign') {
+        $assignmentType = isset($_POST['assignment_type'])
+            && is_scalar($_POST['assignment_type'])
+            ? (string) $_POST['assignment_type']
+            : '';
+        $targetId = isset($_POST['target_id'])
+            ? intval($_POST['target_id'])
+            : 0;
+
+        if (!empty($assignmentType) && $targetId > 0) {
+            if ($general->assignGeneral($assignmentType, $targetId)) {
+                $assignResult = [
+                    'success' => true,
+                    'message' => '武将分配成功！'
+                ];
+            } else {
+                $assignResult = [
+                    'success' => false,
+                    'message' => '武将分配失败，请稍后再试。'
+                ];
+            }
+        } else {
+            $assignResult = [
+                'success' => false,
+                'message' => '参数错误，无法分配武将。'
+            ];
+        }
+    } elseif ($action === 'unassign') {
+        if ($general->unassignGeneral()) {
             $assignResult = [
                 'success' => true,
-                'message' => '武将分配成功！'
+                'message' => '取消分配成功！'
             ];
         } else {
             $assignResult = [
                 'success' => false,
-                'message' => '武将分配失败，请稍后再试。'
+                'message' => '取消分配失败，请稍后再试。'
             ];
         }
     } else {
         $assignResult = [
             'success' => false,
-            'message' => '参数错误，无法分配武将。'
-        ];
-    }
-}
-
-// 处理取消分配请求
-if (isset($_POST['action']) && $_POST['action'] == 'unassign') {
-    if ($general->unassignGeneral()) {
-        $assignResult = [
-            'success' => true,
-            'message' => '取消分配成功！'
-        ];
-    } else {
-        $assignResult = [
-            'success' => false,
-            'message' => '取消分配失败，请稍后再试。'
+            'message' => '未知操作 / Unknown operation.'
         ];
     }
 }
@@ -359,6 +378,7 @@ $pageTitle = '分配武将 - ' . $general->getName();
                     <p>该武将当前已分配到 <?php echo $assignmentType == 'city' ? '城池' : '军队'; ?>: <strong><?php echo $targetName; ?></strong></p>
                     
                     <form method="post">
+                        <?php echo csrfField(); ?>
                         <input type="hidden" name="action" value="unassign">
                         <button type="submit" class="unassign-button">取消分配</button>
                     </form>
@@ -369,6 +389,7 @@ $pageTitle = '分配武将 - ' . $general->getName();
                     
                     <div class="assignment-form">
                         <form method="post" id="assign-form">
+                            <?php echo csrfField(); ?>
                             <input type="hidden" name="action" value="assign">
                             
                             <div class="form-group">

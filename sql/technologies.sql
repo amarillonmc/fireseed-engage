@@ -9,6 +9,10 @@ CREATE TABLE `technologies` (
   `base_cost` text NOT NULL,
   `level_coefficient` float NOT NULL,
   `max_level` int(11) NOT NULL,
+  `scope` enum('seasonal','permanent') NOT NULL DEFAULT 'seasonal',
+  `effect_key` varchar(64) NOT NULL DEFAULT '',
   PRIMARY KEY (`tech_id`),
-  UNIQUE KEY `name` (`name`)
+  UNIQUE KEY `name` (`name`),
+  KEY `scope` (`scope`),
+  KEY `effect_key` (`effect_key`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;

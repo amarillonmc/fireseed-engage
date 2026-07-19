@@ -163,60 +163,48 @@ class AdminManager {
     }
     
     /**
-     * 修改用户等级
-     * @param int $userId 用户ID
-     * @param int $level 新等级
-     * @return bool
+     * 修改用户思考回路余额并重算派生上限 / Update Circuit balance and rematerialize derived caps
+     *
+     * @param int $userId 用户ID / User ID
+     * @param int $circuitPoints 思考回路点数 / Circuit balance
+     * @return bool 是否成功 / Whether the update succeeded
      */
-    public function updateUserLevel($userId, $level) {
+    public function updateUserCircuitPoints($userId, $circuitPoints) {
         if (!$this->hasPermission('edit_user_basic')) {
             return false;
         }
-        
-        if ($level < 1 || $level > 100) {
+
+        $limits = TechnologyEffectService::getDerivedPlayerLimits($userId);
+        $maxCircuitPoints = (int) $limits['max_circuit_points'];
+        $maxGeneralCost = (float) $limits['max_general_cost'];
+        if ($circuitPoints < 0 || $circuitPoints > $maxCircuitPoints) {
             return false;
         }
-        
-        $query = "UPDATE users SET level = ? WHERE user_id = ?";
+
+        $query = "UPDATE users
+                  SET circuit_points = ?, max_circuit_points = ?,
+                      max_general_cost = ?
+                  WHERE user_id = ?";
         $stmt = $this->db->prepare($query);
-        $stmt->bind_param('ii', $level, $userId);
+        $stmt->bind_param(
+            'iidi',
+            $circuitPoints,
+            $maxCircuitPoints,
+            $maxGeneralCost,
+            $userId
+        );
         $result = $stmt->execute();
         $stmt->close();
-        
+
         if ($result) {
-            $this->currentAdmin->logAdminAction('update_user_level', 'user', $userId, "New level: $level");
+            $this->currentAdmin->logAdminAction(
+                'update_user_circuit_points',
+                'user',
+                $userId,
+                "Circuit: $circuitPoints/$maxCircuitPoints"
+            );
         }
-        
-        return $result;
-    }
-    
-    /**
-     * 修改用户思考回路
-     * @param int $userId 用户ID
-     * @param int $circuitPoints 思考回路点数
-     * @param int $maxCircuitPoints 最大思考回路点数
-     * @return bool
-     */
-    public function updateUserCircuitPoints($userId, $circuitPoints, $maxCircuitPoints) {
-        if (!$this->hasPermission('edit_user_basic')) {
-            return false;
-        }
-        
-        if ($circuitPoints < 0 || $maxCircuitPoints < 1 || $circuitPoints > $maxCircuitPoints) {
-            return false;
-        }
-        
-        $query = "UPDATE users SET circuit_points = ?, max_circuit_points = ? WHERE user_id = ?";
-        $stmt = $this->db->prepare($query);
-        $stmt->bind_param('iii', $circuitPoints, $maxCircuitPoints, $userId);
-        $result = $stmt->execute();
-        $stmt->close();
-        
-        if ($result) {
-            $this->currentAdmin->logAdminAction('update_user_circuit_points', 'user', $userId, 
-                "Circuit: $circuitPoints/$maxCircuitPoints");
-        }
-        
+
         return $result;
     }
     

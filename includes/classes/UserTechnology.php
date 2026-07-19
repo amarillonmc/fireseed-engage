@@ -113,7 +113,7 @@ class UserTechnology {
         }
 
         $technology = new Technology($this->techId);
-        if (!$technology->isValid()) {
+        if (!$technology->isValid() || !$technology->hasValidCostPolicy()) {
             return false;
         }
 
@@ -155,9 +155,14 @@ class UserTechnology {
             }
 
             // 锁内重读等级与队列，避免重复研究或使用旧等级价格 / Reload level and queue under lock to prevent duplicate research or stale pricing
-            $query = "SELECT level, research_time
-                      FROM user_technologies
-                      WHERE user_id = ? AND tech_id = ?
+            $query = "SELECT user_tech.level,
+                             user_tech.research_time,
+                             technology.max_level
+                      FROM user_technologies AS user_tech
+                      INNER JOIN technologies AS technology
+                        ON technology.tech_id = user_tech.tech_id
+                      WHERE user_tech.user_id = ?
+                        AND user_tech.tech_id = ?
                       FOR UPDATE";
             $stmt = $this->db->prepare($query);
             $userId = (int) $this->userId;
@@ -227,8 +232,7 @@ class UserTechnology {
                           cold_crystal = cold_crystal - ?,
                           green_crystal = green_crystal - ?,
                           day_crystal = day_crystal - ?,
-                          night_crystal = night_crystal - ?,
-                          last_update = NOW()
+                          night_crystal = night_crystal - ?
                       WHERE user_id = ?";
             $stmt = $this->db->prepare($query);
             $stmt->bind_param(
@@ -312,9 +316,14 @@ class UserTechnology {
         try {
             lockSeasonForWorldAction($this->db);
 
-            $query = "SELECT level, research_time
-                      FROM user_technologies
-                      WHERE user_id = ? AND tech_id = ?
+            $query = "SELECT user_tech.level,
+                             user_tech.research_time,
+                             technology.max_level
+                      FROM user_technologies AS user_tech
+                      INNER JOIN technologies AS technology
+                        ON technology.tech_id = user_tech.tech_id
+                      WHERE user_tech.user_id = ?
+                        AND user_tech.tech_id = ?
                       FOR UPDATE";
             $stmt = $this->db->prepare($query);
             $userId = (int) $this->userId;
@@ -331,7 +340,32 @@ class UserTechnology {
                 return false;
             }
 
-            $newLevel = max(0, (int) $row['level']) + 1;
+            $currentLevel = max(0, (int) $row['level']);
+            $maxLevel = max(0, (int) $row['max_level']);
+            if ($currentLevel >= $maxLevel) {
+                // 运营调整上限后取消已经失效的旧队列。 / Cancel a stale queue when an operator lowers the technology cap.
+                $query = "UPDATE user_technologies
+                          SET research_time = NULL
+                          WHERE user_id = ? AND tech_id = ?
+                            AND research_time IS NOT NULL";
+                $stmt = $this->db->prepare($query);
+                $stmt->bind_param('ii', $userId, $techId);
+                $cleared = $stmt->execute()
+                    && $stmt->affected_rows === 1;
+                $stmt->close();
+                if (!$cleared) {
+                    throw new RuntimeException(
+                        '无法清除失效研究队列 / Failed to clear stale research'
+                    );
+                }
+
+                $this->db->commit();
+                $this->level = $currentLevel;
+                $this->researchTime = null;
+                return false;
+            }
+
+            $newLevel = min($maxLevel, $currentLevel + 1);
             $query = "UPDATE user_technologies
                       SET level = ?, research_time = NULL
                       WHERE user_id = ? AND tech_id = ?
@@ -344,6 +378,17 @@ class UserTechnology {
             if (!$completed) {
                 throw new RuntimeException(
                     '研究队列状态已经变化 / Research queue state changed'
+                );
+            }
+
+            TechnologyEffectService::clearUserCache($userId);
+            $completedTechnology = new Technology($techId);
+            if ($completedTechnology->isValid()
+                && $completedTechnology->getScope()
+                    === TechnologyEffectService::SCOPE_PERMANENT
+                && !TechnologyEffectService::synchronizePlayerLimits($userId)) {
+                throw new RuntimeException(
+                    '同步永久科研上限失败 / Failed to synchronize permanent research caps'
                 );
             }
 
@@ -458,7 +503,8 @@ class UserTechnology {
     public static function getUserTechnologyEffects($userId, $category = null) {
         $db = Database::getInstance()->getConnection();
         
-        $query = "SELECT ut.tech_id, ut.level, t.name, t.category, t.base_effect, t.level_coefficient 
+        $query = "SELECT ut.tech_id, ut.level, t.name, t.category,
+                         t.scope, t.effect_key, t.base_effect
                   FROM user_technologies ut 
                   JOIN technologies t ON ut.tech_id = t.tech_id 
                   WHERE ut.user_id = ? AND ut.level > 0";
@@ -480,11 +526,16 @@ class UserTechnology {
         $effects = [];
         if ($result) {
             while ($row = $result->fetch_assoc()) {
-                $effectValue = $row['base_effect'] * (1 + $row['level'] * $row['level_coefficient']);
+                $effectValue = TechnologyEffectService::calculateEffectAtLevel(
+                    $row['base_effect'],
+                    $row['level']
+                );
                 $effects[] = [
                     'tech_id' => $row['tech_id'],
                     'name' => $row['name'],
                     'category' => $row['category'],
+                    'scope' => $row['scope'],
+                    'effect_key' => $row['effect_key'],
                     'level' => $row['level'],
                     'effect_value' => $effectValue
                 ];

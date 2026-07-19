@@ -1,5 +1,5 @@
 <?php
-// 种火集结号 - 地图生成器类
+// 种火集结号 - 地图生成器类 / Fireseed Engage - map generator
 
 class MapGenerator {
     private $db;
@@ -12,95 +12,189 @@ class MapGenerator {
     }
     
     /**
-     * 生成新地图
-     * @param bool $clearExisting 是否清除现有地图
-     * @return bool|string 成功返回true，失败返回错误信息
+     * 生成新地图 / Generate a new map
+     * @param bool $clearExisting 是否清除现有地图 / Whether to replace an existing map
+     * @return bool|string 成功返回true，失败返回错误信息 / True on success or an error message
      */
     public function generateMap($clearExisting = false) {
-        // 检查是否已有地图
-        $query = "SELECT COUNT(*) as count FROM map_tiles";
-        $result = executePreparedSql($this->db, $query);
-        $row = $result->fetch_assoc();
-        
-        if ($row['count'] > 0) {
-            if (!$clearExisting) {
+        $this->db->begin_transaction();
+
+        try {
+            $query = "SELECT COUNT(*) AS count FROM map_tiles";
+            $result = executePreparedSql($this->db, $query);
+            if (!$result) {
+                throw new RuntimeException(
+                    '无法检查现有地图 / Failed to inspect the existing map'
+                );
+            }
+            $row = $result->fetch_assoc();
+            $hasExistingMap = $row && (int) $row['count'] > 0;
+            if ($hasExistingMap && !$clearExisting) {
+                $this->db->rollback();
                 return '地图已存在，请先清除现有地图或设置clearExisting参数为true';
             }
-            
-            // 清除特殊地点与地图，兼容外键约束 / Clear sites and tiles while respecting foreign keys
-            $this->deleteWorldSitesIfPresent();
-            $clearQuery = "DELETE FROM map_tiles";
-            if (!executePreparedSql($this->db, $clearQuery)) {
-                return '清除现有地图失败';
+            if ($hasExistingMap) {
+                // 删除与重建必须处于同一事务，任何生成失败都会恢复旧世界。
+                // Deletion and regeneration share one transaction so every
+                // generation failure restores the former world.
+                $this->clearExistingWorld();
+            } else {
+                $this->assertNoExistingCities();
             }
-        }
-        
-        // 开始事务 / Begin transaction
-        $this->db->begin_transaction();
-        
-        try {
-            // 生成空地
-            $this->generateEmptyTiles();
-            
-            // 生成资源点
-            $this->generateResourcePoints();
-            
-            // 生成NPC城池
-            $this->generateNpcForts();
-            
-            // 生成特殊地点
-            $this->generateSpecialPoints();
-            
+
+            $this->generateWorldContents();
             $this->db->commit();
             return true;
-        } catch (Exception $e) {
+        } catch (Throwable $e) {
             $this->db->rollback();
             return '生成地图失败: ' . $e->getMessage();
         }
     }
-    
+
     /**
-     * 生成空地
+     * 在调用者事务中重建整个世界 / Regenerate the world inside the caller's transaction
+     *
+     * 调用者负责开始、提交和回滚事务。本方法绝不自行提交，因此可安全地与赛季
+     * 资源、城池及进度重置保持原子性。
+     * The caller owns begin, commit, and rollback. This method never commits,
+     * allowing season resources, cities, progress, and world replacement to
+     * remain atomic.
+     *
+     * @return void
+     */
+    public function regenerateMapInCurrentTransaction() {
+        $this->clearExistingWorld();
+        $this->generateWorldContents();
+    }
+
+    /**
+     * 生成世界内容 / Generate all world contents
+     * @return void
+     */
+    private function generateWorldContents() {
+        $this->generateEmptyTiles();
+        $this->generateResourcePoints();
+        $this->generateNpcForts();
+        $this->generateSpecialPoints();
+    }
+
+    /**
+     * 清除现有世界 / Clear the existing world
+     * @return void
+     */
+    private function clearExistingWorld() {
+        $this->assertNoExistingCities();
+        $this->deleteWorldSitesIfPresent();
+        if (!executePreparedSql($this->db, "DELETE FROM map_tiles")) {
+            throw new RuntimeException(
+                '清除现有地图失败 / Failed to clear the existing map'
+            );
+        }
+    }
+
+    /**
+     * 拒绝会孤立现有城池的地图替换 / Reject a world replacement that would orphan cities
+     * @return void
+     */
+    private function assertNoExistingCities() {
+        // 城池以坐标关联地图而非外键；先拒绝会制造孤儿城池的独立清图。
+        // Cities reference the map by coordinates rather than a foreign key,
+        // so reject standalone clears that would orphan live cities.
+        $result = executePreparedSql(
+            $this->db,
+            "SELECT COUNT(*) AS count FROM cities"
+        );
+        if (!$result) {
+            throw new RuntimeException(
+                '无法检查现有城池 / Failed to inspect existing cities'
+            );
+        }
+        $row = $result->fetch_assoc();
+        if ($row && (int) $row['count'] > 0) {
+            throw new RuntimeException(
+                '存在玩家城池，必须通过赛季重建替换世界 / Player cities exist; rebuild the world through the season lifecycle'
+            );
+        }
+    }
+
+    /**
+     * 生成空地 / Generate empty tiles
+     * @return void
      */
     private function generateEmptyTiles() {
-        // 创建批量插入语句
+        // 新世界从第一刻起全图可见。 / A new world is visible in full from its first moment.
         $query = "INSERT INTO map_tiles (x, y, type, is_visible) VALUES ";
         $values = [];
         
         for ($x = 0; $x < MAP_WIDTH; $x++) {
             for ($y = 0; $y < MAP_HEIGHT; $y++) {
-                $values[] = "($x, $y, 'empty', 0)";
+                $values[] = "($x, $y, 'empty', 1)";
                 
-                // 每1000个格子执行一次插入，避免插入语句过长
+                // 每1000个格子执行一次插入，避免插入语句过长。 / Insert in chunks to bound statement size.
                 if (count($values) >= 1000) {
                     $insertQuery = $query . implode(',', $values);
-                    executePreparedSql($this->db, $insertQuery);
+                    if (!executePreparedSql($this->db, $insertQuery)) {
+                        throw new RuntimeException(
+                            '生成空地图格失败 / Failed to generate empty tiles'
+                        );
+                    }
                     $values = [];
                 }
             }
         }
         
-        // 插入剩余的格子
+        // 插入剩余的格子。 / Insert the final partial chunk.
         if (!empty($values)) {
             $insertQuery = $query . implode(',', $values);
-            executePreparedSql($this->db, $insertQuery);
+            if (!executePreparedSql($this->db, $insertQuery)) {
+                throw new RuntimeException(
+                    '生成空地图格失败 / Failed to generate empty tiles'
+                );
+            }
         }
     }
     
     /**
-     * 生成资源点
+     * 生成资源点 / Generate resource points
+     * @return void
      */
     private function generateResourcePoints() {
-        // 资源点类型 / Resource point types
-        $resourceTypes = ['bright', 'warm', 'cold', 'green', 'day', 'night'];
+        // 亮、夜是可跨赛季积累的稀有资源，默认权重明显低于四种赛季资源。
+        // Bright and night persist across seasons, so their default node
+        // weights are intentionally much lower than the four seasonal types.
+        $defaultWeights = [
+            'bright' => 4,
+            'warm' => 23,
+            'cold' => 23,
+            'green' => 23,
+            'day' => 23,
+            'night' => 4
+        ];
+        $weights = [];
+        foreach ($defaultWeights as $type => $defaultWeight) {
+            $weights[$type] = max(
+                0,
+                min(
+                    1000000,
+                    (int) $this->readNumericConfig(
+                        'map_resource_weight_' . $type,
+                        $defaultWeight
+                    )
+                )
+            );
+        }
 
-        // 资源点约占地图的一半，并在六系之间均分 / Resource points cover about half the map
+        // 资源点约占地图的一半；权重只负责六系之间的份额。 / Nodes cover half the map; weights split that total among types.
         $totalResourcePoints = (int) floor((MAP_WIDTH * MAP_HEIGHT) * 0.50);
-        $baseQuota = (int) floor($totalResourcePoints / count($resourceTypes));
-        $remainder = $totalResourcePoints % count($resourceTypes);
+        $quotas = self::calculateWeightedQuotas(
+            $totalResourcePoints,
+            $weights
+        );
 
-        foreach ($resourceTypes as $index => $type) {
-            $quota = $baseQuota + ($index < $remainder ? 1 : 0);
+        foreach ($quotas as $type => $quota) {
+            if ($quota <= 0) {
+                continue;
+            }
             $escapedType = $this->db->real_escape_string($type);
             $query = "UPDATE map_tiles
                       SET type = 'resource', subtype = '$escapedType',
@@ -112,6 +206,90 @@ class MapGenerator {
                 throw new RuntimeException('生成资源点失败 / Failed to generate resource points');
             }
         }
+    }
+
+    /**
+     * 按非负权重完整分配整数配额 / Allocate an integer total across non-negative weights
+     * @param int $total 总配额 / Total quota
+     * @param array $weights 名称到权重 / Name-to-weight map
+     * @return array 名称到整数配额 / Name-to-integer quota map
+     */
+    public static function calculateWeightedQuotas($total, $weights) {
+        $total = max(0, (int) $total);
+        $normalized = [];
+        foreach ((array) $weights as $name => $weight) {
+            $normalized[(string) $name] = max(0.0, (float) $weight);
+        }
+        if (empty($normalized)) {
+            return [];
+        }
+
+        $weightTotal = array_sum($normalized);
+        if ($weightTotal <= 0) {
+            foreach ($normalized as $name => $weight) {
+                $normalized[$name] = 1.0;
+            }
+            $weightTotal = (float) count($normalized);
+        }
+
+        $quotas = [];
+        $fractions = [];
+        $assigned = 0;
+        foreach ($normalized as $name => $weight) {
+            $exact = $total * $weight / $weightTotal;
+            $quota = (int) floor($exact);
+            $quotas[$name] = $quota;
+            $fractions[$name] = $exact - $quota;
+            $assigned += $quota;
+        }
+
+        // 最大余数法保证配额和精确等于总数，并以名称稳定打破平局。
+        // The largest-remainder method preserves the exact total and uses
+        // names as a deterministic tie breaker.
+        $names = array_keys($normalized);
+        usort($names, function($left, $right) use ($fractions) {
+            if ($fractions[$left] === $fractions[$right]) {
+                return strcmp($left, $right);
+            }
+            return $fractions[$left] < $fractions[$right] ? 1 : -1;
+        });
+        $remaining = $total - $assigned;
+        for ($index = 0; $index < $remaining; $index++) {
+            $name = $names[$index % count($names)];
+            $quotas[$name]++;
+        }
+
+        return $quotas;
+    }
+
+    /**
+     * 读取数值配置 / Read a numeric configuration value
+     * @param string $key 配置键 / Configuration key
+     * @param int|float $default 默认值 / Default value
+     * @return int|float 数值 / Numeric value
+     */
+    private function readNumericConfig($key, $default) {
+        $query = "SELECT `value` FROM game_config WHERE `key` = ?";
+        $stmt = $this->db->prepare($query);
+        if (!$stmt) {
+            throw new RuntimeException(
+                '无法读取地图配置 / Failed to prepare map configuration'
+            );
+        }
+        $stmt->bind_param('s', $key);
+        if (!$stmt->execute()) {
+            $stmt->close();
+            throw new RuntimeException(
+                '无法读取地图配置 / Failed to read map configuration'
+            );
+        }
+        $result = $stmt->get_result();
+        $row = $result ? $result->fetch_assoc() : null;
+        $stmt->close();
+
+        return $row && is_numeric($row['value'])
+            ? $row['value'] + 0
+            : $default;
     }
     
     /**
@@ -187,7 +365,9 @@ class MapGenerator {
         ];
         $radius = (int) floor(min(MAP_WIDTH, MAP_HEIGHT) * 0.35);
         foreach ($gateways as $index => $gateway) {
-            $angle = (2 * M_PI * $index / count($gateways)) - (M_PI / 2);
+            // 数组依次对应1点至12点，3点方向为数学零度 / Entries map from one to twelve o'clock, with three o'clock at zero radians
+            $clockHour = $index + 1;
+            $angle = deg2rad(($clockHour - 3) * 30);
             $x = (int) round(MAP_CENTER_X + cos($angle) * $radius);
             $y = (int) round(MAP_CENTER_Y + sin($angle) * $radius);
             $garrison = (int) round(
@@ -221,14 +401,24 @@ class MapGenerator {
      */
     private function upsertSpecialTile($x, $y, $siteType, $siteCode, $displayName, $durability, $garrison) {
         $tileType = $siteType === 'silver_hole' ? 'special' : 'npc_fort';
+        $tileSubtype = $siteType === 'gateway' ? $siteCode : $siteType;
         $npcLevel = $siteType === 'gateway' ? 10 : null;
         $query = "UPDATE map_tiles
                   SET type = ?, subtype = ?, owner_id = NULL, resource_amount = NULL,
                       npc_level = ?, npc_garrison = ?
                   WHERE x = ? AND y = ?";
         $stmt = $this->db->prepare($query);
-        $stmt->bind_param('ssiiii', $tileType, $siteType, $npcLevel, $garrison, $x, $y);
-        if (!$stmt->execute()) {
+        $stmt->bind_param(
+            'ssiiii',
+            $tileType,
+            $tileSubtype,
+            $npcLevel,
+            $garrison,
+            $x,
+            $y
+        );
+        if (!$stmt->execute() || $stmt->affected_rows !== 1) {
+            $stmt->close();
             throw new RuntimeException('写入特殊地点失败 / Failed to store special tile');
         }
         $stmt->close();
@@ -281,6 +471,11 @@ class MapGenerator {
             $this->db,
             "SHOW TABLES LIKE 'world_sites'"
         );
+        if ($result === false) {
+            throw new RuntimeException(
+                '无法检查世界地点表 / Failed to inspect the world-sites table'
+            );
+        }
         return $result && $result->num_rows > 0;
     }
 
@@ -289,8 +484,11 @@ class MapGenerator {
      * @return void
      */
     private function deleteWorldSitesIfPresent() {
-        if ($this->worldSitesTableExists()) {
-            executePreparedSql($this->db, "DELETE FROM world_sites");
+        if ($this->worldSitesTableExists()
+            && !executePreparedSql($this->db, "DELETE FROM world_sites")) {
+            throw new RuntimeException(
+                '清除世界地点失败 / Failed to clear world sites'
+            );
         }
     }
     
@@ -320,9 +518,16 @@ class MapGenerator {
      * @return bool 是否成功
      */
     public function resetMap() {
-        $this->deleteWorldSitesIfPresent();
-        $query = "DELETE FROM map_tiles";
-        return executePreparedSql($this->db, $query);
+        $this->db->begin_transaction();
+        try {
+            $this->clearExistingWorld();
+            $this->db->commit();
+            return true;
+        } catch (Throwable $exception) {
+            $this->db->rollback();
+            error_log('Map reset failed: ' . $exception->getMessage());
+            return false;
+        }
     }
     
     /**

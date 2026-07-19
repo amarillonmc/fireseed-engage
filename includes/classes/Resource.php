@@ -121,74 +121,24 @@ class Resource {
      * @return bool
      */
     public function addResource($type, $amount) {
-        if ($amount <= 0) {
+        $amount = (int) $amount;
+        $column = self::getResourceColumn($type);
+        if ($amount <= 0 || $column === null) {
             return false;
         }
 
-        $column = '';
-        $currentAmount = 0;
-
-        switch ($type) {
-            case 'bright':
-                $column = 'bright_crystal';
-                $currentAmount = $this->brightCrystal;
-                break;
-            case 'warm':
-                $column = 'warm_crystal';
-                $currentAmount = $this->warmCrystal;
-                break;
-            case 'cold':
-                $column = 'cold_crystal';
-                $currentAmount = $this->coldCrystal;
-                break;
-            case 'green':
-                $column = 'green_crystal';
-                $currentAmount = $this->greenCrystal;
-                break;
-            case 'day':
-                $column = 'day_crystal';
-                $currentAmount = $this->dayCrystal;
-                break;
-            case 'night':
-                $column = 'night_crystal';
-                $currentAmount = $this->nightCrystal;
-                break;
-            default:
-                return false;
-        }
-
-        $newAmount = $currentAmount + $amount;
-        $now = date('Y-m-d H:i:s');
-
-        $query = "UPDATE resources SET $column = ?, last_update = ? WHERE user_id = ?";
+        // 钱包变更使用原子增量，且不得重置离线产出时钟 / Wallet mutations are atomic and never reset the production clock
+        $query = "UPDATE resources
+                  SET $column = $column + ?
+                  WHERE user_id = ?
+                    AND $column <= 2147483647 - ?";
         $stmt = $this->db->prepare($query);
-        $stmt->bind_param('isi', $newAmount, $now, $this->userId);
-        $result = $stmt->execute();
+        $stmt->bind_param('iii', $amount, $this->userId, $amount);
+        $result = $stmt->execute() && $stmt->affected_rows === 1;
         $stmt->close();
 
         if ($result) {
-            switch ($type) {
-                case 'bright':
-                    $this->brightCrystal = $newAmount;
-                    break;
-                case 'warm':
-                    $this->warmCrystal = $newAmount;
-                    break;
-                case 'cold':
-                    $this->coldCrystal = $newAmount;
-                    break;
-                case 'green':
-                    $this->greenCrystal = $newAmount;
-                    break;
-                case 'day':
-                    $this->dayCrystal = $newAmount;
-                    break;
-                case 'night':
-                    $this->nightCrystal = $newAmount;
-                    break;
-            }
-
-            $this->lastUpdate = $now;
+            $this->loadResourceData();
             return true;
         }
 
@@ -202,82 +152,45 @@ class Resource {
      * @return bool
      */
     public function reduceResource($type, $amount) {
-        if ($amount <= 0) {
+        $amount = (int) $amount;
+        $column = self::getResourceColumn($type);
+        if ($amount <= 0 || $column === null) {
             return false;
         }
 
-        $column = '';
-        $currentAmount = 0;
-
-        switch ($type) {
-            case 'bright':
-                $column = 'bright_crystal';
-                $currentAmount = $this->brightCrystal;
-                break;
-            case 'warm':
-                $column = 'warm_crystal';
-                $currentAmount = $this->warmCrystal;
-                break;
-            case 'cold':
-                $column = 'cold_crystal';
-                $currentAmount = $this->coldCrystal;
-                break;
-            case 'green':
-                $column = 'green_crystal';
-                $currentAmount = $this->greenCrystal;
-                break;
-            case 'day':
-                $column = 'day_crystal';
-                $currentAmount = $this->dayCrystal;
-                break;
-            case 'night':
-                $column = 'night_crystal';
-                $currentAmount = $this->nightCrystal;
-                break;
-            default:
-                return false;
-        }
-
-        if ($currentAmount < $amount) {
-            return false; // 资源不足
-        }
-
-        $newAmount = $currentAmount - $amount;
-        $now = date('Y-m-d H:i:s');
-
-        $query = "UPDATE resources SET $column = ?, last_update = ? WHERE user_id = ?";
+        // 条件扣减避免并发请求透支余额 / Conditional deduction prevents concurrent overdrafts
+        $query = "UPDATE resources
+                  SET $column = $column - ?
+                  WHERE user_id = ? AND $column >= ?";
         $stmt = $this->db->prepare($query);
-        $stmt->bind_param('isi', $newAmount, $now, $this->userId);
-        $result = $stmt->execute();
+        $stmt->bind_param('iii', $amount, $this->userId, $amount);
+        $result = $stmt->execute() && $stmt->affected_rows === 1;
         $stmt->close();
 
         if ($result) {
-            switch ($type) {
-                case 'bright':
-                    $this->brightCrystal = $newAmount;
-                    break;
-                case 'warm':
-                    $this->warmCrystal = $newAmount;
-                    break;
-                case 'cold':
-                    $this->coldCrystal = $newAmount;
-                    break;
-                case 'green':
-                    $this->greenCrystal = $newAmount;
-                    break;
-                case 'day':
-                    $this->dayCrystal = $newAmount;
-                    break;
-                case 'night':
-                    $this->nightCrystal = $newAmount;
-                    break;
-            }
-
-            $this->lastUpdate = $now;
+            $this->loadResourceData();
             return true;
         }
 
         return false;
+    }
+
+    /**
+     * 将资源类型映射到受信任列名 / Map a resource type to a trusted column name
+     *
+     * @param string $type 资源类型 / Resource type
+     * @return string|null 列名 / Column name
+     */
+    private static function getResourceColumn($type) {
+        $columns = [
+            'bright' => 'bright_crystal',
+            'warm' => 'warm_crystal',
+            'cold' => 'cold_crystal',
+            'green' => 'green_crystal',
+            'day' => 'day_crystal',
+            'night' => 'night_crystal'
+        ];
+        return isset($columns[$type]) ? $columns[$type] : null;
     }
 
     /**
@@ -330,30 +243,30 @@ class Resource {
      * @return bool
      */
     public function reduceResources($resources) {
-        // 先检查是否有足够的资源
+        // 先检查是否有足够的资源 / Reject obviously insufficient requests early
         if (!$this->hasEnoughResources($resources)) {
             return false;
         }
 
-        // 开始事务
-        $this->db->begin_transaction();
-
-        $success = true;
+        if (!$this->db->begin_transaction()) {
+            return false;
+        }
 
         foreach ($resources as $type => $amount) {
             if (!$this->reduceResource($type, $amount)) {
-                $success = false;
-                break;
+                $this->db->rollback();
+                $this->loadResourceData();
+                return false;
             }
         }
 
-        if ($success) {
-            $this->db->commit();
-            return true;
-        } else {
+        if (!$this->db->commit()) {
             $this->db->rollback();
+            $this->loadResourceData();
             return false;
         }
+        $this->loadResourceData();
+        return true;
     }
 
     /**
@@ -533,6 +446,7 @@ class Resource {
                 'day' => 0,
                 'night' => 0
             ];
+            $technologyEffects = TechnologyEffectService::getUserEffects($userId);
             foreach ($cityIds as $cityId) {
                 $city = new City($cityId);
                 if (!$city->isValid()) {
@@ -556,6 +470,11 @@ class Resource {
                         $elapsedSeconds,
                         $cityBonuses['production']
                     );
+                    $effectKey = 'resource_production_' . $resourceType;
+                    $produced = TechnologyEffectService::applyFractionalBonus(
+                        $produced,
+                        $technologyEffects[$effectKey] ?? 0.0
+                    );
                     $production[$resourceType] = min(
                         2147483647,
                         $production[$resourceType] + max(0, (int) $produced)
@@ -567,6 +486,8 @@ class Resource {
                 0,
                 (int) self::getUserResourceStorageCapacity($userId)
             );
+            // 跨赛季货币不依赖会重置的贮存所容量 / Persistent currencies do not depend on seasonal storage facilities
+            $persistentCapacity = 2147483647;
             $query = "UPDATE resources
                       SET bright_crystal = LEAST(?, bright_crystal + ?),
                           warm_crystal = LEAST(?, warm_crystal + ?),
@@ -580,7 +501,7 @@ class Resource {
             $nowDate = date('Y-m-d H:i:s', $now);
             $stmt->bind_param(
                 'iiiiiiiiiiiisi',
-                $storageCapacity,
+                $persistentCapacity,
                 $production['bright'],
                 $storageCapacity,
                 $production['warm'],
@@ -590,7 +511,7 @@ class Resource {
                 $production['green'],
                 $storageCapacity,
                 $production['day'],
-                $storageCapacity,
+                $persistentCapacity,
                 $production['night'],
                 $nowDate,
                 $userId
@@ -614,10 +535,19 @@ class Resource {
 
     /**
      * 获取用户的资源存储上限
-     * @param int $userId 用户ID
+     * @param int $userId 用户ID / User ID
+     * @param string|null $type 资源类型 / Resource type
      * @return int
      */
-    public static function getUserResourceStorageCapacity($userId) {
+    public static function getUserResourceStorageCapacity(
+        $userId,
+        $type = null
+    ) {
+        // 亮、夜是跨赛季货币，不受赛季贮存所限制。 / Bright and Night are persistent currencies and ignore seasonal storage.
+        if (in_array($type, ['bright', 'night'], true)) {
+            return 2147483647;
+        }
+
         // 获取用户的所有城池
         $cities = City::getUserCities($userId);
 
@@ -639,7 +569,19 @@ class Resource {
             }
         }
 
-        return $totalCapacity;
+        $storageEffect = TechnologyEffectService::getUserEffect(
+            $userId,
+            'resource_storage'
+        );
+        return min(
+            2147483647,
+            (int) floor(
+                TechnologyEffectService::applyFractionalBonus(
+                    $totalCapacity,
+                    $storageEffect
+                )
+            )
+        );
     }
 
     /**
@@ -693,7 +635,10 @@ class Resource {
      */
     public function getStorageLimit($type = null) {
         // 获取用户的资源存储上限
-        $capacity = self::getUserResourceStorageCapacity($this->userId);
+        $capacity = self::getUserResourceStorageCapacity(
+            $this->userId,
+            $type
+        );
         return $capacity;
     }
 

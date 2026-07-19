@@ -44,6 +44,12 @@ $getSkillApi = file_get_contents($root . '/api/get_skill.php');
 $challengesPage = file_get_contents($root . '/challenges.php');
 $gameRules = file_get_contents($root . '/includes/classes/GameRules.php');
 $install = file_get_contents($root . '/install.php');
+$configLoader = file_get_contents($root . '/config/config.php');
+$versionConfig = file_get_contents($root . '/config/version.php');
+$gitignore = file_get_contents($root . '/.gitignore');
+$localConfigExample = file_get_contents(
+    $root . '/config/local.php.example'
+);
 $freshSql = file_get_contents($root . '/sql/gameplay_expansion.sql');
 $upgradeSql = file_get_contents(
     $root . '/sql/upgrade_20260717_gameplay_expansion.sql'
@@ -304,10 +310,10 @@ assertServiceInvariant(
         && strpos($adminConfig, 'image-mode-preview') !== false,
     'Every configuration form and reset must use CSRF while exposing a mode preview'
 );
-$functionsLoad = strpos($init, "require_once 'includes/functions.php';");
+$functionsLoad = strpos($init, "/includes/functions.php");
 $imageResourcesLoad = strpos(
     $init,
-    "require_once 'includes/image_resources.php';"
+    "/includes/image_resources.php"
 );
 assertServiceInvariant(
     $functionsLoad !== false
@@ -332,13 +338,99 @@ assertServiceInvariant(
     'Generated configuration must safely export every user-supplied value'
 );
 assertServiceInvariant(
-    strpos($install, "require_once __DIR__ . '/game_constants.php';") !== false
-        && strpos($install, "require_once __DIR__ . '/game_variables.php';") !== false,
-    'Generated configuration must load game constants and runtime variables'
+    strpos($install, "__DIR__ . '/config/local.php'") !== false
+        && strpos(
+            $install,
+            'function writeInstallerFileAtomically('
+        ) !== false
+        && strpos($install, 'LOCK_EX') !== false
+        && strpos($install, '$writtenBytes !== $expectedBytes') !== false
+        && strpos($install, '@rename($temporaryPath, $path)') !== false
+        && strpos($localConfigExample, "'DB_PASS' =>") !== false
+        && strpos($gitignore, 'config/local.php') !== false
+        && strpos(
+            $gitignore,
+            'config/.*-installer-backup-*.php'
+        ) !== false,
+    'Installer secrets must be written atomically to an untracked local configuration'
 );
-$generatedConfigLoad = strpos($install, "require_once 'config/config.php';");
-$databaseClassLoad = strpos($install, "require_once 'includes/database.php';");
-$userClassLoad = strpos($install, "require_once 'includes/classes/User.php';");
+assertServiceInvariant(
+    strpos($install, "'/config/.installing.lock'") !== false
+        && strpos($install, 'LOCK_EX | LOCK_NB') !== false
+        && strpos($install, 'flock($installationLockHandle, LOCK_UN)')
+            !== false
+        && strpos($gitignore, 'config/.installing.lock') !== false
+        && strpos(
+            $gitignore,
+            'config/.install-token-consumed'
+        ) !== false,
+    'Installer authorization and execution locks must remain serialized and untracked'
+);
+assertServiceInvariant(
+    strpos($install, '!is_file($sqlFilePath)') !== false
+        && strpos($install, '!is_readable($sqlFilePath)') !== false
+        && strpos($install, "trim(\$sql) === ''") !== false
+        && strpos($install, 'count($statements) === 0') !== false,
+    'Every required schema file must be readable, non-empty, and executable'
+);
+assertServiceInvariant(
+    strpos($install, "'FIRESEED_DB_HOST'") !== false
+        && strpos($install, "'FIRESEED_DB_USER'") !== false
+        && strpos($install, "'FIRESEED_DB_PASS'") !== false
+        && strpos($install, "'FIRESEED_DB_NAME'") !== false
+        && strpos(
+            $install,
+            '$effectiveDatabaseConfig !== $expectedDatabaseConfig'
+        ) !== false,
+    'Installer and runtime services must not silently target different databases'
+);
+assertServiceInvariant(
+    strpos(
+        $configLoader,
+        "require_once __DIR__ . '/game_constants.php';"
+    ) !== false
+        && strpos(
+            $configLoader,
+            "require_once __DIR__ . '/game_variables.php';"
+        ) !== false
+        && strpos($configLoader, "getenv('FIRESEED_' . \$key)") !== false,
+    'Tracked configuration must load game settings and support environment overrides'
+);
+assertServiceInvariant(
+    strpos($configLoader, "'DB_CHARSET' => 'utf8mb4'") !== false
+        && strpos(
+            $configLoader,
+            "date_default_timezone_set('Asia/Shanghai')"
+        ) !== false
+        && strpos($configLoader, "readConfigValue(\n    'TIMEZONE'") === false
+        && strpos($localConfigExample, "'TIMEZONE' =>") === false,
+    'Runtime character set and timezone must match schema, installer, and migrations'
+);
+assertServiceInvariant(
+    strpos($versionConfig, "define('GAME_VERSION', '0.1.0-beta')") !== false
+        && strpos(
+            $configLoader,
+            "require_once __DIR__ . '/version.php';"
+        ) !== false
+        && strpos(
+            $install,
+            "require_once __DIR__ . '/config/version.php';"
+        ) !== false
+        && strpos($install, '"安装版本: " . GAME_VERSION') !== false,
+    'Runtime and installer metadata must share one beta version source'
+);
+$generatedConfigLoad = strpos(
+    $install,
+    "require_once __DIR__ . '/config/config.php';"
+);
+$databaseClassLoad = strpos(
+    $install,
+    "require_once __DIR__ . '/includes/database.php';"
+);
+$userClassLoad = strpos(
+    $install,
+    "require_once __DIR__ . '/includes/classes/User.php';"
+);
 assertServiceInvariant(
     $generatedConfigLoad !== false
         && $databaseClassLoad !== false
@@ -379,9 +471,9 @@ assertServiceInvariant(
 assertServiceInvariant(
     strpos($install, 'password_hash(') !== false
         && strpos($install, 'SET password = ?, admin_level = 9') !== false
-        && strpos($install, '$db->begin_transaction();') !== false
-        && strpos($install, '$db->commit();') !== false
-        && strpos($install, '$db->rollback();') !== false,
+        && strpos($install, '$db->begin_transaction()') !== false
+        && strpos($install, '$db->commit()') !== false
+        && strpos($install, '$db->rollback()') !== false,
     'Recovered administrator credentials and privileges must update transactionally'
 );
 assertServiceInvariant(

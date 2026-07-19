@@ -44,6 +44,24 @@ foreach ($armies as $army) {
     $totalCombatPower += $army->getCombatPower();
 }
 
+/**
+ * 格式化科研效果，容量类显示绝对值 / Format technology effects, using absolute values for capacities
+ *
+ * @param array $effect 科研效果 / Technology effect
+ * @return string 展示文本 / Display text
+ */
+function formatProfileTechnologyEffect(array $effect) {
+    $absoluteEffectKeys = [
+        'circuit_capacity',
+        'general_cost_capacity',
+        'subbase_capacity'
+    ];
+    if (in_array($effect['effect_key'], $absoluteEffectKeys, true)) {
+        return '+' . number_format((float) $effect['effect_value'], 0);
+    }
+    return '+' . number_format((float) $effect['effect_value'] * 100, 1) . '%';
+}
+
 // 页面标题
 $pageTitle = '用户档案';
 ?>
@@ -89,7 +107,7 @@ $pageTitle = '用户档案';
             margin-bottom: 10px;
         }
         
-        .profile-level {
+        .profile-growth-summary {
             font-size: 18px;
             opacity: 0.9;
         }
@@ -289,6 +307,7 @@ $pageTitle = '用户档案';
                     <li><a href="territory.php">领地</a></li>
                     <li><a href="internal.php">内政</a></li>
                     <li><a href="ranking.php">排名</a></li>
+                    <li><a href="logout.php">退出登录</a></li>
                     <li class="circuit-points">
                         <?php echo renderImageResource(
                             'resource_circuit_points',
@@ -312,7 +331,7 @@ $pageTitle = '用户档案';
                 <div class="profile-header">
                     <div class="profile-avatar">👤</div>
                     <div class="profile-name"><?php echo htmlspecialchars($user->getUsername()); ?></div>
-                    <div class="profile-level">等级 <?php echo $user->getLevel(); ?></div>
+                    <div class="profile-growth-summary">武将、技能卡与永久科研构成跨赛季成长</div>
                 </div>
 
                 <!-- 统计数据网格 -->
@@ -324,8 +343,12 @@ $pageTitle = '用户档案';
                             基础统计
                         </div>
                         <div class="stats-item">
-                            <span class="stats-label">用户等级</span>
-                            <span class="stats-value"><?php echo $user->getLevel(); ?></span>
+                            <span class="stats-label">思考回路</span>
+                            <span class="stats-value">
+                                <?php echo number_format($user->getCircuitPoints()); ?>
+                                /
+                                <?php echo number_format($user->getMaxCircuitPoints()); ?>
+                            </span>
                         </div>
                         <div class="stats-item">
                             <span class="stats-label">城池数量</span>
@@ -453,8 +476,14 @@ $pageTitle = '用户档案';
                         <div class="technologies-list">
                             <?php foreach ($technologyEffects as $effect): ?>
                             <div class="tech-item">
-                                <span class="tech-name"><?php echo $effect['name']; ?> (Lv.<?php echo $effect['level']; ?>)</span>
-                                <span class="tech-effect">+<?php echo number_format($effect['effect_value'] * 100, 1); ?>%</span>
+                                <span class="tech-name">
+                                    <?php echo escapeHtml($effect['name']); ?>
+                                    (Lv.<?php echo number_format((int) $effect['level']); ?> ·
+                                    <?php echo $effect['scope'] === 'permanent' ? '永久' : '赛季'; ?>)
+                                </span>
+                                <span class="tech-effect">
+                                    <?php echo escapeHtml(formatProfileTechnologyEffect($effect)); ?>
+                                </span>
                             </div>
                             <?php endforeach; ?>
                         </div>

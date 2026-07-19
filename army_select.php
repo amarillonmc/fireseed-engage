@@ -55,7 +55,7 @@ if ($targetValid) {
         $targetMessage = '该地点没有可攻击目标；无主普通领地可直接占领。';
     }
 } else {
-    $targetMessage = '目标坐标无效或尚未探索。';
+    $targetMessage = '目标坐标无效或不存在。';
 }
 
 if ($canAttack

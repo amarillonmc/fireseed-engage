@@ -17,17 +17,13 @@ class SubBaseService {
     }
 
     /**
-     * 按玩家等级计算分基地上限 / Calculate the sub-base limit from player level
-     *
-     * 本项目采用每级一个分基地、最低一个的兼容规则，以衔接现有等级系统。
-     * This project uses one sub-base per level, with a minimum of one, to fit the
-     * existing level system.
-     *
-     * @param int $level 玩家等级 / Player level
+     * 按基础配置和永久科研计算分基地上限 / Calculate the sub-base cap from configuration and permanent research
+     * @param int $userId 玩家ID / User ID
      * @return int 分基地上限 / Sub-base limit
      */
-    public static function getSubBaseLimit($level) {
-        return max(1, (int) $level);
+    public static function getSubBaseLimit($userId) {
+        $limits = TechnologyEffectService::getDerivedPlayerLimits((int) $userId);
+        return max(0, (int) $limits['max_subbases']);
     }
 
     /**
@@ -81,7 +77,7 @@ class SubBaseService {
         }
         $stmt->close();
 
-        $limit = self::getSubBaseLimit((int) $user['level']);
+        $limit = self::getSubBaseLimit($userId);
         $currentCount = count($subBases);
         $query = "SELECT mt.tile_id, mt.x, mt.y, mt.subtype,
                          mt.resource_amount,
@@ -114,7 +110,7 @@ class SubBaseService {
             } elseif (!in_array($row['subtype'], $this->resourceTypes, true)) {
                 $reason = '资源系数据无效 / Invalid resource affinity';
             } elseif ($currentCount >= $limit) {
-                $reason = '分基地数量已达当前等级上限 / Current level limit reached';
+                $reason = '分基地数量已达当前科研上限 / Current research limit reached';
             }
 
             $candidates[] = [
@@ -181,7 +177,8 @@ class SubBaseService {
                 throw new RuntimeException('玩家不存在 / Player does not exist');
             }
 
-            $query = "SELECT tile_id, x, y, type, subtype, owner_id
+            $query = "SELECT tile_id, x, y, type, subtype, owner_id,
+                             occupation_circuit_cost
                       FROM map_tiles
                       WHERE tile_id = ?
                       FOR UPDATE";
@@ -249,10 +246,10 @@ class SubBaseService {
             $result = $stmt->get_result();
             $subBaseCount = $result ? $result->num_rows : 0;
             $stmt->close();
-            $limit = self::getSubBaseLimit((int) $user['level']);
+            $limit = self::getSubBaseLimit($userId);
             if ($subBaseCount >= $limit) {
                 throw new RuntimeException(
-                    '分基地数量已达当前等级上限 / Current level limit reached'
+                    '分基地数量已达当前科研上限 / Current research limit reached'
                 );
             }
 
@@ -286,7 +283,8 @@ class SubBaseService {
                       SET type = 'player_city', subtype = 'sub_base',
                           resource_amount = NULL, npc_level = NULL,
                           npc_garrison = 0, npc_respawn_time = NULL,
-                          last_collection_time = NULL, is_visible = 1
+                          last_collection_time = NULL,
+                          occupation_circuit_cost = 0, is_visible = 1
                       WHERE tile_id = ? AND owner_id = ? AND type = 'resource'";
             $stmt = $this->db->prepare($query);
             $stmt->bind_param('ii', $tileId, $userId);
@@ -307,7 +305,10 @@ class SubBaseService {
                 1
             );
 
-            $refundCost = max(0, (int) TERRITORY_OCCUPATION_COST);
+            $refundCost = max(
+                0,
+                (int) $tile['occupation_circuit_cost']
+            );
             $refund = $refundCost;
             if ($refundCost > 0) {
                 if ((int) $user['circuit_points']

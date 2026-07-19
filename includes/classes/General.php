@@ -407,6 +407,7 @@ class General {
             if (count($cityGenerals) >= $city->getLevel()) {
                 return false;
             }
+            $targetGenerals = $cityGenerals;
         } else if ($assignmentType == 'army') {
             $army = new Army($targetId);
             if (!$army->isValid() || $army->getOwnerId() != $this->ownerId) {
@@ -418,6 +419,22 @@ class General {
             if (count($armyGenerals) >= 1 + $army->getLevel()) {
                 return false;
             }
+            $targetGenerals = $armyGenerals;
+        }
+
+        // 每个编制目标的武将COST总和受基础值与永久科研限制 / Each assignment target obeys the base-plus-permanent-research general COST cap
+        $assignedCost = 0.0;
+        foreach ($targetGenerals as $assignedGeneral) {
+            if ((int) $assignedGeneral->getGeneralId() === (int) $this->generalId) {
+                continue;
+            }
+            $assignedCost += max(0.0, (float) $assignedGeneral->getCost());
+        }
+        $owner = new User($this->ownerId);
+        if (!$owner->isValid()
+            || $assignedCost + max(0.0, (float) $this->cost)
+                > (float) $owner->getMaxGeneralCost() + 0.000001) {
+            return false;
         }
 
         // 如果武将已分配，先取消分配

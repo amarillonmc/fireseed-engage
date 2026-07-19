@@ -1,43 +1,278 @@
 <?php
-// 种火集结号 - 游戏安装脚本
+// 种火集结号 - 游戏安装脚本 / Fireseed Engage - Game installer
 
-// 检查是否已经安装
-if (file_exists('config/installed.lock')) {
-    die('游戏已经安装完成。如需重新安装，请删除 config/installed.lock 文件。');
+require_once __DIR__ . '/config/version.php';
+
+// 安装器使用独立会话并启用安全 Cookie 选项 / Use an isolated installer session with secure cookie settings
+$isHttpsRequest = (
+    isset($_SERVER['HTTPS'])
+    && $_SERVER['HTTPS'] !== ''
+    && strtolower((string) $_SERVER['HTTPS']) !== 'off'
+) || (isset($_SERVER['SERVER_PORT']) && (int) $_SERVER['SERVER_PORT'] === 443);
+$installerTrustProxyHeaders = filter_var(
+    getenv('FIRESEED_TRUST_PROXY_HEADERS'),
+    FILTER_VALIDATE_BOOLEAN
+);
+if (!$isHttpsRequest
+    && $installerTrustProxyHeaders
+    && isset($_SERVER['HTTP_X_FORWARDED_PROTO'])
+) {
+    $forwardedProtocols = explode(
+        ',',
+        (string) $_SERVER['HTTP_X_FORWARDED_PROTO']
+    );
+    $isHttpsRequest = strtolower(trim($forwardedProtocols[0])) === 'https';
+}
+ini_set('session.use_strict_mode', '1');
+ini_set('session.use_only_cookies', '1');
+session_name('fireseed_installer');
+session_set_cookie_params([
+    'lifetime' => 3600,
+    'path' => '/',
+    'secure' => $isHttpsRequest,
+    'httponly' => true,
+    'samesite' => 'Strict'
+]);
+if (session_status() !== PHP_SESSION_ACTIVE) {
+    session_start();
 }
 
-$step = isset($_GET['step']) ? intval($_GET['step']) : 1;
+// 检查是否已经安装 / Stop when an installation lock already exists
+if (file_exists(__DIR__ . '/config/installed.lock')) {
+    http_response_code(409);
+    die(
+        '游戏已经安装完成。不要仅删除锁文件就地重装；'
+        . '请按部署文档备份并使用经过确认的空数据库重新安装。'
+    );
+}
+
+// 所有浏览器安装都必须提供一次性环境令牌，避免反向代理把公网请求伪装成本机来源。 / Every browser installation requires a one-time environment token because reverse proxies can make public requests appear loopback-local.
+$requiredInstallToken = getenv('FIRESEED_INSTALL_TOKEN');
+if (empty($_SESSION['installer_authorized'])) {
+    $installerTokenError = '';
+    $requestMethod = isset($_SERVER['REQUEST_METHOD'])
+        ? strtoupper((string) $_SERVER['REQUEST_METHOD'])
+        : 'GET';
+    $remoteAddress = isset($_SERVER['REMOTE_ADDR'])
+        ? (string) $_SERVER['REMOTE_ADDR']
+        : '';
+    $requestHost = isset($_SERVER['HTTP_HOST'])
+        ? strtolower((string) $_SERVER['HTTP_HOST'])
+        : '';
+    $isLoopbackHost = preg_match(
+        '/^(?:localhost|127\.0\.0\.1|\[::1\])(?::[0-9]+)?$/D',
+        $requestHost
+    ) === 1;
+    $hasForwardedClientHeaders = isset(
+        $_SERVER['HTTP_FORWARDED']
+    ) || isset(
+        $_SERVER['HTTP_X_FORWARDED_FOR']
+    ) || isset(
+        $_SERVER['HTTP_X_FORWARDED_HOST']
+    ) || isset(
+        $_SERVER['HTTP_X_REAL_IP']
+    );
+    $isDirectLoopbackTransport =
+        in_array($remoteAddress, ['127.0.0.1', '::1'], true)
+        && $isLoopbackHost
+        && !$hasForwardedClientHeaders;
+    $allowInsecureLocalInstall = $isDirectLoopbackTransport
+        && filter_var(
+            getenv('FIRESEED_ALLOW_INSECURE_LOCAL_INSTALL'),
+            FILTER_VALIDATE_BOOLEAN
+        );
+    $hasSafeTokenTransport = $isHttpsRequest
+        || $allowInsecureLocalInstall;
+    if (!$hasSafeTokenTransport) {
+        $installerTokenError =
+            '安装授权必须使用 HTTPS；仅本机开发可显式开启不安全回环安装';
+    }
+
+    if ($requestMethod === 'POST' && isset($_POST['install_token'])) {
+        $suppliedInstallToken = is_scalar($_POST['install_token'])
+            ? (string) $_POST['install_token']
+            : '';
+        if (!$hasSafeTokenTransport) {
+            $installerTokenError =
+                '安装授权必须使用 HTTPS；令牌未被处理';
+        } elseif (!is_string($requiredInstallToken)
+            || $requiredInstallToken === ''
+            || $suppliedInstallToken === ''
+            || !hash_equals($requiredInstallToken, $suppliedInstallToken)
+        ) {
+            $installerTokenError = '安装令牌无效';
+        } else {
+            // x模式原子消费令牌；标记不保存令牌本身。 / Exclusive-create mode consumes the token atomically without storing the secret.
+            $tokenClaimPath =
+                __DIR__ . '/config/.install-token-consumed';
+            $tokenClaimHandle = @fopen($tokenClaimPath, 'x');
+            if ($tokenClaimHandle === false) {
+                $installerTokenError =
+                    '安装令牌已被使用；如需恢复，请按部署文档重置令牌';
+            } else {
+                $claimPayload = 'claimed_at=' . gmdate(DATE_ATOM) . "\n";
+                $claimBytes = @fwrite(
+                    $tokenClaimHandle,
+                    $claimPayload
+                );
+                $claimFlushed = $claimBytes === strlen($claimPayload)
+                    && @fflush($tokenClaimHandle);
+                @fclose($tokenClaimHandle);
+                if (!$claimFlushed) {
+                    @unlink($tokenClaimPath);
+                    $installerTokenError = '无法安全消费安装令牌';
+                } elseif (!session_regenerate_id(true)) {
+                    @unlink($tokenClaimPath);
+                    $installerTokenError = '无法建立安全安装会话';
+                } else {
+                    if (DIRECTORY_SEPARATOR !== '\\') {
+                        @chmod($tokenClaimPath, 0600);
+                    }
+                    $_SESSION['installer_authorized'] = true;
+                    $_SESSION['installer_authorized_at'] = time();
+                    header('Location: install.php', true, 303);
+                    exit;
+                }
+            }
+        }
+    }
+
+    header('Content-Type: text/html; charset=UTF-8');
+    header('Cache-Control: no-store');
+    header('Referrer-Policy: no-referrer');
+    header(
+        "Content-Security-Policy: default-src 'none'; "
+        . "style-src 'unsafe-inline'; form-action 'self'; base-uri 'none'"
+    );
+    http_response_code(
+        !$hasSafeTokenTransport
+            ? 426
+            : ($installerTokenError === '' ? 401 : 403)
+    );
+    $escapedTokenError = htmlspecialchars(
+        $installerTokenError,
+        ENT_QUOTES,
+        'UTF-8'
+    );
+    echo '<!DOCTYPE html><html lang="zh-CN"><head>'
+        . '<meta charset="UTF-8"><meta name="viewport" '
+        . 'content="width=device-width, initial-scale=1.0">'
+        . '<title>安装授权 / Installer authorization</title>'
+        . '<style>body{font-family:sans-serif;max-width:36rem;margin:4rem auto;'
+        . 'padding:0 1rem}label,input,button{display:block;width:100%;'
+        . 'box-sizing:border-box;margin:.75rem 0;padding:.7rem}'
+        . '.error{color:#a00}</style></head><body>'
+        . '<h1>安装授权 / Installer authorization</h1>'
+        . '<p>请输入 FIRESEED_INSTALL_TOKEN。令牌只通过 POST 提交，'
+        . '成功后立即失效。</p>'
+        . ($escapedTokenError !== ''
+            ? '<p class="error">' . $escapedTokenError . '</p>'
+            : '')
+        . ($hasSafeTokenTransport
+            ? '<form method="post"><label for="install-token">'
+                . '一次性令牌 / One-time token</label>'
+                . '<input id="install-token" type="password" '
+                . 'name="install_token" autocomplete="one-time-code" '
+                . 'required><button type="submit">'
+                . '授权 / Authorize</button></form>'
+            : '')
+        . '</body></html>';
+    exit;
+}
+
+if (empty($_SESSION['installer_csrf_token'])) {
+    $_SESSION['installer_csrf_token'] = bin2hex(random_bytes(32));
+}
+$installerCsrfToken = (string) $_SESSION['installer_csrf_token'];
+
+$requestedStep = isset($_POST['step'])
+    ? (int) $_POST['step']
+    : (isset($_GET['step']) ? (int) $_GET['step'] : 1);
+$step = max(1, min(5, $requestedStep));
 $error = '';
 $success = '';
 
-// 处理安装步骤
+// 处理安装步骤 / Process installation steps
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
-    switch ($step) {
+    $submittedCsrfToken = isset($_POST['csrf_token'])
+        ? (string) $_POST['csrf_token']
+        : '';
+    if ($submittedCsrfToken === ''
+        || !hash_equals($installerCsrfToken, $submittedCsrfToken)
+    ) {
+        http_response_code(403);
+        $error = '安装会话已失效，请刷新页面后重试';
+    } else {
+        switch ($step) {
         case 1:
-            // 环境检查
+            // 环境检查 / Environment check
             $step = 2;
             break;
             
         case 2:
             // 数据库配置
-            $dbHost = $_POST['db_host'] ?? '';
-            $dbUser = $_POST['db_user'] ?? '';
-            $dbPass = $_POST['db_pass'] ?? '';
-            $dbName = $_POST['db_name'] ?? '';
-            $siteUrl = $_POST['site_url'] ?? '';
-            $adminEmail = $_POST['admin_email'] ?? '';
+            $dbHost = isset($_POST['db_host'])
+                && is_scalar($_POST['db_host'])
+                ? trim((string) $_POST['db_host'])
+                : '';
+            $dbUser = isset($_POST['db_user'])
+                && is_scalar($_POST['db_user'])
+                ? trim((string) $_POST['db_user'])
+                : '';
+            $dbPass = isset($_POST['db_pass'])
+                && is_scalar($_POST['db_pass'])
+                ? (string) $_POST['db_pass']
+                : '';
+            $dbName = isset($_POST['db_name'])
+                && is_scalar($_POST['db_name'])
+                ? trim((string) $_POST['db_name'])
+                : '';
+            $siteUrl = isset($_POST['site_url'])
+                && is_scalar($_POST['site_url'])
+                ? rtrim(trim((string) $_POST['site_url']), '/')
+                : '';
+            $adminEmail = isset($_POST['admin_email'])
+                && is_scalar($_POST['admin_email'])
+                ? trim((string) $_POST['admin_email'])
+                : '';
             
-            if (empty($dbHost) || empty($dbUser) || empty($dbName) || empty($siteUrl)) {
+            $siteUrlParts = $siteUrl !== '' ? parse_url($siteUrl) : false;
+            if (empty($dbHost)
+                || empty($dbUser)
+                || empty($dbName)
+                || empty($siteUrl)
+                || empty($adminEmail)
+            ) {
                 $error = '请填写所有必填字段';
+            } elseif (strlen($siteUrl) > 2048
+                || !filter_var($siteUrl, FILTER_VALIDATE_URL)
+                || !is_array($siteUrlParts)
+                || !isset($siteUrlParts['scheme'], $siteUrlParts['host'])
+                || !in_array(
+                    strtolower((string) $siteUrlParts['scheme']),
+                    ['http', 'https'],
+                    true
+                )
+                || isset($siteUrlParts['user'])
+                || isset($siteUrlParts['pass'])
+            ) {
+                $error = '站点 URL 必须是有效的 HTTP 或 HTTPS 地址';
+            } elseif (!filter_var($adminEmail, FILTER_VALIDATE_EMAIL)
+                || strlen($adminEmail) > 254
+            ) {
+                $error = '请输入有效的管理员邮箱';
             } else {
                 // 测试数据库连接
                 try {
                     $testConn = new mysqli($dbHost, $dbUser, $dbPass, $dbName);
                     if ($testConn->connect_error) {
-                        $error = '数据库连接失败: ' . $testConn->connect_error;
+                        error_log(
+                            'Installer database connection failed: '
+                            . $testConn->connect_error
+                        );
+                        $error = '数据库连接失败，请核对连接信息和服务器日志';
                     } else {
-                        // 保存配置到会话
-                        session_start();
+                        // 保存配置到会话 / Save configuration in the installer session
                         $_SESSION['install_config'] = [
                             'db_host' => $dbHost,
                             'db_user' => $dbUser,
@@ -49,25 +284,47 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                         $testConn->close();
                         $step = 3;
                     }
-                } catch (Exception $e) {
-                    $error = '数据库连接失败: ' . $e->getMessage();
+                } catch (Throwable $e) {
+                    error_log(
+                        'Installer database connection failed: '
+                        . $e->getMessage()
+                    );
+                    $error = '数据库连接失败，请核对连接信息和服务器日志';
                 }
             }
             break;
             
         case 3:
-            // 管理员账户创建
-            session_start();
-            $adminUsername = $_POST['admin_username'] ?? '';
-            $adminPassword = $_POST['admin_password'] ?? '';
-            $adminPasswordConfirm = $_POST['admin_password_confirm'] ?? '';
+            // 管理员账户创建 / Administrator account
+            $adminUsername = isset($_POST['admin_username'])
+                && is_scalar($_POST['admin_username'])
+                ? trim((string) $_POST['admin_username'])
+                : '';
+            $adminPassword = isset($_POST['admin_password'])
+                && is_scalar($_POST['admin_password'])
+                ? (string) $_POST['admin_password']
+                : '';
+            $adminPasswordConfirm = isset($_POST['admin_password_confirm'])
+                && is_scalar($_POST['admin_password_confirm'])
+                ? (string) $_POST['admin_password_confirm']
+                : '';
             
             if (empty($adminUsername) || empty($adminPassword)) {
                 $error = '请填写管理员用户名和密码';
             } elseif ($adminPassword !== $adminPasswordConfirm) {
                 $error = '两次输入的密码不一致';
-            } elseif (strlen($adminPassword) < 6) {
-                $error = '密码长度至少6位';
+            } elseif (mb_strlen($adminUsername, 'UTF-8') < 3
+                || mb_strlen($adminUsername, 'UTF-8') > 20
+                || !preg_match(
+                    '/^[\p{L}\p{N}_-]+$/u',
+                    $adminUsername
+                )
+            ) {
+                $error = '管理员用户名须为3至20位文字、数字、下划线或短横线';
+            } elseif (strlen($adminPassword) < 10) {
+                $error = '密码长度至少10位';
+            } elseif (strlen($adminPassword) > 256) {
+                $error = '密码长度不能超过256个字节';
             } else {
                 $_SESSION['install_config']['admin_username'] = $adminUsername;
                 $_SESSION['install_config']['admin_password'] = $adminPassword;
@@ -76,21 +333,25 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             break;
             
         case 4:
-            // 执行安装
-            session_start();
+            // 执行安装 / Run installation
             if (!isset($_SESSION['install_config'])) {
                 $error = '安装配置丢失，请重新开始';
                 $step = 1;
             } else {
+                set_time_limit(0);
                 $result = performInstallation($_SESSION['install_config']);
                 if ($result === true) {
                     $success = '安装完成！';
                     $step = 5;
+                    $_SESSION['install_config']['db_pass'] = '';
+                    $_SESSION['install_config']['admin_password'] = '';
+                    unset($_SESSION['installer_csrf_token']);
                 } else {
                     $error = $result;
                 }
             }
             break;
+        }
     }
 }
 
@@ -102,47 +363,100 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 function performInstallation($config) {
     $db = null;
     $installerTransactionOpen = false;
+    $installationComplete = false;
+    $localConfigPath = __DIR__ . '/config/local.php';
+    $localConfigWritten = false;
+    $hadPreviousLocalConfig = false;
+    $previousLocalConfig = null;
+    $previousLocalConfigMode = 0600;
+    $installationLockHandle = null;
+    $installationLockAcquired = false;
 
     try {
-        // 1. 创建配置文件
+        // 整个安装过程使用文件锁串行化，避免并发请求互相恢复或删除配置。 / Serialize the entire installation so concurrent requests cannot restore or delete each other's configuration.
+        $installationLockHandle = @fopen(
+            __DIR__ . '/config/.installing.lock',
+            'c'
+        );
+        if ($installationLockHandle === false) {
+            return '无法创建安装互斥锁';
+        }
+        $installationLockAcquired = @flock(
+            $installationLockHandle,
+            LOCK_EX | LOCK_NB
+        );
+        if (!$installationLockAcquired) {
+            return '另一个安装过程正在进行，请稍后重试';
+        }
+        if (DIRECTORY_SEPARATOR !== '\\') {
+            @chmod(__DIR__ . '/config/.installing.lock', 0600);
+        }
+
+        $hadPreviousLocalConfig = is_file($localConfigPath);
+        if ($hadPreviousLocalConfig) {
+            $previousLocalConfig = file_get_contents($localConfigPath);
+            if ($previousLocalConfig === false) {
+                return '无法读取现有本地配置，安装已中止';
+            }
+            $previousMode = fileperms($localConfigPath);
+            if ($previousMode !== false) {
+                $previousLocalConfigMode = $previousMode & 0777;
+            }
+        }
+
+        // 环境变量优先于本地配置；必须与表单数据库完全一致，避免拆分安装。 / Environment variables override local configuration and must match the form exactly to prevent a split-database installation.
+        $databaseEnvironmentValues = [
+            'FIRESEED_DB_HOST' => (string) $config['db_host'],
+            'FIRESEED_DB_USER' => (string) $config['db_user'],
+            'FIRESEED_DB_PASS' => (string) $config['db_pass'],
+            'FIRESEED_DB_NAME' => (string) $config['db_name']
+        ];
+        foreach ($databaseEnvironmentValues as $environmentKey => $formValue) {
+            $environmentValue = getenv($environmentKey);
+            if ($environmentValue !== false
+                && (string) $environmentValue !== $formValue) {
+                error_log(
+                    'Installer database configuration conflict: '
+                    . $environmentKey
+                );
+                return '数据库环境变量与安装表单不一致，安装已中止';
+            }
+        }
+
+        // 1. 创建仅包含部署机密的本地配置文件 / Create a local configuration file containing deployment secrets only
         $configContent = "<?php\n";
-        $configContent .= "// 种火集结号 - 主配置文件 / Fireseed Engage - Main configuration\n";
+        $configContent .= "// 种火集结号 - 本地部署配置 / Fireseed Engage - Local deployment configuration\n";
         $configContent .= "// 由安装程序自动生成 / Generated by the installer\n\n";
-        $configContent .= "// 数据库配置 / Database configuration\n";
-        $configContent .= "define('DB_HOST', " . var_export($config['db_host'], true) . ");\n";
-        $configContent .= "define('DB_USER', " . var_export($config['db_user'], true) . ");\n";
-        $configContent .= "define('DB_PASS', " . var_export($config['db_pass'], true) . ");\n";
-        $configContent .= "define('DB_NAME', " . var_export($config['db_name'], true) . ");\n";
-        $configContent .= "define('DB_CHARSET', 'utf8mb4');\n\n";
-        $configContent .= "// 网站基本设置 / Website settings\n";
-        $configContent .= "define('SITE_NAME', '种火集结号');\n";
-        $configContent .= "define('SITE_URL', " . var_export($config['site_url'], true) . ");\n";
-        $configContent .= "define('ADMIN_EMAIL', " . var_export($config['admin_email'], true) . ");\n\n";
-        $configContent .= "// 游戏基本设置 / Game settings\n";
-        $configContent .= "define('GAME_VERSION', '1.0.0');\n";
-        $configContent .= "define('DEBUG_MODE', false);\n\n";
-        $configContent .= "// 时区设置 / Time zone\n";
-        $configContent .= "date_default_timezone_set('Asia/Shanghai');\n\n";
-        $configContent .= "// 会话设置 / Session settings\n";
-        $configContent .= "ini_set('session.cookie_lifetime', 86400); // 24小时 / 24 hours\n";
-        $configContent .= "ini_set('session.gc_maxlifetime', 86400); // 24小时 / 24 hours\n";
-        $configContent .= "if (session_status() !== PHP_SESSION_ACTIVE) {\n";
-        $configContent .= "    session_start();\n";
-        $configContent .= "}\n\n";
-        $configContent .= "// 加载常量与运行变量 / Load constants and runtime variables\n";
-        $configContent .= "require_once __DIR__ . '/game_constants.php';\n";
-        $configContent .= "require_once __DIR__ . '/game_variables.php';\n";
-        
-        if (!file_put_contents('config/config.php', $configContent)) {
+        $configContent .= "return [\n";
+        $configContent .= "    'DB_HOST' => " . var_export($config['db_host'], true) . ",\n";
+        $configContent .= "    'DB_USER' => " . var_export($config['db_user'], true) . ",\n";
+        $configContent .= "    'DB_PASS' => " . var_export($config['db_pass'], true) . ",\n";
+        $configContent .= "    'DB_NAME' => " . var_export($config['db_name'], true) . ",\n";
+        $configContent .= "    'SITE_URL' => " . var_export($config['site_url'], true) . ",\n";
+        $configContent .= "    'ADMIN_EMAIL' => " . var_export($config['admin_email'], true) . ",\n";
+        $configContent .= "];\n";
+
+        if (!writeInstallerFileAtomically(
+            $localConfigPath,
+            $configContent,
+            0600
+        )) {
             return '无法创建配置文件';
         }
+        $localConfigWritten = true;
         
         // 2. 连接数据库
         $db = new mysqli($config['db_host'], $config['db_user'], $config['db_pass'], $config['db_name']);
         if ($db->connect_error) {
-            return '数据库连接失败: ' . $db->connect_error;
+            error_log(
+                'Installation database connection failed: '
+                . $db->connect_error
+            );
+            return '数据库连接失败，请检查服务器日志';
         }
-        $db->set_charset('utf8mb4');
+        if (!$db->set_charset('utf8mb4')) {
+            return '无法设置数据库字符集';
+        }
         $timezoneStmt = $db->prepare("SET SESSION time_zone = '+08:00'");
         if (!$timezoneStmt || !$timezoneStmt->execute()) {
             if ($timezoneStmt) {
@@ -174,68 +488,89 @@ function performInstallation($config) {
         ];
         
         foreach ($sqlFiles as $sqlFile) {
-            if (file_exists($sqlFile)) {
-                $sql = file_get_contents($sqlFile);
-                if ($sql) {
-                    // 按引号与注释语义分割SQL，保留字符串内的分号 / Split SQL with quote/comment awareness and preserve semicolons inside strings
-                    $statements = splitInstallerSqlStatements($sql);
-                    foreach ($statements as $statement) {
-                        $statement = trim($statement);
-                        if (!empty($statement)) {
-                            $statement = makeInstallerSqlStatementRerunnable(
-                                $statement,
-                                $sqlFile
-                            );
-                            $transactionCommand =
-                                getInstallerSqlTransactionCommand($statement);
-                            if ($transactionCommand !== null) {
-                                if ($transactionCommand === 'START') {
-                                    if ($installerTransactionOpen
-                                        || !$db->begin_transaction()) {
-                                        if ($installerTransactionOpen) {
-                                            $db->rollback();
-                                            $installerTransactionOpen = false;
-                                        }
-                                        return "无法开始SQL事务 ($sqlFile): "
-                                            . $db->error;
-                                    }
-                                    $installerTransactionOpen = true;
-                                } elseif ($transactionCommand === 'COMMIT') {
-                                    if (!$installerTransactionOpen
-                                        || !$db->commit()) {
-                                        if ($installerTransactionOpen) {
-                                            $db->rollback();
-                                            $installerTransactionOpen = false;
-                                        }
-                                        return "无法提交SQL事务 ($sqlFile): "
-                                            . $db->error;
-                                    }
-                                    $installerTransactionOpen = false;
-                                } else {
-                                    if ($installerTransactionOpen
-                                        && !$db->rollback()) {
-                                        return "无法回滚SQL事务 ($sqlFile): "
-                                            . $db->error;
-                                    }
-                                    $installerTransactionOpen = false;
-                                }
-                                continue;
-                            }
+            $sqlFilePath = __DIR__ . '/' . $sqlFile;
+            if (!is_file($sqlFilePath) || !is_readable($sqlFilePath)) {
+                return "安装所需SQL文件缺失或不可读 ($sqlFile)";
+            }
 
-                            $sqlStmt = $db->prepare($statement);
-                            if (!$sqlStmt || !$sqlStmt->execute()) {
-                                if ($sqlStmt) {
-                                    $sqlStmt->close();
-                                }
+            $sql = file_get_contents($sqlFilePath);
+            if ($sql === false || trim($sql) === '') {
+                return "安装所需SQL文件为空或不可读 ($sqlFile)";
+            }
+
+            // 按引号与注释语义分割SQL，保留字符串内的分号 / Split SQL with quote/comment awareness and preserve semicolons inside strings
+            $statements = splitInstallerSqlStatements($sql);
+            if (count($statements) === 0) {
+                return "安装所需SQL文件不含可执行语句 ($sqlFile)";
+            }
+            foreach ($statements as $statement) {
+                $statement = trim($statement);
+                if (!empty($statement)) {
+                    $statement = makeInstallerSqlStatementRerunnable(
+                        $statement,
+                        $sqlFile
+                    );
+                    $transactionCommand =
+                        getInstallerSqlTransactionCommand($statement);
+                    if ($transactionCommand !== null) {
+                        if ($transactionCommand === 'START') {
+                            if ($installerTransactionOpen
+                                || !$db->begin_transaction()) {
                                 if ($installerTransactionOpen) {
                                     $db->rollback();
                                     $installerTransactionOpen = false;
                                 }
-                                return "执行SQL失败 ($sqlFile): " . $db->error;
+                                return getInstallerDatabaseFailureMessage(
+                                    '无法开始SQL事务',
+                                    $sqlFile,
+                                    $db->error
+                                );
                             }
+                            $installerTransactionOpen = true;
+                        } elseif ($transactionCommand === 'COMMIT') {
+                            if (!$installerTransactionOpen
+                                || !$db->commit()) {
+                                if ($installerTransactionOpen) {
+                                    $db->rollback();
+                                    $installerTransactionOpen = false;
+                                }
+                                return getInstallerDatabaseFailureMessage(
+                                    '无法提交SQL事务',
+                                    $sqlFile,
+                                    $db->error
+                                );
+                            }
+                            $installerTransactionOpen = false;
+                        } else {
+                            if ($installerTransactionOpen
+                                && !$db->rollback()) {
+                                return getInstallerDatabaseFailureMessage(
+                                    '无法回滚SQL事务',
+                                    $sqlFile,
+                                    $db->error
+                                );
+                            }
+                            $installerTransactionOpen = false;
+                        }
+                        continue;
+                    }
+
+                    $sqlStmt = $db->prepare($statement);
+                    if (!$sqlStmt || !$sqlStmt->execute()) {
+                        if ($sqlStmt) {
                             $sqlStmt->close();
                         }
+                        if ($installerTransactionOpen) {
+                            $db->rollback();
+                            $installerTransactionOpen = false;
+                        }
+                        return getInstallerDatabaseFailureMessage(
+                            '执行SQL失败',
+                            $sqlFile,
+                            $db->error
+                        );
                     }
+                    $sqlStmt->close();
                 }
             }
         }
@@ -245,13 +580,35 @@ function performInstallation($config) {
             return '安装SQL包含未结束的事务';
         }
         
-        // 4. 加载刚生成的配置与安装所需类 / Load the generated config and installation classes
-        require_once 'config/config.php';
-        require_once 'includes/database.php';
-        require_once 'includes/classes/User.php';
-        require_once 'includes/classes/Technology.php';
-        require_once 'includes/classes/Map.php';
-        require_once 'includes/classes/MapGenerator.php';
+        // 4. 加载本地配置与安装所需类 / Load local configuration and installation classes
+        require_once __DIR__ . '/config/config.php';
+        $effectiveDatabaseConfig = [
+            'DB_HOST' => (string) DB_HOST,
+            'DB_USER' => (string) DB_USER,
+            'DB_PASS' => (string) DB_PASS,
+            'DB_NAME' => (string) DB_NAME
+        ];
+        $expectedDatabaseConfig = [
+            'DB_HOST' => (string) $config['db_host'],
+            'DB_USER' => (string) $config['db_user'],
+            'DB_PASS' => (string) $config['db_pass'],
+            'DB_NAME' => (string) $config['db_name']
+        ];
+        if ($effectiveDatabaseConfig !== $expectedDatabaseConfig) {
+            error_log(
+                'Installer effective database configuration does not match '
+                . 'the validated form configuration.'
+            );
+            return '生效的数据库配置与安装表单不一致，安装已中止';
+        }
+        require_once __DIR__ . '/includes/database.php';
+        require_once __DIR__ . '/includes/classes/GameConfig.php';
+        require_once __DIR__ . '/includes/classes/User.php';
+        require_once __DIR__
+            . '/includes/classes/TechnologyEffectService.php';
+        require_once __DIR__ . '/includes/classes/Technology.php';
+        require_once __DIR__ . '/includes/classes/Map.php';
+        require_once __DIR__ . '/includes/classes/MapGenerator.php';
         
         // 5. 创建或恢复同一管理员账户 / Create or recover the same administrator account.
         $adminResult = createOrRecoverInstallationAdmin($db, $config);
@@ -261,33 +618,169 @@ function performInstallation($config) {
         $adminUserId = $adminResult['user_id'];
         
         // 6. 初始化默认科技 / Seed the default technologies.
-        Technology::initializeDefaultTechnologies();
+        if (!Technology::initializeDefaultTechnologies()) {
+            return '初始化默认科技失败，请检查服务器日志';
+        }
         
         // 7. 生成初始地图 / Generate the initial world map.
         $mapGenerator = new MapGenerator();
         $mapResult = $mapGenerator->generateMap(true);
         if ($mapResult !== true) {
-            return '生成地图失败: ' . $mapResult;
+            error_log('Initial map generation failed: ' . $mapResult);
+            return '生成地图失败，请检查服务器日志';
         }
         
         // 8. 创建安装锁定文件 / Create the installation lock file.
         $lockContent = "安装完成时间: " . date('Y-m-d H:i:s') . "\n";
         $lockContent .= "管理员用户: " . $config['admin_username'] . "\n";
-        $lockContent .= "安装版本: 1.0.0\n";
+        $lockContent .= "安装版本: " . GAME_VERSION . "\n";
         
-        if (!file_put_contents('config/installed.lock', $lockContent)) {
+        if (!writeInstallerFileAtomically(
+            __DIR__ . '/config/installed.lock',
+            $lockContent,
+            0600
+        )) {
             return '无法创建安装锁定文件';
         }
-        
+
+        $installationComplete = true;
         $db->close();
+        $db = null;
         return true;
         
     } catch (Throwable $e) {
         if ($installerTransactionOpen && $db instanceof mysqli) {
             $db->rollback();
+            $installerTransactionOpen = false;
         }
-        return '安装过程中发生错误: ' . $e->getMessage();
+        error_log('Installation failed: ' . $e->getMessage());
+        return '安装过程中发生错误，请检查服务器日志';
+    } finally {
+        if ($db instanceof mysqli) {
+            if ($installerTransactionOpen) {
+                $db->rollback();
+                $installerTransactionOpen = false;
+            }
+            $db->close();
+        }
+
+        // 任一步骤失败都恢复原配置，避免重跑留下截断或错误机密。 / Restore the original configuration after any failure so reruns never inherit truncated or incorrect secrets.
+        if (!$installationComplete && $localConfigWritten) {
+            $restored = $hadPreviousLocalConfig
+                ? writeInstallerFileAtomically(
+                    $localConfigPath,
+                    $previousLocalConfig,
+                    $previousLocalConfigMode
+                )
+                : (!is_file($localConfigPath)
+                    || @unlink($localConfigPath));
+            if (!$restored) {
+                error_log(
+                    'Installer failed to restore the previous local '
+                    . 'configuration.'
+                );
+            }
+        }
+
+        if (is_resource($installationLockHandle)) {
+            if ($installationLockAcquired) {
+                @flock($installationLockHandle, LOCK_UN);
+            }
+            @fclose($installationLockHandle);
+        }
     }
+}
+
+/**
+ * 以同目录临时文件原子写入安装产物 / Atomically write an installer artifact through a same-directory temporary file
+ *
+ * @param string $path 目标路径 / Target path
+ * @param string $contents 文件内容 / File contents
+ * @param int $mode POSIX权限 / POSIX mode
+ * @return bool 是否完整写入 / Whether the complete artifact was written
+ */
+function writeInstallerFileAtomically($path, $contents, $mode = 0600) {
+    $directory = dirname($path);
+    if (!is_dir($directory) || !is_writable($directory)) {
+        return false;
+    }
+
+    $temporaryPath = tempnam($directory, '.fireseed-install-');
+    if ($temporaryPath === false) {
+        return false;
+    }
+
+    $expectedBytes = strlen($contents);
+    $writtenBytes = file_put_contents(
+        $temporaryPath,
+        $contents,
+        LOCK_EX
+    );
+    if ($writtenBytes !== $expectedBytes) {
+        @unlink($temporaryPath);
+        return false;
+    }
+
+    // Windows 依赖目录 ACL；POSIX 部署必须在发布前收紧权限。 / Windows relies on directory ACLs; POSIX deployments must tighten permissions before publication.
+    if (DIRECTORY_SEPARATOR !== '\\' && !@chmod($temporaryPath, $mode)) {
+        @unlink($temporaryPath);
+        return false;
+    }
+
+    if (@rename($temporaryPath, $path)) {
+        return true;
+    }
+
+    // 部分 Windows 文件系统不能直接覆盖目标；使用可恢复的两步替换。 / Some Windows filesystems cannot replace a destination directly, so use a recoverable two-step replacement.
+    if (!is_file($path)) {
+        @unlink($temporaryPath);
+        return false;
+    }
+    $backupPath = dirname($path)
+        . '/.'
+        . basename($path, '.php')
+        . '-installer-backup-'
+        . bin2hex(random_bytes(8))
+        . '.php';
+    if (!@rename($path, $backupPath)) {
+        @unlink($temporaryPath);
+        return false;
+    }
+    if (!@rename($temporaryPath, $path)) {
+        @rename($backupPath, $path);
+        @unlink($temporaryPath);
+        return false;
+    }
+    if (!@unlink($backupPath)) {
+        error_log(
+            'Installer left a local backup artifact at ' . $backupPath
+        );
+    }
+    return true;
+}
+
+/**
+ * 记录安装数据库错误并返回安全消息 / Log an installer database error and return a safe message
+ *
+ * @param string $operation 操作名称 / Operation name
+ * @param string $sqlFile SQL文件 / SQL file
+ * @param string $databaseError 数据库错误 / Database error
+ * @return string 安全错误消息 / Safe error message
+ */
+function getInstallerDatabaseFailureMessage(
+    $operation,
+    $sqlFile,
+    $databaseError
+) {
+    error_log(
+        'Installer database operation failed ['
+        . $operation
+        . '] ['
+        . $sqlFile
+        . ']: '
+        . $databaseError
+    );
+    return $operation . " ($sqlFile)，请检查服务器日志";
 }
 
 /**
@@ -468,8 +961,33 @@ function createOrRecoverInstallationAdmin($db, $config) {
             'message' => '无法安全散列管理员密码'
         ];
     }
+    $initialMaxCircuitPoints = max(
+        1,
+        (int) GameConfig::get('initial_max_circuit_points', 10)
+    );
+    $initialCircuitPoints = min(
+        $initialMaxCircuitPoints,
+        max(0, (int) GameConfig::get('initial_circuit_points', 1))
+    );
+    $initialMaxGeneralCost = max(
+        0.0,
+        (float) GameConfig::get('initial_max_general_cost', 10.0)
+    );
+    $initialResources = [
+        max(0, (int) GameConfig::get('initial_bright_crystal', 1000)),
+        max(0, (int) GameConfig::get('initial_warm_crystal', 1000)),
+        max(0, (int) GameConfig::get('initial_cold_crystal', 1000)),
+        max(0, (int) GameConfig::get('initial_green_crystal', 1000)),
+        max(0, (int) GameConfig::get('initial_day_crystal', 1000)),
+        max(0, (int) GameConfig::get('initial_night_crystal', 1000))
+    ];
 
-    $db->begin_transaction();
+    if (!$db->begin_transaction()) {
+        return [
+            'success' => false,
+            'message' => '无法开始管理员创建事务'
+        ];
+    }
 
     try {
         $lookup = $db->prepare(
@@ -526,18 +1044,23 @@ function createOrRecoverInstallationAdmin($db, $config) {
             $registrationDate = date('Y-m-d H:i:s');
             $insert = $db->prepare(
                 'INSERT INTO users
-                 (username, password, email, registration_date, admin_level)
-                 VALUES (?, ?, ?, ?, 9)'
+                 (username, password, email, registration_date,
+                  circuit_points, max_circuit_points, max_general_cost,
+                  admin_level)
+                 VALUES (?, ?, ?, ?, ?, ?, ?, 9)'
             );
             if (!$insert) {
                 throw new RuntimeException('无法创建管理员账户');
             }
             $insert->bind_param(
-                'ssss',
+                'ssssiid',
                 $username,
                 $passwordHash,
                 $email,
-                $registrationDate
+                $registrationDate,
+                $initialCircuitPoints,
+                $initialMaxCircuitPoints,
+                $initialMaxGeneralCost
             );
             if (!$insert->execute()) {
                 $insert->close();
@@ -552,20 +1075,33 @@ function createOrRecoverInstallationAdmin($db, $config) {
             'INSERT INTO resources
              (user_id, bright_crystal, warm_crystal, cold_crystal,
               green_crystal, day_crystal, night_crystal, last_update)
-             VALUES (?, 1000, 1000, 1000, 1000, 1000, 1000, NOW())
+             VALUES (?, ?, ?, ?, ?, ?, ?, NOW())
              ON DUPLICATE KEY UPDATE user_id = VALUES(user_id)'
         );
         if (!$resources) {
             throw new RuntimeException('无法初始化管理员资源');
         }
-        $resources->bind_param('i', $adminUserId);
+        $resources->bind_param(
+            'iiiiiii',
+            $adminUserId,
+            $initialResources[0],
+            $initialResources[1],
+            $initialResources[2],
+            $initialResources[3],
+            $initialResources[4],
+            $initialResources[5]
+        );
         if (!$resources->execute()) {
             $resources->close();
             throw new RuntimeException('无法初始化管理员资源');
         }
         $resources->close();
 
-        $db->commit();
+        if (!$db->commit()) {
+            throw new RuntimeException(
+                '无法提交管理员账户事务'
+            );
+        }
         return [
             'success' => true,
             'user_id' => $adminUserId,
@@ -573,9 +1109,13 @@ function createOrRecoverInstallationAdmin($db, $config) {
         ];
     } catch (Throwable $e) {
         $db->rollback();
+        error_log(
+            'Installation administrator creation failed: '
+            . $e->getMessage()
+        );
         return [
             'success' => false,
-            'message' => '创建或恢复管理员账户失败: ' . $e->getMessage()
+            'message' => '创建或恢复管理员账户失败，请检查服务器日志'
         ];
     }
 }
@@ -599,12 +1139,28 @@ function checkEnvironment() {
         'status' => extension_loaded('mysqli'),
         'current' => extension_loaded('mysqli') ? '已安装' : '未安装'
     ];
+
+    // mysqlnd 是 get_result 所需运行依赖 / mysqlnd is required by get_result
+    $hasMysqlNativeDriver = extension_loaded('mysqli')
+        && method_exists('mysqli_stmt', 'get_result');
+    $checks['mysqlnd'] = [
+        'name' => 'MySQL Native Driver (mysqlnd)',
+        'status' => $hasMysqlNativeDriver,
+        'current' => $hasMysqlNativeDriver ? '已安装' : '未安装'
+    ];
     
     // JSON扩展检查
     $checks['json'] = [
         'name' => 'JSON扩展',
         'status' => extension_loaded('json'),
         'current' => extension_loaded('json') ? '已安装' : '未安装'
+    ];
+
+    // 多字节字符串用于用户名与内容校验 / Multibyte strings are used for username and content validation
+    $checks['mbstring'] = [
+        'name' => 'Mbstring扩展',
+        'status' => extension_loaded('mbstring'),
+        'current' => extension_loaded('mbstring') ? '已安装' : '未安装'
     ];
     
     // 会话支持检查
@@ -625,6 +1181,30 @@ function checkEnvironment() {
 }
 
 $envChecks = checkEnvironment();
+
+// 从经过筛选的请求信息生成安装默认地址 / Build the default installer URL from filtered request data
+$installerHost = isset($_SERVER['HTTP_HOST'])
+    ? (string) $_SERVER['HTTP_HOST']
+    : 'localhost';
+if (!preg_match('/^[a-z0-9.:\[\]-]+$/i', $installerHost)) {
+    $installerHost = 'localhost';
+}
+$installerRequestPath = parse_url(
+    isset($_SERVER['REQUEST_URI']) ? $_SERVER['REQUEST_URI'] : '/install.php',
+    PHP_URL_PATH
+);
+$installerBasePath = str_replace(
+    '\\',
+    '/',
+    dirname($installerRequestPath ?: '/install.php')
+);
+if ($installerBasePath === '/' || $installerBasePath === '.') {
+    $installerBasePath = '';
+}
+$installerDefaultSiteUrl = ($isHttpsRequest ? 'https' : 'http')
+    . '://'
+    . $installerHost
+    . $installerBasePath;
 ?>
 
 <!DOCTYPE html>
@@ -881,6 +1461,8 @@ $envChecks = checkEnvironment();
             <div class="text-center mt-20">
                 <?php if ($allPassed): ?>
                 <form method="post">
+                    <input type="hidden" name="step" value="1">
+                    <input type="hidden" name="csrf_token" value="<?php echo htmlspecialchars($installerCsrfToken, ENT_QUOTES, 'UTF-8'); ?>">
                     <button type="submit" class="btn">下一步</button>
                 </form>
                 <?php else: ?>
@@ -895,6 +1477,8 @@ $envChecks = checkEnvironment();
             <p>请填写数据库连接信息和基本站点设置。</p>
             
             <form method="post">
+                <input type="hidden" name="step" value="2">
+                <input type="hidden" name="csrf_token" value="<?php echo htmlspecialchars($installerCsrfToken, ENT_QUOTES, 'UTF-8'); ?>">
                 <div class="form-group">
                     <label class="form-label">数据库主机 *</label>
                     <input type="text" name="db_host" class="form-input" value="localhost" required>
@@ -919,13 +1503,16 @@ $envChecks = checkEnvironment();
                 
                 <div class="form-group">
                     <label class="form-label">站点URL *</label>
-                    <input type="url" name="site_url" class="form-input" value="<?php echo 'http://' . $_SERVER['HTTP_HOST'] . dirname($_SERVER['REQUEST_URI']); ?>" required>
+                    <input type="url" name="site_url" class="form-input"
+                           value="<?php echo htmlspecialchars($installerDefaultSiteUrl, ENT_QUOTES, 'UTF-8'); ?>"
+                           maxlength="2048" required>
                     <div class="form-hint">游戏的完整访问地址</div>
                 </div>
                 
                 <div class="form-group">
-                    <label class="form-label">管理员邮箱</label>
-                    <input type="email" name="admin_email" class="form-input" value="admin@example.com">
+                    <label class="form-label">管理员邮箱 *</label>
+                    <input type="email" name="admin_email" class="form-input"
+                           value="admin@example.com" maxlength="254" required>
                 </div>
                 
                 <div class="text-center mt-20">
@@ -939,21 +1526,28 @@ $envChecks = checkEnvironment();
             <p>请设置超级管理员账户信息。</p>
             
             <form method="post">
+                <input type="hidden" name="step" value="3">
+                <input type="hidden" name="csrf_token" value="<?php echo htmlspecialchars($installerCsrfToken, ENT_QUOTES, 'UTF-8'); ?>">
                 <div class="form-group">
                     <label class="form-label">管理员用户名 *</label>
-                    <input type="text" name="admin_username" class="form-input" required>
-                    <div class="form-hint">用于登录管理后台</div>
+                    <input type="text" name="admin_username" class="form-input"
+                           minlength="3" maxlength="20"
+                           pattern="[\p{L}\p{N}_-]+" required>
+                    <div class="form-hint">3至20位文字、数字、下划线或短横线，用于登录管理后台</div>
                 </div>
                 
                 <div class="form-group">
                     <label class="form-label">管理员密码 *</label>
-                    <input type="password" name="admin_password" class="form-input" required>
-                    <div class="form-hint">密码长度至少6位</div>
+                    <input type="password" name="admin_password" class="form-input"
+                           minlength="10" maxlength="256" required>
+                    <div class="form-hint">密码长度10至256位</div>
                 </div>
                 
                 <div class="form-group">
                     <label class="form-label">确认密码 *</label>
-                    <input type="password" name="admin_password_confirm" class="form-input" required>
+                    <input type="password" name="admin_password_confirm"
+                           class="form-input" minlength="10" maxlength="256"
+                           required>
                 </div>
                 
                 <div class="text-center mt-20">
@@ -967,6 +1561,8 @@ $envChecks = checkEnvironment();
             <p>正在创建数据库表、初始化数据和配置文件，请稍候...</p>
             
             <form method="post">
+                <input type="hidden" name="step" value="4">
+                <input type="hidden" name="csrf_token" value="<?php echo htmlspecialchars($installerCsrfToken, ENT_QUOTES, 'UTF-8'); ?>">
                 <div class="text-center mt-20">
                     <button type="submit" class="btn">开始安装</button>
                 </div>
@@ -980,7 +1576,7 @@ $envChecks = checkEnvironment();
             <div style="background: #f8f9fa; padding: 20px; border-radius: 6px; margin: 20px 0;">
                 <h4>安装信息：</h4>
                 <ul>
-                    <li><strong>游戏版本：</strong>1.0.0</li>
+                    <li><strong>游戏版本：</strong><?php echo htmlspecialchars(GAME_VERSION, ENT_QUOTES, 'UTF-8'); ?></li>
                     <li><strong>安装时间：</strong><?php echo date('Y-m-d H:i:s'); ?></li>
                     <li><strong>管理员账户：</strong><?php echo htmlspecialchars($_SESSION['install_config']['admin_username'] ?? ''); ?></li>
                 </ul>

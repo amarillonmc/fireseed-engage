@@ -101,41 +101,113 @@ class User {
         
         // 创建新用户
         $hashedPassword = password_hash($password, PASSWORD_DEFAULT);
+        if ($hashedPassword === false) {
+            error_log('Unable to hash a new player password.');
+            return false;
+        }
         $registrationDate = date('Y-m-d H:i:s');
-        
-        $query = "INSERT INTO users (username, password, email, registration_date, level, circuit_points, max_circuit_points, max_general_cost, admin_level)
-                  VALUES (?, ?, ?, ?, 1, 1, 10, 10.0, 0)";
-        $stmt = $this->db->prepare($query);
-        $stmt->bind_param('ssss', $username, $hashedPassword, $email, $registrationDate);
-        $result = $stmt->execute();
-        
-        if ($result) {
-            $userId = $this->db->insert_id;
+
+        $initialCircuitPoints = max(
+            0,
+            (int) GameConfig::get('initial_circuit_points', 1)
+        );
+        $initialMaxCircuitPoints = max(
+            1,
+            (int) GameConfig::get('initial_max_circuit_points', 10)
+        );
+        $initialCircuitPoints = min(
+            $initialCircuitPoints,
+            $initialMaxCircuitPoints
+        );
+        $initialMaxGeneralCost = max(
+            0.0,
+            (float) GameConfig::get('initial_max_general_cost', 10.0)
+        );
+        $initialResources = [
+            'bright' => max(0, (int) GameConfig::get('initial_bright_crystal', 1000)),
+            'warm' => max(0, (int) GameConfig::get('initial_warm_crystal', 1000)),
+            'cold' => max(0, (int) GameConfig::get('initial_cold_crystal', 1000)),
+            'green' => max(0, (int) GameConfig::get('initial_green_crystal', 1000)),
+            'day' => max(0, (int) GameConfig::get('initial_day_crystal', 1000)),
+            'night' => max(0, (int) GameConfig::get('initial_night_crystal', 1000))
+        ];
+
+        if (!$this->db->begin_transaction()) {
+            return false;
+        }
+        try {
+            $query = "INSERT INTO users
+                         (username, password, email, registration_date, level,
+                          circuit_points, max_circuit_points, max_general_cost,
+                          admin_level)
+                      VALUES (?, ?, ?, ?, 1, ?, ?, ?, 0)";
+            $stmt = $this->db->prepare($query);
+            $stmt->bind_param(
+                'ssssiid',
+                $username,
+                $hashedPassword,
+                $email,
+                $registrationDate,
+                $initialCircuitPoints,
+                $initialMaxCircuitPoints,
+                $initialMaxGeneralCost
+            );
+            if (!$stmt->execute() || $stmt->affected_rows !== 1) {
+                $stmt->close();
+                throw new RuntimeException(
+                    '创建玩家账号失败 / Failed to create player account'
+                );
+            }
+            $userId = (int) $this->db->insert_id;
             $stmt->close();
-            
-            // 初始化用户资源
-            $resourceQuery = "INSERT INTO resources (user_id, bright_crystal, warm_crystal, cold_crystal, green_crystal, day_crystal, night_crystal, last_update) 
-                             VALUES (?, 1000, 1000, 1000, 1000, 1000, 1000, ?)";
+
+            // 账号资源与账号本体必须原子创建，避免半初始化玩家 / Create the wallet atomically with the account to prevent partial players
+            $resourceQuery = "INSERT INTO resources
+                                (user_id, bright_crystal, warm_crystal,
+                                 cold_crystal, green_crystal, day_crystal,
+                                 night_crystal, last_update)
+                              VALUES (?, ?, ?, ?, ?, ?, ?, ?)";
             $resourceStmt = $this->db->prepare($resourceQuery);
-            $resourceStmt->bind_param('is', $userId, $registrationDate);
-            $resourceStmt->execute();
+            $resourceStmt->bind_param(
+                'iiiiiiis',
+                $userId,
+                $initialResources['bright'],
+                $initialResources['warm'],
+                $initialResources['cold'],
+                $initialResources['green'],
+                $initialResources['day'],
+                $initialResources['night'],
+                $registrationDate
+            );
+            if (!$resourceStmt->execute()
+                || $resourceStmt->affected_rows !== 1) {
+                $resourceStmt->close();
+                throw new RuntimeException(
+                    '初始化玩家资源失败 / Failed to initialize player resources'
+                );
+            }
             $resourceStmt->close();
-            
-            // 设置用户数据
+            if (!$this->db->commit()) {
+                throw new RuntimeException(
+                    '提交玩家初始化失败 / Failed to commit player initialization'
+                );
+            }
+
             $this->userId = $userId;
             $this->username = $username;
             $this->email = $email;
             $this->level = 1;
-            $this->circuitPoints = 1;
-            $this->maxCircuitPoints = 10;
-            $this->maxGeneralCost = 10.0;
+            $this->circuitPoints = $initialCircuitPoints;
+            $this->maxCircuitPoints = $initialMaxCircuitPoints;
+            $this->maxGeneralCost = $initialMaxGeneralCost;
+            $this->adminLevel = 0;
             $this->isValid = true;
-            
             return $userId;
+        } catch (Throwable $exception) {
+            $this->db->rollback();
+            error_log('User creation failed: ' . $exception->getMessage());
+            return false;
         }
-        
-        $stmt->close();
-        return false;
     }
     
     /**
@@ -342,7 +414,7 @@ class User {
     }
     
     /**
-     * 增加用户等级
+     * 增加兼容等级，不再改变成长上限 / Increment compatibility level without changing progression caps
      * @param int $levels 增加的等级数
      * @return bool
      */
@@ -352,19 +424,15 @@ class User {
         }
         
         $newLevel = $this->level + $levels;
-        $newMaxCircuitPoints = $this->maxCircuitPoints + ($levels * 2); // 每升一级增加2点最大思考回路
-        $newMaxGeneralCost = $this->maxGeneralCost + ($levels * 0.5); // 每升一级增加0.5点最大武将费用
-        
-        $query = "UPDATE users SET level = ?, max_circuit_points = ?, max_general_cost = ? WHERE user_id = ?";
+        // 等级字段仅为旧数据兼容，三项成长上限由永久科研控制 / Level remains for legacy compatibility; permanent research controls progression caps
+        $query = "UPDATE users SET level = ? WHERE user_id = ?";
         $stmt = $this->db->prepare($query);
-        $stmt->bind_param('iddi', $newLevel, $newMaxCircuitPoints, $newMaxGeneralCost, $this->userId);
+        $stmt->bind_param('ii', $newLevel, $this->userId);
         $result = $stmt->execute();
         $stmt->close();
         
         if ($result) {
             $this->level = $newLevel;
-            $this->maxCircuitPoints = $newMaxCircuitPoints;
-            $this->maxGeneralCost = $newMaxGeneralCost;
             return true;
         }
         
@@ -429,7 +497,9 @@ class User {
      */
     public static function getAllUsers($limit = 50, $offset = 0) {
         $db = Database::getInstance()->getConnection();
-        $query = "SELECT user_id, username, email, level, admin_level, registration_date, last_login
+        $query = "SELECT user_id, username, email, admin_level,
+                         max_circuit_points, max_general_cost,
+                         registration_date, last_login
                   FROM users ORDER BY user_id DESC LIMIT ? OFFSET ?";
         $stmt = $db->prepare($query);
         $stmt->bind_param('ii', $limit, $offset);
@@ -456,7 +526,9 @@ class User {
     public static function searchUsers($keyword, $limit = 50) {
         $db = Database::getInstance()->getConnection();
         $searchTerm = '%' . $keyword . '%';
-        $query = "SELECT user_id, username, email, level, admin_level, registration_date, last_login
+        $query = "SELECT user_id, username, email, admin_level,
+                         max_circuit_points, max_general_cost,
+                         registration_date, last_login
                   FROM users
                   WHERE username LIKE ? OR email LIKE ?
                   ORDER BY user_id DESC LIMIT ?";

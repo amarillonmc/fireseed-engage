@@ -59,13 +59,12 @@ $resourceNames = [
                             <?php echo number_format((int) $overview['limit']); ?>
                         </div>
                         <p>
-                            玩家等级 <?php echo number_format((int) $overview['level']); ?>；
                             尚余 <?php echo number_format((int) $overview['available_slots']); ?> 个名额。
                         </p>
                     </div>
                     <div class="gameplay-card">
-                        <h4>兼容上限</h4>
-                        <p>本项目按玩家等级线性开放分基地，每级一个且最低一个。</p>
+                        <h4>科研上限</h4>
+                        <p>分基地名额由基础配置与跨赛季保留的永久科研共同决定。</p>
                     </div>
                     <div class="gameplay-card">
                         <h4>改建条件</h4>
@@ -74,9 +73,9 @@ $resourceNames = [
                     <div class="gameplay-card">
                         <h4>改建结果</h4>
                         <p>
-                            建成非主城、总督府及原资源系产出设施，并返还至多
-                            <?php echo number_format((int) TERRITORY_OCCUPATION_COST); ?>
-                            点思考回路（不超过上限）。
+                            建成非主城、总督府及原资源系产出设施，并全额返还
+                            <?php echo number_format(Map::getResourceOccupationCost()); ?>
+                            点资源地占领思考回路；返还可暂时超过持有上限。
                         </p>
                     </div>
                 </div>

@@ -1778,6 +1778,7 @@ class VassalService {
                           npc_level = NULL, npc_garrison = 0,
                           npc_respawn_time = NULL,
                           last_collection_time = NULL,
+                          occupation_circuit_cost = 0,
                           is_visible = 1
                       WHERE tile_id = ? AND type = 'empty'
                         AND owner_id IS NULL";
@@ -1802,6 +1803,7 @@ class VassalService {
         $newX = (int) $newMainCity['x'];
         $newY = (int) $newMainCity['y'];
         $removedTerritories = 0;
+        $removedResourceTerritories = 0;
         $removedSubBases = 0;
         $refundedCircuit = 0;
 
@@ -1860,6 +1862,14 @@ class VassalService {
                             THEN 1 ELSE 0 END
                         ) AS territory_count,
                         SUM(
+                          CASE WHEN type = 'resource'
+                            THEN 1 ELSE 0 END
+                        ) AS resource_territory_count,
+                        SUM(
+                          CASE WHEN type = 'resource'
+                            THEN occupation_circuit_cost ELSE 0 END
+                        ) AS refundable_circuit_points,
+                        SUM(
                           CASE WHEN type = 'npc_fort'
                             THEN 1 ELSE 0 END
                         ) AS npc_territory_count
@@ -1875,6 +1885,12 @@ class VassalService {
             $stmt->close();
             $removedTerritories = $row
                 ? max(0, (int) $row['territory_count'])
+                : 0;
+            $removedResourceTerritories = $row
+                ? max(0, (int) $row['resource_territory_count'])
+                : 0;
+            $resourceCircuitInvestment = $row
+                ? max(0, (int) $row['refundable_circuit_points'])
                 : 0;
             $removedNpcTerritories = $row
                 ? max(0, (int) $row['npc_territory_count'])
@@ -1909,6 +1925,7 @@ class VassalService {
 
             $query = "UPDATE map_tiles
                       SET owner_id = NULL,
+                          occupation_circuit_cost = 0,
                           last_collection_time = CASE
                             WHEN type = 'resource' THEN NULL
                             ELSE last_collection_time
@@ -1937,10 +1954,11 @@ class VassalService {
                     + $removedScoredSubBases
             );
             if (!empty($settings['refund_circuit'])
-                && $removedTerritories > 0) {
+                && $removedResourceTerritories > 0
+                && $resourceCircuitInvestment > 0) {
                 $refundedCircuit = $this->refundTerritoryCircuit(
                     $userId,
-                    $removedTerritories
+                    $resourceCircuitInvestment
                 );
             }
         } else {
@@ -2341,7 +2359,8 @@ class VassalService {
                       resource_amount = NULL, npc_level = NULL,
                       npc_garrison = 0, npc_respawn_time = NULL,
                       last_collection_time = NULL,
-                      collection_efficiency = 100
+                      collection_efficiency = 100,
+                      occupation_circuit_cost = 0
                   WHERE tile_id = ? AND owner_id = ?
                     AND type = 'player_city'";
         $stmt = $this->db->prepare($query);
@@ -2497,7 +2516,7 @@ class VassalService {
     /**
      * 扣减失去领地对应的净赛季分 / Remove net season score for forfeited territory
      * @param int $userId 玩家ID / User ID
-     * @param int $territoryCount 领地数量 / Territory count
+     * @param int $territoryCount 已记录的资源地回路投入 / Recorded resource-territory Circuit investment
      * @return void
      */
     private function reduceSeasonTerritoryScore($userId, $territoryCount) {
@@ -2538,14 +2557,13 @@ class VassalService {
      * rolls back the entire release.
      *
      * @param int $userId 玩家ID / User ID
-     * @param int $territoryCount 领地数量 / Territory count
+     * @param int $circuitInvestment 已记录的资源地回路投入 / Recorded resource-tile Circuit investment
      * @return int 全额返还数量 / Full refunded amount
      */
-    private function refundTerritoryCircuit($userId, $territoryCount) {
+    private function refundTerritoryCircuit($userId, $circuitInvestment) {
         $requested = min(
             2147483647,
-            max(0, (int) $territoryCount)
-                * max(0, (int) TERRITORY_OCCUPATION_COST)
+            max(0, (int) $circuitInvestment)
         );
         if ($requested <= 0) {
             return 0;
