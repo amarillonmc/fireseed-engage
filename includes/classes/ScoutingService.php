@@ -1056,12 +1056,17 @@ class ScoutingService {
             return;
         }
 
+        $distance = abs($cityX - $currentX) + abs($cityY - $currentY);
         $army = new Army($armyId);
-        $movementSpeed = $army->isValid() ? $army->getMovementSpeed() : 0;
+        $movementSpeed = $army->isValid()
+            ? $army->getMovementSpeed([
+                'phase' => 'return',
+                'distance' => $distance
+            ])
+            : 0;
         if ($movementSpeed <= 0) {
             throw new RuntimeException('侦察军队无法返城 / Scouting army cannot return');
         }
-        $distance = abs($cityX - $currentX) + abs($cityY - $currentY);
         $movementSeconds = $distance / $movementSpeed * 3600;
         $returnTime = date('Y-m-d H:i:s', (int) (time() + $movementSeconds));
 

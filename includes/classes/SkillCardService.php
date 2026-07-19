@@ -6,6 +6,7 @@
  */
 class SkillCardService {
     private const RARITIES = ['B', 'A', 'S', 'SS', 'P'];
+    private const RESOURCE_INTEGER_MAX = 2147483647;
 
     private $db;
     private $cardPoolService;
@@ -684,79 +685,230 @@ class SkillCardService {
             }
 
             $baseEffects = $this->decodeEffect((string) $skill['effect_json']);
+            $maximumSkillLevel = max(1, (int) $skill['max_level']);
+            $effectiveSkillLevel = SkillValueResolver::clampSkillLevel(
+                $skill['skill_level'],
+                $maximumSkillLevel
+            );
             $general = new General((int) $skill['general_id']);
             $skillPower = $general->isValid()
                 && (int) $general->getOwnerId() === $normalizedUserId
                 ? $general->getSkillEffectTotal('skill_power', 100.0)
                 : 0.0;
-            $calculatedEffects = $this->calculateEffects(
-                $baseEffects,
-                max(1, (int) $skill['skill_level']),
-                (int) $skill['intelligence'],
-                $skillPower
-            );
             $applied = [];
+            $definedCooldown = null;
 
-            if (isset($calculatedEffects['all_resources'])) {
-                $amount = max(0, (int) round($calculatedEffects['all_resources']));
-                $this->grantAllResources($normalizedUserId, $amount);
-                $calculatedEffects['all_resources'] = $amount;
-                $applied['all_resources'] = $amount;
-            }
-
-            if (isset($calculatedEffects['healing'])) {
-                $healing = max(0, (int) round($calculatedEffects['healing']));
-                $actualHealing = min(
-                    $healing,
-                    max(0, (int) $skill['max_hp'] - (int) $skill['hp'])
+            if (SkillDefinitionValidator::isStructured($baseEffects)) {
+                $validation = SkillDefinitionValidator::validate(
+                    $baseEffects,
+                    $maximumSkillLevel,
+                    'active',
+                    false
                 );
-
-                if ($actualHealing > 0) {
-                    $newHp = (int) $skill['hp'] + $actualHealing;
-                    $update = "UPDATE generals SET hp = ? WHERE general_id = ?";
-                    $stmt = $this->db->prepare($update);
-
-                    if (!$stmt) {
-                        throw new RuntimeException('无法恢复武将HP / Unable to heal general HP');
-                    }
-
-                    $generalId = (int) $skill['general_id'];
-                    $stmt->bind_param('ii', $newHp, $generalId);
-                    $this->executeOrFail(
-                        $stmt,
-                        '无法恢复武将HP / Unable to heal general HP'
+                if (!$validation['valid']) {
+                    throw new DomainException(
+                        '技能定义无效：'
+                        . implode('; ', $validation['errors'])
+                        . ' / Invalid skill definition'
                     );
-                    $stmt->close();
+                }
+                $evaluationContext = [
+                    'skill_level' => $effectiveSkillLevel,
+                    'max_level' => $maximumSkillLevel,
+                    'general_cost' => max(
+                        0.0,
+                        (float) $skill['cost']
+                    ),
+                    'general_intelligence' => max(
+                        0,
+                        (int) $skill['intelligence']
+                    ),
+                    'general_stats' => [
+                        'attack' => max(0, (int) $skill['attack']),
+                        'defense' => max(0, (int) $skill['defense']),
+                        'speed' => max(0, (int) $skill['speed']),
+                        'intelligence' => max(
+                            0,
+                            (int) $skill['intelligence']
+                        )
+                    ],
+                    'skill_power_percent' => $skillPower,
+                    'phase' => 'activation'
+                ];
+                $evaluation = SkillEffectEngine::evaluate(
+                    $validation['definition'],
+                    $evaluationContext
+                );
+                if (!$evaluation['valid']) {
+                    throw new DomainException(
+                        '技能效果无法求值：'
+                        . implode('; ', $evaluation['errors'])
+                        . ' / Skill effects cannot be evaluated'
+                    );
                 }
 
-                $calculatedEffects['healing'] = $healing;
-                $applied['healing'] = $actualHealing;
-            }
+                foreach ($evaluation['actions'] as $action) {
+                    $applied['actions'][] =
+                        $this->applyStructuredAction(
+                            $normalizedUserId,
+                            (int) $skill['general_id'],
+                            $action
+                        );
+                }
 
-            $duration = isset($calculatedEffects['duration'])
-                ? max(0, (int) $calculatedEffects['duration'])
-                : 0;
-            $temporaryEffects = $calculatedEffects;
-            unset(
-                $temporaryEffects['duration'],
-                $temporaryEffects['all_resources'],
-                $temporaryEffects['healing']
-            );
-            if ($duration > 0 && !empty($temporaryEffects)) {
-                $expiresAt = date('Y-m-d H:i:s', $now + $duration);
-                $this->setActiveEffect(
-                    $normalizedUserId,
-                    (int) $skill['general_id'],
-                    $normalizedSkillId,
-                    $temporaryEffects,
-                    $expiresAt
+                $duration = $evaluation['duration_seconds'] === null
+                    ? 0
+                    : max(
+                        0,
+                        (int) $evaluation['duration_seconds']
+                    );
+                if ($duration > 0) {
+                    $snapshot =
+                        SkillEffectEngine::snapshotTimedEffects(
+                            $validation['definition'],
+                            $evaluationContext
+                        );
+                    $expiresAt = date(
+                        'Y-m-d H:i:s',
+                        $now + $duration
+                    );
+                    $this->setActiveEffect(
+                        $normalizedUserId,
+                        (int) $skill['general_id'],
+                        $normalizedSkillId,
+                        $snapshot,
+                        $expiresAt
+                    );
+                    $applied['temporary_effects'] = $snapshot;
+                    $applied['expires_at'] = $expiresAt;
+                }
+                $definedCooldown = $evaluation['cooldown_seconds'];
+                $calculatedEffects = [
+                    'schema_version' =>
+                        SkillDefinitionValidator::SCHEMA_VERSION,
+                    'application_mode' =>
+                        $validation['definition']['application_mode'],
+                    'actions' => $evaluation['actions'],
+                    'duration_seconds' =>
+                        $evaluation['duration_seconds']
+                ];
+            } else {
+                $legacyValidation = SkillDefinitionValidator::validate(
+                    $baseEffects,
+                    $maximumSkillLevel,
+                    'active',
+                    true
                 );
-                $applied['temporary_effects'] = $temporaryEffects;
-                $applied['expires_at'] = $expiresAt;
+                if (!$legacyValidation['valid']
+                    || !$legacyValidation['legacy']) {
+                    throw new DomainException(
+                        '旧技能定义无效：'
+                        . implode('; ', $legacyValidation['errors'])
+                        . ' / Invalid legacy skill definition'
+                    );
+                }
+                $baseEffects = $legacyValidation['definition'];
+                $calculatedEffects = $this->calculateEffects(
+                    $baseEffects,
+                    $effectiveSkillLevel,
+                    (int) $skill['intelligence'],
+                    $skillPower
+                );
+
+                if (isset($calculatedEffects['all_resources'])) {
+                    $requestedAmount =
+                        self::normalizeResourceInteger(
+                            round(
+                                $calculatedEffects['all_resources']
+                            )
+                        );
+                    $actualCredits = $this->grantAllResources(
+                        $normalizedUserId,
+                        $requestedAmount
+                    );
+                    $calculatedEffects['all_resources'] =
+                        $actualCredits;
+                    $applied['all_resources'] = $actualCredits;
+                    $applied['requested_all_resources'] =
+                        $requestedAmount;
+                }
+
+                if (isset($calculatedEffects['healing'])) {
+                    $healing = max(
+                        0,
+                        (int) round($calculatedEffects['healing'])
+                    );
+                    $actualHealing = min(
+                        $healing,
+                        max(
+                            0,
+                            (int) $skill['max_hp']
+                                - (int) $skill['hp']
+                        )
+                    );
+
+                    if ($actualHealing > 0) {
+                        $newHp = (int) $skill['hp']
+                            + $actualHealing;
+                        $update = "UPDATE generals
+                                   SET hp = ?
+                                   WHERE general_id = ?";
+                        $stmt = $this->db->prepare($update);
+
+                        if (!$stmt) {
+                            throw new RuntimeException(
+                                '无法恢复武将HP / Unable to heal general HP'
+                            );
+                        }
+
+                        $generalId = (int) $skill['general_id'];
+                        $stmt->bind_param(
+                            'ii',
+                            $newHp,
+                            $generalId
+                        );
+                        $this->executeOrFail(
+                            $stmt,
+                            '无法恢复武将HP / Unable to heal general HP'
+                        );
+                        $stmt->close();
+                    }
+
+                    $calculatedEffects['healing'] = $healing;
+                    $applied['healing'] = $actualHealing;
+                }
+
+                $duration = isset($calculatedEffects['duration'])
+                    ? max(0, (int) $calculatedEffects['duration'])
+                    : 0;
+                $temporaryEffects = $calculatedEffects;
+                unset(
+                    $temporaryEffects['duration'],
+                    $temporaryEffects['all_resources'],
+                    $temporaryEffects['healing']
+                );
+                if ($duration > 0 && !empty($temporaryEffects)) {
+                    $expiresAt = date(
+                        'Y-m-d H:i:s',
+                        $now + $duration
+                    );
+                    $this->setActiveEffect(
+                        $normalizedUserId,
+                        (int) $skill['general_id'],
+                        $normalizedSkillId,
+                        $temporaryEffects,
+                        $expiresAt
+                    );
+                    $applied['temporary_effects'] =
+                        $temporaryEffects;
+                    $applied['expires_at'] = $expiresAt;
+                }
             }
 
             $cooldownSeconds = $this->calculateCooldownSeconds(
-                (int) $skill['base_cooldown']
+                $definedCooldown === null
+                    ? (int) $skill['base_cooldown']
+                    : (int) $definedCooldown
             );
             $newReadyAt = date('Y-m-d H:i:s', $now + $cooldownSeconds);
             $this->setCooldown(
@@ -1124,7 +1276,8 @@ class SkillCardService {
     private function getOwnedMappedSkillLocked($userId, $skillId) {
         $query = "SELECT gs.skill_id, gs.general_id, gs.skill_name,
                          gs.skill_type, gs.slot, gs.skill_level, gs.skill_effect,
-                         g.hp, g.max_hp, g.intelligence,
+                         g.hp, g.max_hp, g.cost, g.attack, g.defense,
+                         g.speed, g.intelligence,
                          esc.card_id, c.card_code, c.name AS card_name,
                          c.activation_type, c.effect_json, c.base_cooldown,
                          c.max_level, c.is_active
@@ -1400,42 +1553,519 @@ class SkillCardService {
     }
 
     /**
+     * 执行一个已校验的第二版即时动作 / Executes one validated version-two instant action
+     * @param int $userId 玩家ID / User ID
+     * @param int $generalId 发动武将ID / Activating general ID
+     * @param array $action 已求值动作 / Evaluated action
+     * @return array 动作结果 / Action result
+     */
+    private function applyStructuredAction(
+        $userId,
+        $generalId,
+        array $action
+    ) {
+        $mechanism = isset($action['mechanism'])
+            ? (string) $action['mechanism']
+            : '';
+        $parameters = isset($action['parameters'])
+            && is_array($action['parameters'])
+            ? $action['parameters']
+            : [];
+        $amount = isset($action['value'])
+            && is_numeric($action['value'])
+            ? self::normalizeResourceInteger(
+                round($action['value'])
+            )
+            : 0;
+
+        switch ($mechanism) {
+            case 'grant_resources':
+                $resource = isset($parameters['resource'])
+                    ? (string) $parameters['resource']
+                    : 'all';
+                $actualCredits = $this->grantResources(
+                    $userId,
+                    $resource,
+                    $amount
+                );
+                return [
+                    'mechanism' => $mechanism,
+                    'resource' => $resource,
+                    'requested_amount' => $amount,
+                    'credited_resources' => $actualCredits
+                ];
+            case 'heal_generals':
+                $target = isset($parameters['target'])
+                    ? (string) $parameters['target']
+                    : 'self';
+                return [
+                    'mechanism' => $mechanism,
+                    'target' => $target,
+                    'amount' => $amount,
+                    'result' => $this->healGeneralScope(
+                        $userId,
+                        $generalId,
+                        $target,
+                        $amount
+                    )
+                ];
+            case 'repair_assigned_city':
+                return [
+                    'mechanism' => $mechanism,
+                    'amount' => $amount,
+                    'result' => $this->repairAssignedCity(
+                        $userId,
+                        $generalId,
+                        $amount
+                    )
+                ];
+            case 'reduce_skill_cooldowns':
+                $target = isset($parameters['target'])
+                    ? (string) $parameters['target']
+                    : 'self_general';
+                return [
+                    'mechanism' => $mechanism,
+                    'target' => $target,
+                    'seconds' => $amount,
+                    'affected' => $this->reduceOwnedCooldowns(
+                        $userId,
+                        $generalId,
+                        $target,
+                        $amount
+                    )
+                ];
+            default:
+                throw new DomainException(
+                    '即时技能动作未实现 / Instant skill action is not implemented'
+                );
+        }
+    }
+
+    /**
+     * 发放全部或指定资源 / Grants all or one resource
+     * @param int $userId 玩家ID / User ID
+     * @param string $resource 资源键或all / Resource key or all
+     * @param int $amount 数量 / Amount
+     * @return array 各资源的实际入账量 / Actual credits by resource
+     */
+    private function grantResources(
+        $userId,
+        $resource,
+        $amount
+    ): array {
+        if ($resource === 'all') {
+            return $this->grantAllResources($userId, $amount);
+        }
+
+        $columns = [
+            'bright' => 'bright_crystal',
+            'warm' => 'warm_crystal',
+            'cold' => 'cold_crystal',
+            'green' => 'green_crystal',
+            'day' => 'day_crystal',
+            'night' => 'night_crystal'
+        ];
+        if (!isset($columns[$resource])) {
+            throw new DomainException(
+                '技能资源类型无效 / Invalid skill resource type'
+            );
+        }
+
+        $storageCapacity = $this->getSkillResourceStorageCapacity(
+            $userId
+        );
+        $balances = $this->lockSkillResourceBalances($userId);
+
+        // 列名来自固定白名单，数值仍使用预处理绑定。 / The column comes from a fixed allowlist while the value remains prepared.
+        $column = $columns[$resource];
+        $actual = self::calculateSaturatedResourceGrant(
+            $balances[$resource],
+            $amount,
+            $storageCapacity
+        );
+        if ($actual <= 0) {
+            return [$resource => 0];
+        }
+
+        $query = "UPDATE resources
+                  SET {$column} = LEAST(2147483647, {$column} + ?)
+                  WHERE user_id = ?";
+        $stmt = $this->db->prepare($query);
+        if (!$stmt) {
+            throw new RuntimeException(
+                '无法发放技能资源 / Unable to grant skill resources'
+            );
+        }
+        $stmt->bind_param('ii', $actual, $userId);
+        $this->executeOrFail(
+            $stmt,
+            '无法发放技能资源 / Unable to grant skill resources'
+        );
+        $updated = $stmt->affected_rows === 1;
+        $stmt->close();
+        if (!$updated) {
+            throw new RuntimeException(
+                '玩家资源余额已经变化 / User resource balance changed'
+            );
+        }
+
+        return [$resource => $actual];
+    }
+
+    /**
+     * 恢复一个受支持范围内的武将HP / Heals generals in one supported scope
+     * @param int $userId 玩家ID / User ID
+     * @param int $generalId 发动武将ID / Activating general ID
+     * @param string $target 目标范围 / Target scope
+     * @param int $amount 每名恢复量 / Healing per general
+     * @return array 恢复摘要 / Healing summary
+     */
+    private function healGeneralScope(
+        $userId,
+        $generalId,
+        $target,
+        $amount
+    ) {
+        if ($target === 'self') {
+            $query = "SELECT general_id, hp, max_hp
+                      FROM generals
+                      WHERE general_id = ? AND owner_id = ?
+                        AND is_active = 1
+                      FOR UPDATE";
+            $bindValues = [$generalId, $userId];
+            $bindTypes = 'ii';
+        } elseif ($target === 'all_owned') {
+            $query = "SELECT general_id, hp, max_hp
+                      FROM generals
+                      WHERE owner_id = ? AND is_active = 1
+                      ORDER BY general_id
+                      FOR UPDATE";
+            $bindValues = [$userId];
+            $bindTypes = 'i';
+        } elseif ($target === 'unassigned_owned') {
+            $query = "SELECT g.general_id, g.hp, g.max_hp
+                      FROM generals g
+                      WHERE g.owner_id = ? AND g.is_active = 1
+                        AND NOT EXISTS (
+                            SELECT 1
+                            FROM general_assignments a
+                            WHERE a.general_id = g.general_id
+                        )
+                      ORDER BY g.general_id
+                      FOR UPDATE";
+            $bindValues = [$userId];
+            $bindTypes = 'i';
+        } elseif ($target === 'assigned_city') {
+            $query = "SELECT city_generals.general_id,
+                             city_generals.hp,
+                             city_generals.max_hp
+                      FROM general_assignments source_assignment
+                      INNER JOIN generals source_general
+                        ON source_general.general_id =
+                           source_assignment.general_id
+                      INNER JOIN general_assignments city_assignment
+                        ON city_assignment.assignment_type = 'city'
+                        AND city_assignment.target_id =
+                            source_assignment.target_id
+                      INNER JOIN generals city_generals
+                        ON city_generals.general_id =
+                            city_assignment.general_id
+                      WHERE source_assignment.general_id = ?
+                        AND source_assignment.assignment_type = 'city'
+                        AND source_general.owner_id = ?
+                        AND city_generals.owner_id = ?
+                        AND city_generals.is_active = 1
+                      ORDER BY city_generals.general_id
+                      FOR UPDATE";
+            $bindValues = [$generalId, $userId, $userId];
+            $bindTypes = 'iii';
+        } else {
+            throw new DomainException(
+                '武将恢复范围无效 / Invalid general-healing scope'
+            );
+        }
+
+        $stmt = $this->db->prepare($query);
+        if (!$stmt) {
+            throw new RuntimeException(
+                '无法锁定恢复目标 / Unable to lock healing targets'
+            );
+        }
+        $stmt->bind_param($bindTypes, ...$bindValues);
+        $this->executeOrFail(
+            $stmt,
+            '无法锁定恢复目标 / Unable to lock healing targets'
+        );
+        $result = $stmt->get_result();
+        $targets = [];
+        while ($result && ($row = $result->fetch_assoc())) {
+            $targets[] = $row;
+        }
+        $stmt->close();
+        if (empty($targets)) {
+            throw new DomainException(
+                '没有可恢复的武将 / No generals are available to heal'
+            );
+        }
+
+        $totalHealing = 0;
+        $healedGenerals = 0;
+        foreach ($targets as $row) {
+            $actual = min(
+                max(0, $amount),
+                max(0, (int) $row['max_hp'] - (int) $row['hp'])
+            );
+            if ($actual <= 0) {
+                continue;
+            }
+            $newHp = (int) $row['hp'] + $actual;
+            $query = "UPDATE generals
+                      SET hp = ?
+                      WHERE general_id = ? AND hp = ?";
+            $stmt = $this->db->prepare($query);
+            if (!$stmt) {
+                throw new RuntimeException(
+                    '无法准备武将恢复 / Unable to prepare general healing'
+                );
+            }
+            $targetGeneralId = (int) $row['general_id'];
+            $oldHp = (int) $row['hp'];
+            $stmt->bind_param(
+                'iii',
+                $newHp,
+                $targetGeneralId,
+                $oldHp
+            );
+            $this->executeOrFail(
+                $stmt,
+                '无法恢复武将HP / Unable to heal general HP'
+            );
+            $updated = $stmt->affected_rows === 1;
+            $stmt->close();
+            if (!$updated) {
+                throw new RuntimeException(
+                    '武将HP已经变化 / General HP changed'
+                );
+            }
+            $totalHealing += $actual;
+            $healedGenerals++;
+        }
+
+        return [
+            'healed_generals' => $healedGenerals,
+            'total_healing' => $totalHealing
+        ];
+    }
+
+    /**
+     * 修复发动武将驻扎城池 / Repairs the activating general's assigned city
+     * @param int $userId 玩家ID / User ID
+     * @param int $generalId 发动武将ID / Activating general ID
+     * @param int $amount 修复量 / Repair amount
+     * @return array 修复摘要 / Repair summary
+     */
+    private function repairAssignedCity(
+        $userId,
+        $generalId,
+        $amount
+    ) {
+        $query = "SELECT c.city_id, c.durability, c.max_durability
+                  FROM general_assignments a
+                  INNER JOIN generals g ON g.general_id = a.general_id
+                  INNER JOIN cities c ON c.city_id = a.target_id
+                  WHERE a.general_id = ?
+                    AND a.assignment_type = 'city'
+                    AND g.owner_id = ?
+                    AND c.owner_id = ?
+                  FOR UPDATE";
+        $stmt = $this->db->prepare($query);
+        if (!$stmt) {
+            throw new RuntimeException(
+                '无法锁定驻扎城池 / Unable to lock assigned city'
+            );
+        }
+        $stmt->bind_param('iii', $generalId, $userId, $userId);
+        $this->executeOrFail(
+            $stmt,
+            '无法锁定驻扎城池 / Unable to lock assigned city'
+        );
+        $result = $stmt->get_result();
+        $city = $result ? $result->fetch_assoc() : null;
+        $stmt->close();
+        if (!$city) {
+            throw new DomainException(
+                '武将没有驻扎己方城池 / General is not assigned to an owned city'
+            );
+        }
+
+        $actual = min(
+            max(0, $amount),
+            max(
+                0,
+                (int) $city['max_durability']
+                    - (int) $city['durability']
+            )
+        );
+        if ($actual > 0) {
+            $newDurability = (int) $city['durability'] + $actual;
+            $query = "UPDATE cities
+                      SET durability = ?
+                      WHERE city_id = ? AND durability = ?";
+            $stmt = $this->db->prepare($query);
+            if (!$stmt) {
+                throw new RuntimeException(
+                    '无法准备城池修复 / Unable to prepare city repair'
+                );
+            }
+            $cityId = (int) $city['city_id'];
+            $oldDurability = (int) $city['durability'];
+            $stmt->bind_param(
+                'iii',
+                $newDurability,
+                $cityId,
+                $oldDurability
+            );
+            $this->executeOrFail(
+                $stmt,
+                '无法修复城池 / Unable to repair city'
+            );
+            $updated = $stmt->affected_rows === 1;
+            $stmt->close();
+            if (!$updated) {
+                throw new RuntimeException(
+                    '城池耐久已经变化 / City durability changed'
+                );
+            }
+        }
+
+        return [
+            'city_id' => (int) $city['city_id'],
+            'repaired' => $actual
+        ];
+    }
+
+    /**
+     * 缩短玩家技能的剩余冷却 / Reduces remaining cooldowns on owned skills
+     * @param int $userId 玩家ID / User ID
+     * @param int $generalId 发动武将ID / Activating general ID
+     * @param string $target 目标范围 / Target scope
+     * @param int $seconds 缩短秒数 / Seconds reduced
+     * @return int 受影响技能数 / Affected skill count
+     */
+    private function reduceOwnedCooldowns(
+        $userId,
+        $generalId,
+        $target,
+        $seconds
+    ) {
+        if (!in_array(
+            $target,
+            ['self_general', 'unassigned_owned', 'all_owned'],
+            true
+        )) {
+            throw new DomainException(
+                '冷却缩短范围无效 / Invalid cooldown-reduction scope'
+            );
+        }
+
+        $query = "SELECT sc.skill_id, sc.ready_at
+                  FROM skill_cooldowns sc
+                  INNER JOIN general_skills gs
+                    ON gs.skill_id = sc.skill_id
+                  INNER JOIN generals g
+                    ON g.general_id = gs.general_id
+                  WHERE sc.user_id = ?
+                    AND g.owner_id = ?
+                    AND sc.ready_at > NOW()";
+        $bindValues = [$userId, $userId];
+        $bindTypes = 'ii';
+        if ($target === 'self_general') {
+            $query .= " AND g.general_id = ?";
+            $bindValues[] = $generalId;
+            $bindTypes .= 'i';
+        } elseif ($target === 'unassigned_owned') {
+            $query .= " AND NOT EXISTS (
+                            SELECT 1
+                            FROM general_assignments a
+                            WHERE a.general_id = g.general_id
+                        )";
+        }
+        $query .= " ORDER BY sc.skill_id FOR UPDATE";
+
+        $stmt = $this->db->prepare($query);
+        if (!$stmt) {
+            throw new RuntimeException(
+                '无法锁定技能冷却 / Unable to lock skill cooldowns'
+            );
+        }
+        $stmt->bind_param($bindTypes, ...$bindValues);
+        $this->executeOrFail(
+            $stmt,
+            '无法锁定技能冷却 / Unable to lock skill cooldowns'
+        );
+        $result = $stmt->get_result();
+        $cooldowns = [];
+        while ($result && ($row = $result->fetch_assoc())) {
+            $cooldowns[] = $row;
+        }
+        $stmt->close();
+
+        $affected = 0;
+        $now = time();
+        foreach ($cooldowns as $cooldown) {
+            $readyTimestamp = strtotime((string) $cooldown['ready_at']);
+            if ($readyTimestamp === false) {
+                continue;
+            }
+            $readyAt = date(
+                'Y-m-d H:i:s',
+                max($now, $readyTimestamp - max(0, $seconds))
+            );
+            $this->setCooldown(
+                $userId,
+                (int) $cooldown['skill_id'],
+                $readyAt
+            );
+            $affected++;
+        }
+
+        return $affected;
+    }
+
+    /**
      * 立即向六种资源发放相同数量 / Immediately grants the same amount of all six resources
      *
      * @param int $userId 玩家ID / User ID
      * @param int $amount 每种资源数量 / Amount of each resource
+     * @return array 各资源的实际入账量 / Actual credits by resource
      */
-    private function grantAllResources($userId, $amount): void {
-        $query = "SELECT resource_id
-                  FROM resources
-                  WHERE user_id = ?
-                  FOR UPDATE";
-        $stmt = $this->db->prepare($query);
-
-        if (!$stmt) {
-            throw new RuntimeException('无法锁定玩家资源 / Unable to lock user resources');
-        }
-
-        $stmt->bind_param('i', $userId);
-        $this->executeOrFail(
-            $stmt,
-            '无法锁定玩家资源 / Unable to lock user resources'
+    private function grantAllResources($userId, $amount): array {
+        $storageCapacity = $this->getSkillResourceStorageCapacity(
+            $userId
         );
-        $result = $stmt->get_result();
-        $exists = $result && $result->num_rows > 0;
-        $stmt->close();
-
-        if (!$exists) {
-            throw new DomainException('玩家资源记录不存在 / User resource record does not exist');
+        $balances = $this->lockSkillResourceBalances($userId);
+        $actualCredits = [];
+        foreach ($balances as $resource => $current) {
+            $actualCredits[$resource] =
+                self::calculateSaturatedResourceGrant(
+                    $current,
+                    $amount,
+                    $storageCapacity
+                );
         }
 
+        if (array_sum($actualCredits) <= 0) {
+            return $actualCredits;
+        }
+
+        // 差额以已锁定余额计算，LEAST再防御数据库整数上溢。 / Deltas come from locked balances and LEAST additionally prevents database integer overflow.
         $update = "UPDATE resources
-                   SET bright_crystal = bright_crystal + ?,
-                       warm_crystal = warm_crystal + ?,
-                       cold_crystal = cold_crystal + ?,
-                       green_crystal = green_crystal + ?,
-                       day_crystal = day_crystal + ?,
-                       night_crystal = night_crystal + ?
+                   SET bright_crystal = LEAST(2147483647, bright_crystal + ?),
+                       warm_crystal = LEAST(2147483647, warm_crystal + ?),
+                       cold_crystal = LEAST(2147483647, cold_crystal + ?),
+                       green_crystal = LEAST(2147483647, green_crystal + ?),
+                       day_crystal = LEAST(2147483647, day_crystal + ?),
+                       night_crystal = LEAST(2147483647, night_crystal + ?)
                    WHERE user_id = ?";
         $stmt = $this->db->prepare($update);
 
@@ -1445,19 +2075,142 @@ class SkillCardService {
 
         $stmt->bind_param(
             'iiiiiii',
-            $amount,
-            $amount,
-            $amount,
-            $amount,
-            $amount,
-            $amount,
+            $actualCredits['bright'],
+            $actualCredits['warm'],
+            $actualCredits['cold'],
+            $actualCredits['green'],
+            $actualCredits['day'],
+            $actualCredits['night'],
             $userId
         );
         $this->executeOrFail(
             $stmt,
             '无法发放技能资源 / Unable to grant skill resources'
         );
+        $updated = $stmt->affected_rows === 1;
         $stmt->close();
+        if (!$updated) {
+            throw new RuntimeException(
+                '玩家资源余额已经变化 / User resource balance changed'
+            );
+        }
+
+        return $actualCredits;
+    }
+
+    /**
+     * 取得并限制技能可用的资源容量 / Gets and bounds resource capacity used by skills
+     * @param int $userId 玩家ID / User ID
+     * @return int 安全容量上限 / Safe storage limit
+     */
+    private function getSkillResourceStorageCapacity($userId): int {
+        return self::normalizeResourceInteger(
+            Resource::getUserResourceStorageCapacity($userId)
+        );
+    }
+
+    /**
+     * 锁定并读取六种资源余额 / Locks and reads all six resource balances
+     * @param int $userId 玩家ID / User ID
+     * @return array 以短资源键索引的余额 / Balances keyed by short resource names
+     */
+    private function lockSkillResourceBalances($userId): array {
+        $query = "SELECT bright_crystal, warm_crystal, cold_crystal,
+                         green_crystal, day_crystal, night_crystal
+                  FROM resources
+                  WHERE user_id = ?
+                  FOR UPDATE";
+        $stmt = $this->db->prepare($query);
+        if (!$stmt) {
+            throw new RuntimeException(
+                '无法锁定玩家资源 / Unable to lock user resources'
+            );
+        }
+
+        $stmt->bind_param('i', $userId);
+        $this->executeOrFail(
+            $stmt,
+            '无法锁定玩家资源 / Unable to lock user resources'
+        );
+        $result = $stmt->get_result();
+        $row = $result && $result->num_rows === 1
+            ? $result->fetch_assoc()
+            : null;
+        $stmt->close();
+        if (!$row) {
+            throw new DomainException(
+                '玩家资源记录不存在 / User resource record does not exist'
+            );
+        }
+
+        return [
+            'bright' => self::normalizeResourceInteger(
+                $row['bright_crystal']
+            ),
+            'warm' => self::normalizeResourceInteger(
+                $row['warm_crystal']
+            ),
+            'cold' => self::normalizeResourceInteger(
+                $row['cold_crystal']
+            ),
+            'green' => self::normalizeResourceInteger(
+                $row['green_crystal']
+            ),
+            'day' => self::normalizeResourceInteger(
+                $row['day_crystal']
+            ),
+            'night' => self::normalizeResourceInteger(
+                $row['night_crystal']
+            )
+        ];
+    }
+
+    /**
+     * 计算不会突破容量或数据库整数上限的实际入账量 / Calculates the actual credit without crossing storage or database integer limits
+     * @param mixed $current 当前余额 / Current balance
+     * @param mixed $requested 请求入账量 / Requested credit
+     * @param mixed $storageCapacity 资源容量 / Storage capacity
+     * @return int 实际可入账量 / Actual credit
+     */
+    public static function calculateSaturatedResourceGrant(
+        $current,
+        $requested,
+        $storageCapacity
+    ): int {
+        $normalizedCurrent = self::normalizeResourceInteger($current);
+        $normalizedRequested = self::normalizeResourceInteger(
+            $requested
+        );
+        $normalizedCapacity = self::normalizeResourceInteger(
+            $storageCapacity
+        );
+        $availableCapacity = max(
+            0,
+            $normalizedCapacity - $normalizedCurrent
+        );
+
+        return min($normalizedRequested, $availableCapacity);
+    }
+
+    /**
+     * 将资源数值限制到数据库INT安全范围 / Bounds a resource value to the database INT-safe range
+     * @param mixed $value 待规范化数值 / Value to normalize
+     * @return int 安全非负整数 / Safe non-negative integer
+     */
+    private static function normalizeResourceInteger($value): int {
+        if (!is_numeric($value)) {
+            return 0;
+        }
+
+        $numeric = (float) $value;
+        if (!is_finite($numeric) || $numeric <= 0.0) {
+            return 0;
+        }
+
+        return (int) min(
+            (float) self::RESOURCE_INTEGER_MAX,
+            floor($numeric)
+        );
     }
 
     /**

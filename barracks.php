@@ -58,6 +58,26 @@ $hasBarracks = !empty($barracks);
 // 获取城池中的士兵
 $soldiers = $city->getSoldiers();
 
+// 复用实际扣款规则计算每名士兵的预览费用 / Reuse actual deduction rules for per-soldier preview costs
+$trainableSoldierTypes = ['pawn', 'knight', 'rook', 'bishop'];
+$trainingCostBonuses = $city->getAssignedGeneralCityBonuses([
+    'phase' => 'training'
+]);
+$trainingCosts = [];
+$encodedTrainingCosts = [];
+foreach ($trainableSoldierTypes as $type) {
+    $trainingCosts[$type] = Soldier::getAdjustedTrainingCost(
+        $cityId,
+        $type,
+        1,
+        $trainingCostBonuses
+    );
+    $encodedTrainingCosts[$type] = json_encode(
+        $trainingCosts[$type],
+        JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT
+    );
+}
+
 // 页面标题
 $pageTitle = $city->getName() . ' - 兵营';
 ?>
@@ -126,14 +146,12 @@ $pageTitle = $city->getName() . ' - 兵营';
                                 <th>等级</th>
                                 <th>数量</th>
                                 <th>训练中</th>
+                                <th>每名训练费用</th>
                                 <th>操作</th>
                             </tr>
                         </thead>
                         <tbody>
                             <?php
-                            // 定义可训练的士兵类型
-                            $trainableSoldierTypes = ['pawn', 'knight', 'rook', 'bishop'];
-                            
                             foreach ($trainableSoldierTypes as $type) {
                                 $soldierFound = false;
                                 
@@ -165,10 +183,19 @@ $pageTitle = $city->getName() . ' - 兵营';
                                                 <?php endif; ?>
                                             </td>
                                             <td>
+                                                <?php foreach ($trainingCosts[$type] as $resourceType => $amount): ?>
+                                                    <span>
+                                                        <?php echo escapeHtml(getResourceName($resourceType)); ?>
+                                                        <?php echo number_format($amount); ?>
+                                                    </span>
+                                                <?php endforeach; ?>
+                                            </td>
+                                            <td>
                                                 <button
                                                     type="button"
                                                     class="train-button"
                                                     data-soldier-type="<?php echo escapeHtml($type); ?>"
+                                                    data-training-cost="<?php echo escapeHtml($encodedTrainingCosts[$type]); ?>"
                                                 >训练</button>
                                             </td>
                                         </tr>
@@ -186,10 +213,19 @@ $pageTitle = $city->getName() . ' - 兵营';
                                         <td>0</td>
                                         <td>0</td>
                                         <td>
+                                            <?php foreach ($trainingCosts[$type] as $resourceType => $amount): ?>
+                                                <span>
+                                                    <?php echo escapeHtml(getResourceName($resourceType)); ?>
+                                                    <?php echo number_format($amount); ?>
+                                                </span>
+                                            <?php endforeach; ?>
+                                        </td>
+                                        <td>
                                             <button
                                                 type="button"
                                                 class="train-button"
                                                 data-soldier-type="<?php echo escapeHtml($type); ?>"
+                                                data-training-cost="<?php echo escapeHtml($encodedTrainingCosts[$type]); ?>"
                                             >训练</button>
                                         </td>
                                     </tr>

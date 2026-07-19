@@ -50,70 +50,13 @@ function adminSkillScalarText($value) {
 }
 
 /**
- * 校验结构化等级曲线 / Validates structured level curves
- *
- * @param object $effectObject 技能效果对象 / Skill-effect object
- * @param int $maxLevel 技能最高等级 / Maximum skill level
- * @param string $activationType 发动类型 / Activation type
- * @return array 校验错误 / Validation errors
- */
-function adminSkillValidateLevelCurves(
-    $effectObject,
-    $maxLevel,
-    $activationType = 'passive'
-) {
-    $errors = [];
-    foreach (get_object_vars($effectObject) as $effectKey => $effectValue) {
-        if (is_array($effectValue)) {
-            $errors[] = $effectKey . ' 必须是数值或等级曲线描述符对象';
-            continue;
-        }
-        if (!is_object($effectValue)) {
-            continue;
-        }
-        if ($activationType === 'active') {
-            $errors[] = $effectKey . ' 的结构化等级曲线仅支持被动技能';
-            continue;
-        }
-
-        $descriptor = get_object_vars($effectValue);
-        if (!isset($descriptor['mode'])
-            || !is_string($descriptor['mode'])
-            || !in_array(
-                $descriptor['mode'],
-                ['level_values', 'cost_level_values'],
-                true
-            )
-            || !isset($descriptor['values'])
-            || !is_array($descriptor['values'])) {
-            $errors[] = $effectKey . ' 的等级曲线描述符无效';
-            continue;
-        }
-        if (count($descriptor['values']) < $maxLevel) {
-            $errors[] = $effectKey . ' 的曲线长度必须覆盖最高等级';
-            continue;
-        }
-
-        foreach ($descriptor['values'] as $curveValue) {
-            if ((!is_int($curveValue) && !is_float($curveValue))
-                || !is_finite((float) $curveValue)
-                || (float) $curveValue < 0.0) {
-                $errors[] = $effectKey . ' 的曲线值必须是非负有限数值';
-                break;
-            }
-        }
-    }
-
-    return $errors;
-}
-
-/**
  * 验证并标准化技能卡目录输入 / Validates and normalizes skill-card catalog input
  *
  * @param array $input 表单输入 / Form input
+ * @param bool $allowLegacy 是否允许保存既有旧格式 / Whether an existing legacy definition may be saved
  * @return array 包含数据和错误的数组 / Array containing data and errors
  */
-function adminSkillValidateCatalogInput(array $input) {
+function adminSkillValidateCatalogInput(array $input, $allowLegacy = false) {
     $rarities = ['B', 'A', 'S', 'SS', 'P'];
     $elements = ['亮晶晶', '暖洋洋', '冷冰冰', '郁萌萌', '昼闪闪', '夜静静'];
     $activationTypes = ['active', 'passive'];
@@ -133,6 +76,9 @@ function adminSkillValidateCatalogInput(array $input) {
     ));
     $category = strtolower(trim(adminSkillScalarText($input['category'] ?? '')));
     $effectInput = trim(adminSkillScalarText($input['effect_json'] ?? ''));
+    $definitionMode = strtolower(trim(
+        adminSkillScalarText($input['definition_mode'] ?? 'legacy')
+    ));
     $cooldownInput = adminSkillScalarText($input['base_cooldown'] ?? '');
     $maxLevelInput = adminSkillScalarText($input['max_level'] ?? '');
     $isActiveInput = array_key_exists('is_active', $input)
@@ -177,6 +123,14 @@ function adminSkillValidateCatalogInput(array $input) {
         $errors[] = '技能分类无效';
     }
 
+    if (!in_array($definitionMode, ['builder', 'legacy'], true)) {
+        $errors[] = '技能定义编辑模式无效 / Invalid skill-definition editor mode';
+    }
+    if ($definitionMode === 'legacy' && !$allowLegacy) {
+        $errors[] = '旧JSON兼容模式只允许维护原有旧格式技能'
+            . ' / Legacy JSON mode may only maintain an existing legacy skill';
+    }
+
     if (!in_array($isActiveInput, ['0', '1'], true)) {
         $errors[] = '启用状态无效';
     }
@@ -192,31 +146,47 @@ function adminSkillValidateCatalogInput(array $input) {
     }
 
     $effectJson = '';
-    if ($effectInput === '' || strlen($effectInput) > 10000) {
-        $errors[] = '效果JSON须为1至10000字节';
+    if ($effectInput === '' || strlen($effectInput) > 60000) {
+        $errors[] = '效果JSON须为1至60000字节 / Effect JSON must contain 1 to 60000 bytes';
     } else {
         $effectObject = json_decode($effectInput);
-        if (json_last_error() !== JSON_ERROR_NONE || !is_object($effectObject)) {
-            $errors[] = '效果JSON必须是有效的JSON对象，例如 {"attack":10}';
+        $jsonError = json_last_error();
+        $effectDefinition = json_decode($effectInput, true);
+        if ($jsonError !== JSON_ERROR_NONE
+            || !is_object($effectObject)
+            || !is_array($effectDefinition)) {
+            $errors[] = '效果JSON必须是有效对象 / Effect JSON must be a valid object';
         } else {
-            $effectJson = json_encode(
-                $effectObject,
-                JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES
-            );
-            if ($effectJson === false) {
-                $errors[] = '效果JSON无法保存';
-            }
             if ($maxLevel !== false
                 && $maxLevel >= 1
                 && $maxLevel <= 100) {
-                $errors = array_merge(
-                    $errors,
-                    adminSkillValidateLevelCurves(
-                        $effectObject,
-                        (int) $maxLevel,
-                        $activationType
-                    )
+                $definitionValidation = SkillDefinitionValidator::validate(
+                    $effectDefinition,
+                    (int) $maxLevel,
+                    $activationType,
+                    $allowLegacy && $definitionMode === 'legacy'
                 );
+                if (!$definitionValidation['valid']) {
+                    $errors = array_merge(
+                        $errors,
+                        $definitionValidation['errors']
+                    );
+                } else {
+                    $effectJson = json_encode(
+                        $definitionValidation['definition'],
+                        JSON_UNESCAPED_UNICODE
+                            | JSON_UNESCAPED_SLASHES
+                    );
+                    if ($effectJson === false) {
+                        $errors[] = '效果JSON无法保存 / Effect JSON could not be encoded';
+                        $effectJson = '';
+                    } elseif (strlen($effectJson) < 1
+                        || strlen($effectJson) > 60000) {
+                        $errors[] = '规范化效果JSON须为1至60000字节'
+                            . ' / Normalized effect JSON must contain 1 to 60000 bytes';
+                        $effectJson = '';
+                    }
+                }
             }
         }
     }
@@ -285,7 +255,7 @@ function adminSkillLoadPublishedPoolsForUpdate($db, $cardId) {
  */
 function adminSkillLoadCardForUpdate($db, $cardId) {
     $stmt = $db->prepare(
-        'SELECT card_id, rarity, is_active
+        'SELECT card_id, rarity, is_active, effect_json
          FROM skill_card_catalog
          WHERE card_id = ?
          LIMIT 1 FOR UPDATE'
@@ -303,6 +273,81 @@ function adminSkillLoadCardForUpdate($db, $cardId) {
     $stmt->close();
 
     return $card ?: null;
+}
+
+/**
+ * 按稳定顺序锁定卡片的已装备技能并读取最高等级 / Locks a card's equipped skills in stable order and reads the highest level
+ *
+ * @param mysqli $db 数据库连接 / Database connection
+ * @param int $cardId 技能卡ID / Skill-card ID
+ * @return int 当前已装备技能的最高等级，未装备时为0 / Highest equipped level, or zero when unequipped
+ */
+function adminSkillLoadHighestEquippedLevelForUpdate($db, $cardId) {
+    $query = "SELECT equipped.skill_id, skill.skill_level
+              FROM equipped_skill_cards equipped
+              JOIN general_skills skill
+                ON skill.skill_id = equipped.skill_id
+              WHERE equipped.card_id = ?
+              ORDER BY equipped.skill_id ASC
+              FOR UPDATE";
+    $stmt = $db->prepare($query);
+    if (!$stmt) {
+        throw new RuntimeException(
+            '无法锁定已装备技能 / Unable to lock equipped skills'
+        );
+    }
+    $stmt->bind_param('i', $cardId);
+    if (!$stmt->execute()) {
+        $stmt->close();
+        throw new RuntimeException(
+            '无法锁定已装备技能 / Unable to lock equipped skills'
+        );
+    }
+
+    $result = $stmt->get_result();
+    if (!$result) {
+        $stmt->close();
+        throw new RuntimeException(
+            '无法读取已装备技能 / Unable to read equipped skills'
+        );
+    }
+
+    $highestLevel = 0;
+    while ($row = $result->fetch_assoc()) {
+        $highestLevel = max(
+            $highestLevel,
+            max(1, (int) $row['skill_level'])
+        );
+    }
+    $stmt->close();
+
+    return $highestLevel;
+}
+
+/**
+ * 拒绝让目录上限低于既有装备等级 / Rejects a catalog maximum below an existing equipped level
+ *
+ * @param int $proposedMaxLevel 拟保存的最高等级 / Proposed maximum level
+ * @param int $highestEquippedLevel 既有装备的最高等级 / Highest existing equipped level
+ * @return void
+ * @throws DomainException 当新上限会使既有技能失效时 / When the new maximum would invalidate an existing skill
+ */
+function adminSkillAssertMaximumLevelSupportsEquipped(
+    $proposedMaxLevel,
+    $highestEquippedLevel
+) {
+    $normalizedProposed = max(1, (int) $proposedMaxLevel);
+    $normalizedEquipped = max(0, (int) $highestEquippedLevel);
+    if ($normalizedProposed < $normalizedEquipped) {
+        throw new DomainException(
+            '最高等级不能低于已装备技能的当前等级（现有最高 Lv.'
+            . $normalizedEquipped
+            . '） / Maximum level cannot be lower than an equipped skill'
+            . '\'s current level (highest existing Lv.'
+            . $normalizedEquipped
+            . ')'
+        );
+    }
 }
 
 /**
@@ -373,7 +418,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     throw new DomainException('您没有权限创建技能卡');
                 }
 
-                $validated = adminSkillValidateCatalogInput($_POST);
+                $validated = adminSkillValidateCatalogInput($_POST, false);
                 if (!empty($validated['errors'])) {
                     throw new InvalidArgumentException(
                         implode('；', $validated['errors'])
@@ -447,14 +492,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     throw new DomainException('技能卡不存在');
                 }
 
-                $validated = adminSkillValidateCatalogInput($_POST);
-                if (!empty($validated['errors'])) {
-                    throw new InvalidArgumentException(
-                        implode('；', $validated['errors'])
-                    );
-                }
-
-                $card = $validated['data'];
                 if (!$db->begin_transaction()) {
                     throw new RuntimeException('无法开始技能卡更新事务');
                 }
@@ -468,6 +505,34 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 if (!$existingCard) {
                     throw new DomainException('技能卡不存在');
                 }
+
+                $existingEffect = json_decode(
+                    (string) $existingCard['effect_json'],
+                    true
+                );
+                $existingIsLegacy = is_array($existingEffect)
+                    && !SkillDefinitionValidator::isStructured(
+                        $existingEffect
+                    );
+                $validated = adminSkillValidateCatalogInput(
+                    $_POST,
+                    $existingIsLegacy
+                );
+                if (!empty($validated['errors'])) {
+                    throw new InvalidArgumentException(
+                        implode('；', $validated['errors'])
+                    );
+                }
+                $card = $validated['data'];
+                $highestEquippedLevel =
+                    adminSkillLoadHighestEquippedLevelForUpdate(
+                        $db,
+                        $cardId
+                    );
+                adminSkillAssertMaximumLevelSupportsEquipped(
+                    $card['max_level'],
+                    $highestEquippedLevel
+                );
 
                 $rarityChanged = (string) $existingCard['rarity']
                     !== (string) $card['rarity'];
@@ -774,6 +839,7 @@ $pageTitle = '技能卡目录管理';
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title><?php echo escapeHtml(SITE_NAME); ?> - <?php echo escapeHtml($pageTitle); ?></title>
     <link rel="stylesheet" href="../assets/css/style.css">
+    <link rel="stylesheet" href="../assets/css/admin-skills.css">
     <style>
         .admin-container { max-width: 1500px; margin: 0 auto; padding: 20px; }
         .admin-header {
@@ -997,10 +1063,17 @@ $pageTitle = '技能卡目录管理';
                 <h2 id="modalTitle">创建技能卡</h2>
                 <button type="button" id="closeModalButton" class="modal-close" aria-label="关闭">&times;</button>
             </div>
-            <form id="skillCardForm" method="post" action="skills.php">
+            <form
+                id="skillCardForm"
+                method="post"
+                action="skills.php"
+                data-mechanism-api="../api/get_skill_mechanisms.php"
+                data-skill-api="../api/get_skill.php"
+            >
                 <?php echo csrfField(); ?>
                 <input type="hidden" name="action" id="formAction" value="create_skill">
                 <input type="hidden" name="card_id" id="cardId" value="">
+                <input type="hidden" name="definition_mode" id="definitionMode" value="builder">
 
                 <div class="form-grid">
                     <div class="form-group">
@@ -1047,9 +1120,112 @@ $pageTitle = '技能卡目录管理';
                             <?php endforeach; ?>
                         </select>
                     </div>
-                    <div class="form-group form-wide">
-                        <label for="effectJson">效果JSON对象</label>
-                        <textarea class="form-control" id="effectJson" name="effect_json" maxlength="10000" spellcheck="false" required></textarea>
+                    <div class="form-group form-wide skill-definition-editor">
+                        <div class="definition-editor-heading">
+                            <div>
+                                <label>技能机制定义 / Skill mechanism definition</label>
+                                <p class="definition-help">
+                                    可组合多个已实现机制；保存时会由服务器再次校验。
+                                    / Compose implemented mechanisms; the server validates again on save.
+                                </p>
+                            </div>
+                            <div class="definition-mode-tabs" role="tablist" aria-label="技能定义编辑模式">
+                                <button
+                                    type="button"
+                                    id="builderModeButton"
+                                    class="definition-mode-button active"
+                                    role="tab"
+                                    aria-selected="true"
+                                >可视化组合 / Builder</button>
+                                <button
+                                    type="button"
+                                    id="legacyModeButton"
+                                    class="definition-mode-button"
+                                    role="tab"
+                                    aria-selected="false"
+                                >旧JSON兼容 / Legacy JSON</button>
+                            </div>
+                        </div>
+
+                        <div id="definitionErrors" class="definition-errors" role="alert" aria-live="polite" hidden></div>
+                        <div id="builderLoading" class="definition-loading">
+                            正在读取机制目录… / Loading mechanism catalog…
+                        </div>
+
+                        <section id="definitionBuilderPanel" aria-labelledby="builderModeButton" hidden>
+                            <div class="builder-meta-grid">
+                                <div class="builder-field">
+                                    <label for="applicationMode">应用方式 / Application mode</label>
+                                    <select class="form-control" id="applicationMode">
+                                        <option value="continuous">持续被动 / Continuous passive</option>
+                                        <option value="instant">立即动作 / Instant action</option>
+                                        <option value="timed">限时效果 / Timed modifier</option>
+                                        <option value="next_dispatch" disabled>下次出征（占位） / Next dispatch (placeholder)</option>
+                                        <option value="dispatch_snapshot" disabled>出征快照（占位） / Dispatch snapshot (placeholder)</option>
+                                    </select>
+                                </div>
+                                <div class="builder-field builder-checkbox-field" id="cooldownToggleField">
+                                    <label>
+                                        <input type="checkbox" id="includeCooldownDefinition">
+                                        使用等级冷却定义 / Use a level-aware cooldown
+                                    </label>
+                                    <span class="definition-help">
+                                        未启用时沿用下方“基础冷却”。 / Otherwise the base cooldown below is used.
+                                    </span>
+                                </div>
+                                <div class="builder-field form-wide" id="cooldownEditorField" hidden>
+                                    <label>冷却曲线（秒） / Cooldown curve (seconds)</label>
+                                    <div
+                                        id="cooldownValueEditor"
+                                        class="value-editor"
+                                        data-minimum="0"
+                                        data-maximum="31536000"
+                                        data-round-at-execution="1"
+                                    ></div>
+                                </div>
+                                <div class="builder-field form-wide" id="durationEditorField" hidden>
+                                    <label>持续时间曲线（秒） / Duration curve (seconds)</label>
+                                    <div
+                                        id="durationValueEditor"
+                                        class="value-editor"
+                                        data-minimum="1"
+                                        data-maximum="31536000"
+                                        data-round-at-execution="1"
+                                    ></div>
+                                </div>
+                            </div>
+
+                            <div class="effects-heading">
+                                <div>
+                                    <strong>机制列表 / Mechanisms</strong>
+                                    <span class="definition-help">最多32项，每项最多8个条件。 / Up to 32 effects and 8 conditions per effect.</span>
+                                </div>
+                                <button type="button" id="addEffectButton" class="button button-primary">
+                                    + 添加机制 / Add mechanism
+                                </button>
+                            </div>
+                            <div id="effectBuilderList" class="effect-builder-list"></div>
+
+                            <details class="placeholder-catalog">
+                                <summary>查看尚未实现的分类占位 / View unavailable placeholder mechanisms</summary>
+                                <div id="placeholderMechanismList" class="placeholder-mechanism-list"></div>
+                            </details>
+                        </section>
+
+                        <section id="legacyJsonPanel" class="legacy-json-panel" aria-labelledby="legacyModeButton" hidden>
+                            <div class="compatibility-warning">
+                                兼容模式只用于维护旧平面JSON。未知键仍会被拒绝，新技能应使用可视化组合器。
+                                / Compatibility mode is only for legacy flat JSON. Unknown keys are still rejected; use the builder for new skills.
+                            </div>
+                            <label for="effectJson">效果JSON对象 / Effect JSON object</label>
+                            <textarea
+                                class="form-control"
+                                id="effectJson"
+                                name="effect_json"
+                                maxlength="60000"
+                                spellcheck="false"
+                            ></textarea>
+                        </section>
                     </div>
                     <div class="form-group">
                         <label for="baseCooldown">基础冷却（秒）</label>
@@ -1067,104 +1243,12 @@ $pageTitle = '技能卡目录管理';
 
                 <div class="modal-actions">
                     <button type="button" id="cancelModalButton" class="button button-primary">取消</button>
-                    <button type="submit" class="button button-create">保存</button>
+                    <button type="submit" id="saveSkillButton" class="button button-create">保存</button>
                 </div>
             </form>
         </div>
     </div>
 
-    <script>
-        document.addEventListener('DOMContentLoaded', function() {
-            const modal = document.getElementById('skillCardModal');
-            const form = document.getElementById('skillCardForm');
-            const createButton = document.getElementById('createCardButton');
-            const closeButton = document.getElementById('closeModalButton');
-            const cancelButton = document.getElementById('cancelModalButton');
-
-            // 打开已重置的创建表单 / Open a reset create form
-            function openCreateModal() {
-                form.reset();
-                document.getElementById('modalTitle').textContent = '创建技能卡';
-                document.getElementById('formAction').value = 'create_skill';
-                document.getElementById('cardId').value = '';
-                document.getElementById('cardRarity').value = 'B';
-                document.getElementById('cardElement').value = '亮晶晶';
-                document.getElementById('activationType').value = 'passive';
-                document.getElementById('cardCategory').value = 'internal';
-                document.getElementById('effectJson').value = '{"attack":10}';
-                document.getElementById('baseCooldown').value = '0';
-                document.getElementById('maxLevel').value = '5';
-                document.getElementById('isActive').checked = true;
-                modal.style.display = 'block';
-            }
-
-            // 从受权限保护的接口载入编辑数据 / Load edit data from the permission-protected endpoint
-            function openEditModal(cardId) {
-                fetch('../api/get_skill.php?card_id=' + encodeURIComponent(cardId), {
-                    credentials: 'same-origin',
-                    headers: { 'Accept': 'application/json' }
-                })
-                .then(function(response) {
-                    return response.json().then(function(data) {
-                        if (!response.ok || !data.success) {
-                            throw new Error(data.message || '获取技能卡信息失败');
-                        }
-                        return data;
-                    });
-                })
-                .then(function(data) {
-                    const card = data.card;
-                    document.getElementById('modalTitle').textContent = '编辑技能卡';
-                    document.getElementById('formAction').value = 'update_skill';
-                    document.getElementById('cardId').value = String(card.card_id);
-                    document.getElementById('cardCode').value = card.card_code;
-                    document.getElementById('cardName').value = card.name;
-                    document.getElementById('cardDescription').value = card.description;
-                    document.getElementById('cardRarity').value = card.rarity;
-                    document.getElementById('cardElement').value = card.element;
-                    document.getElementById('activationType').value = card.activation_type;
-                    document.getElementById('cardCategory').value = card.category;
-                    document.getElementById('effectJson').value = JSON.stringify(card.effect, null, 2);
-                    document.getElementById('baseCooldown').value = String(card.base_cooldown);
-                    document.getElementById('maxLevel').value = String(card.max_level);
-                    document.getElementById('isActive').checked = Number(card.is_active) === 1;
-                    modal.style.display = 'block';
-                })
-                .catch(function(error) {
-                    window.alert(error.message || '获取技能卡信息失败');
-                });
-            }
-
-            function closeModal() {
-                modal.style.display = 'none';
-            }
-
-            if (createButton) {
-                createButton.addEventListener('click', openCreateModal);
-            }
-            closeButton.addEventListener('click', closeModal);
-            cancelButton.addEventListener('click', closeModal);
-
-            document.querySelectorAll('.edit-card-button').forEach(function(button) {
-                button.addEventListener('click', function() {
-                    openEditModal(button.getAttribute('data-card-id'));
-                });
-            });
-
-            document.querySelectorAll('.disable-card-form').forEach(function(disableForm) {
-                disableForm.addEventListener('submit', function(event) {
-                    if (!window.confirm('确定停用这张技能卡吗？玩家已持有和已装备的数据会保留。')) {
-                        event.preventDefault();
-                    }
-                });
-            });
-
-            modal.addEventListener('click', function(event) {
-                if (event.target === modal) {
-                    closeModal();
-                }
-            });
-        });
-    </script>
+    <script src="../assets/js/admin-skills.js"></script>
 </body>
 </html>

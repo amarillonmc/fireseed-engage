@@ -17,6 +17,11 @@ require_once 'includes/classes/ResourceCollector.php';
 require_once 'includes/classes/City.php';
 require_once 'includes/classes/Facility.php';
 require_once 'includes/classes/Soldier.php';
+// 加载数据驱动技能机制运行时 / Load the data-driven skill-mechanism runtime
+require_once 'includes/classes/SkillMechanismRegistry.php';
+require_once 'includes/classes/SkillValueResolver.php';
+require_once 'includes/classes/SkillDefinitionValidator.php';
+require_once 'includes/classes/SkillEffectEngine.php';
 require_once 'includes/classes/General.php';
 require_once 'includes/classes/GeneralSkill.php';
 require_once 'includes/classes/GeneralAssignment.php';

@@ -61,11 +61,19 @@ class ChallengeService {
                 throw new RuntimeException('竞技场资料不存在');
             }
 
+            // 竞技场是抽象同址战斗，权威距离固定为0 / Arena is an abstract colocated battle, so its authoritative distance is zero
+            $arenaDefenseContext = [
+                'phase' => 'battle',
+                'side' => 'defense',
+                'target_tags' => ['army', 'player'],
+                'distance' => 0
+            ];
             $lockedArmies = $this->lockCombatArmies([
                 [
                     'key' => 'defense',
                     'army_id' => $armyId,
-                    'owner_id' => $userId
+                    'owner_id' => $userId,
+                    'combat_context' => $arenaDefenseContext
                 ]
             ]);
             if (!isset($lockedArmies['defense'])) {
@@ -162,24 +170,43 @@ class ChallengeService {
                 throw new RuntimeException('今日竞技场挑战次数已用完');
             }
 
+            // 竞技场是抽象同址战斗，双方距离固定为0并各自面向玩家军队 / Arena is abstract and colocated at distance zero, with each side targeting a player army
+            $arenaAttackerContext = [
+                'phase' => 'battle',
+                'side' => 'attack',
+                'target_tags' => ['army', 'player'],
+                'distance' => 0
+            ];
+            $arenaDefenderContext = [
+                'phase' => 'battle',
+                'side' => 'defense',
+                'target_tags' => ['army', 'player'],
+                'distance' => 0
+            ];
             // 按军队ID顺序锁定双方编成，防止解散或行军与结算交错 / Lock both compositions by army ID so disbanding or marching cannot race resolution
             $lockedArmies = $this->lockCombatArmies([
                 [
                     'key' => 'attacker',
                     'army_id' => $attackerArmyId,
-                    'owner_id' => $attackerId
+                    'owner_id' => $attackerId,
+                    'combat_context' => $arenaAttackerContext
                 ],
                 [
                     'key' => 'defender',
                     'army_id' => (int) $profiles[$defenderId]['defense_army_id'],
-                    'owner_id' => $defenderId
+                    'owner_id' => $defenderId,
+                    'combat_context' => $arenaDefenderContext
                 ]
             ]);
             $attackerArmy = $lockedArmies['attacker'];
             $defenderArmy = $lockedArmies['defender'];
 
-            $attackerPower = $attackerArmy->getCombatPower();
-            $defenderPower = $defenderArmy->getCombatPower();
+            $attackerPower = $attackerArmy->getCombatPower(
+                $arenaAttackerContext
+            );
+            $defenderPower = $defenderArmy->getCombatPower(
+                $arenaDefenderContext
+            );
             $outcome = GameRules::calculateBattleOutcome($attackerPower, $defenderPower);
             $draw = $outcome === 'draw';
             $attackerWon = strpos($outcome, 'attacker_win') === 0;
@@ -313,18 +340,26 @@ class ChallengeService {
                 throw new RuntimeException('今日战斗之塔挑战次数已用完');
             }
 
+            // 战斗之塔是抽象同址的NPC军队战，权威距离固定为0 / Battle Tower is an abstract colocated NPC-army fight with authoritative distance zero
+            $towerBattleContext = [
+                'phase' => 'battle',
+                'side' => 'attack',
+                'target_tags' => ['army', 'npc'],
+                'distance' => 0
+            ];
             // 奖励结算前锁定并重建实际编成 / Lock and rebuild the live composition before resolving rewards
             $lockedArmies = $this->lockCombatArmies([
                 [
                     'key' => 'tower',
                     'army_id' => $armyId,
-                    'owner_id' => $userId
+                    'owner_id' => $userId,
+                    'combat_context' => $towerBattleContext
                 ]
             ]);
             $army = $lockedArmies['tower'];
             $floor = (int) $progress['current_floor'];
             $enemyPower = GameRules::getTowerEnemyPower($floor);
-            $armyPower = $army->getCombatPower();
+            $armyPower = $army->getCombatPower($towerBattleContext);
             $won = $armyPower >= $enemyPower;
             $nextFloor = $won ? $floor + 1 : $floor;
             $highestFloor = $won
@@ -456,8 +491,15 @@ class ChallengeService {
                 throw new RuntimeException('讨伐军队没有可作战单位');
             }
 
+            // 讨伐目标是抽象同址的NPC结构，权威距离固定为0 / A Raid target is an abstract colocated NPC structure with authoritative distance zero
+            $raidBattleContext = [
+                'phase' => 'battle',
+                'side' => 'attack',
+                'target_tags' => ['npc', 'structure'],
+                'distance' => 0
+            ];
             $army = new Army($armyId);
-            $armyPower = $army->getCombatPower();
+            $armyPower = $army->getCombatPower($raidBattleContext);
             if (!$army->isValid()
                 || (int) $army->getOwnerId() !== $userId
                 || $army->getStatus() !== 'idle'
@@ -824,7 +866,7 @@ class ChallengeService {
 
     /**
      * 按确定顺序锁定并重建可战斗军队 / Lock and rebuild combat-ready armies in deterministic order
-     * @param array $specifications 军队要求 / Army specifications
+     * @param array $specifications 含权威战斗上下文的军队要求 / Army specifications with authoritative combat contexts
      * @return array<string,Army> 以调用方键索引的军队 / Armies indexed by caller keys
      */
     private function lockCombatArmies($specifications) {
@@ -836,6 +878,11 @@ class ChallengeService {
         foreach ($specifications as $specification) {
             $armyId = (int) $specification['army_id'];
             $ownerId = (int) $specification['owner_id'];
+            if (!isset($specification['combat_context'])
+                || !is_array($specification['combat_context'])) {
+                throw new RuntimeException('参战军队缺少战斗上下文');
+            }
+            $combatContext = $specification['combat_context'];
             $query = "SELECT owner_id, status
                       FROM armies
                       WHERE army_id = ?
@@ -876,7 +923,7 @@ class ChallengeService {
             if (!$army->isValid()
                 || (int) $army->getOwnerId() !== $ownerId
                 || $army->getStatus() !== 'idle'
-                || $army->getCombatPower() <= 0) {
+                || $army->getCombatPower($combatContext) <= 0) {
                 throw new RuntimeException('参战军队没有有效战斗力');
             }
             $armies[(string) $specification['key']] = $army;

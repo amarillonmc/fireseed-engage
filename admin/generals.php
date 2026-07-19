@@ -197,8 +197,8 @@ function loadAdminInherentCard($db, $cardId, $generalId = null) {
     $nameLength = function_exists('mb_strlen')
         ? mb_strlen($card['name'], 'UTF-8')
         : preg_match_all('/./us', $card['name'], $matches);
-    if ($nameLength === false || $nameLength > 50) {
-        throw new DomainException('所选技能名称超过固有技能的50字符上限');
+    if ($nameLength === false || $nameLength > 100) {
+        throw new DomainException('所选技能名称超过固有技能的100字符上限');
     }
 
     $effect = json_decode($card['effect_json']);

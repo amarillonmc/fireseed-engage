@@ -6,17 +6,24 @@ $freshPath = $root . '/sql/gameplay_expansion.sql';
 $upgradePath = $root . '/sql/upgrade_20260717_gameplay_expansion.sql';
 $cardPoolUpgradePath = $root . '/sql/upgrade_20260717_card_pool_resources.sql';
 $imageUpgradePath = $root . '/sql/upgrade_20260718_image_resources.sql';
+$skillMechanismUpgradePath =
+    $root . '/sql/upgrade_20260718_skill_mechanisms.sql';
 $gameConfigPath = $root . '/sql/game_config.sql';
 $freshSql = file_get_contents($freshPath);
 $baseUpgradeSql = file_get_contents($upgradePath);
 $cardPoolUpgradeSql = file_get_contents($cardPoolUpgradePath);
 $imageUpgradeSql = file_get_contents($imageUpgradePath);
+$skillMechanismUpgradeSql = file_get_contents($skillMechanismUpgradePath);
 $gameConfigSql = file_get_contents($gameConfigPath);
 $upgradeSql = $baseUpgradeSql === false
     || $cardPoolUpgradeSql === false
     || $imageUpgradeSql === false
+    || $skillMechanismUpgradeSql === false
     ? false
-    : $baseUpgradeSql . "\n" . $cardPoolUpgradeSql . "\n" . $imageUpgradeSql;
+    : $baseUpgradeSql . "\n"
+        . $cardPoolUpgradeSql . "\n"
+        . $imageUpgradeSql . "\n"
+        . $skillMechanismUpgradeSql;
 $assertions = 0;
 
 /**
@@ -105,6 +112,10 @@ assertSql($freshSql !== false, 'Fresh expansion SQL must be readable');
 assertSql($baseUpgradeSql !== false, 'Base gameplay upgrade SQL must be readable');
 assertSql($cardPoolUpgradeSql !== false, 'Card-pool resource upgrade SQL must be readable');
 assertSql($imageUpgradeSql !== false, 'Image-resource upgrade SQL must be readable');
+assertSql(
+    $skillMechanismUpgradeSql !== false,
+    'Skill-mechanism upgrade SQL must be readable'
+);
 assertSql($gameConfigSql !== false, 'Fresh game configuration SQL must be readable');
 assertSql($upgradeSql !== false, 'Complete upgrade chain must be readable');
 assertSql(hasBalancedSqlParentheses($freshSql), 'Fresh expansion SQL parentheses must balance');

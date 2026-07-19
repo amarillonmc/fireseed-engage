@@ -712,15 +712,24 @@ class City {
      * Only production, training, city-defense, and construction keys are accepted;
      * combat keys such as attack and march speed never enter city calculations.
      *
+     * @param array $context 内政或防守上下文 / Internal-affairs or defense context
      * @return array<string,float> 规范化后的百分比加成 / Normalized percentage bonuses
      */
-    public function getAssignedGeneralCityBonuses() {
+    public function getAssignedGeneralCityBonuses(array $context = []) {
         $totals = [
             'production' => 0.0,
             'training_speed' => 0.0,
+            'training_cost_reduction' => 0.0,
             'defense' => 0.0,
             'build_speed' => 0.0
         ];
+        foreach (['bright', 'warm', 'cold', 'green', 'day', 'night'] as $resource) {
+            $totals['production_' . $resource] = 0.0;
+        }
+        foreach (['pawn', 'knight', 'rook', 'bishop', 'golem', 'scout'] as $unitType) {
+            $totals['training_speed_' . $unitType] = 0.0;
+            $totals['training_cost_reduction_' . $unitType] = 0.0;
+        }
 
         if (!$this->isValid) {
             return $totals;
@@ -750,12 +759,36 @@ class City {
             }
 
             // getBonus('city') 已合并基础值与技能值，不能再次累加同一技能 / getBonus('city') already merges base and skill values
-            $bonus = $general->getBonus('city');
+            $bonus = $general->getBonus('city', $context);
 
             $totals['production'] += self::readNonNegativeBonus($bonus, 'production');
             $totals['training_speed'] += self::readNonNegativeBonus($bonus, 'training_speed');
+            $totals['training_cost_reduction'] +=
+                self::readNonNegativeBonus(
+                    $bonus,
+                    'training_cost_reduction'
+                );
             $totals['build_speed'] += self::readNonNegativeBonus($bonus, 'build_speed');
             $totals['build_speed'] += self::readNonNegativeBonus($bonus, 'construction_speed');
+            foreach (['bright', 'warm', 'cold', 'green', 'day', 'night'] as $resource) {
+                $key = 'production_' . $resource;
+                $totals[$key] += self::readNonNegativeBonus(
+                    $bonus,
+                    $key
+                );
+            }
+            foreach (['pawn', 'knight', 'rook', 'bishop', 'golem', 'scout'] as $unitType) {
+                $speedKey = 'training_speed_' . $unitType;
+                $costKey = 'training_cost_reduction_' . $unitType;
+                $totals[$speedKey] += self::readNonNegativeBonus(
+                    $bonus,
+                    $speedKey
+                );
+                $totals[$costKey] += self::readNonNegativeBonus(
+                    $bonus,
+                    $costKey
+                );
+            }
 
             // 泛用 defense 技能属于战斗效果；这里只按武将基础属性重建驻城防御 / Generic defense skills are combat effects; rebuild city defense from base attributes only
             $totals['defense'] += max(
@@ -853,22 +886,43 @@ class City {
      * 获取指定内政动作的加速后时长 / Get a speed-adjusted duration for an internal-affairs action
      * @param int|float $baseSeconds 基础秒数 / Base duration in seconds
      * @param string $bonusKey training_speed 或 build_speed / training_speed or build_speed
+     * @param string|null $scope 兵种等细分作用域 / Unit or other scoped target
      * @return int 调整后的秒数 / Adjusted duration in seconds
      */
-    public function getAdjustedCityActionDuration($baseSeconds, $bonusKey) {
+    public function getAdjustedCityActionDuration(
+        $baseSeconds,
+        $bonusKey,
+        $scope = null
+    ) {
         if (!$this->isValid || !in_array($bonusKey, ['training_speed', 'build_speed'], true)) {
             return self::applySpeedBonusToDuration($baseSeconds, 0);
         }
 
-        $bonuses = $this->getAssignedGeneralCityBonuses();
-        return self::applySpeedBonusToDuration($baseSeconds, $bonuses[$bonusKey]);
+        $phase = $bonusKey === 'training_speed'
+            ? 'training'
+            : 'construction';
+        $bonuses = $this->getAssignedGeneralCityBonuses([
+            'phase' => $phase
+        ]);
+        $bonus = isset($bonuses[$bonusKey])
+            ? (float) $bonuses[$bonusKey]
+            : 0.0;
+        $scopedKey = $scope === null
+            ? null
+            : $bonusKey . '_' . trim((string) $scope);
+        if ($scopedKey !== null && isset($bonuses[$scopedKey])) {
+            $bonus += (float) $bonuses[$scopedKey];
+        }
+
+        return self::applySpeedBonusToDuration($baseSeconds, $bonus);
     }
 
     /**
      * 获取城池防御力
-     * @return int 防御力
+     * @param array $context 防守上下文 / Defense context
+     * @return int 防御力 / Defense power
      */
-    public function getDefensePower() {
+    public function getDefensePower(array $context = []) {
         if (!$this->isValid) {
             return 0;
         }
@@ -889,7 +943,13 @@ class City {
         $defensePower *= $strategyBonus[0];
 
         // 存活驻城武将提供百分比城防增益 / Living assigned generals provide a percentage city-defense bonus
-        $cityBonuses = $this->getAssignedGeneralCityBonuses();
+        if (!isset($context['phase'])) {
+            $context['phase'] = 'city_defense';
+        }
+        if (!isset($context['side'])) {
+            $context['side'] = 'defense';
+        }
+        $cityBonuses = $this->getAssignedGeneralCityBonuses($context);
         $defensePower = self::applyPercentageBonus($defensePower, $cityBonuses['defense']);
 
         return floor($defensePower);

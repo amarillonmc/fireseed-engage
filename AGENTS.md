@@ -72,6 +72,7 @@ class ClassName {
 - Always use prepared statements with bind_param
 - Types: 'i'=int, 'd'=double, 's'=string, 'b'=blob
 - Always close statements: `$stmt->close()`
+- Installer portability exception: `install.php` may use `mysqli::query()` only for a single `PREPARE`, `EXECUTE`, `DEALLOCATE PREPARE`, `CREATE TRIGGER`, or `DROP TRIGGER` statement read verbatim from a repository-owned SQL file. These statements are not portably available through the binary prepared-statement protocol on every supported MySQL/MariaDB version. The dispatcher must use an explicit statement-type allowlist, and no user input, generated identifier, or runtime value may enter this path.
 
 **Validation Pattern:**
 ```php
