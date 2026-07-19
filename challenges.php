@@ -52,10 +52,68 @@ if (isset($_SERVER['REQUEST_METHOD']) && $_SERVER['REQUEST_METHOD'] === 'POST') 
 
 $resource = new Resource($user->getUserId());
 $dashboard = $challengeService->getDashboard($user->getUserId());
-$idleArmies = [];
+
+// 各挑战模式都有确定的抽象同址目标，预览上下文必须与服务结算完全一致 / Every challenge mode has a known abstract colocated target, so preview contexts must exactly match service resolution
+$towerBattleContext = [
+    'phase' => 'battle',
+    'side' => 'attack',
+    'target_tags' => ['army', 'npc'],
+    'distance' => 0
+];
+$raidBattleContext = [
+    'phase' => 'battle',
+    'side' => 'attack',
+    'target_tags' => ['npc', 'structure'],
+    'distance' => 0
+];
+$arenaAttackContext = [
+    'phase' => 'battle',
+    'side' => 'attack',
+    'target_tags' => ['army', 'player'],
+    'distance' => 0
+];
+$arenaDefenseContext = [
+    'phase' => 'battle',
+    'side' => 'defense',
+    'target_tags' => ['army', 'player'],
+    'distance' => 0
+];
+$towerArmies = [];
+$towerArmyPowers = [];
+$raidArmies = [];
+$raidArmyPowers = [];
+$arenaAttackArmies = [];
+$arenaAttackPowers = [];
+$arenaDefenseArmies = [];
+$arenaDefensePowers = [];
 foreach ($dashboard['armies'] as $army) {
-    if ($army->getStatus() === 'idle' && $army->getCombatPower() > 0) {
-        $idleArmies[] = $army;
+    if ($army->getStatus() !== 'idle') {
+        continue;
+    }
+
+    $previewArmyId = $army->getArmyId();
+    $towerPower = $army->getCombatPower($towerBattleContext);
+    if ($towerPower > 0) {
+        $towerArmies[] = $army;
+        $towerArmyPowers[$previewArmyId] = $towerPower;
+    }
+
+    $raidPower = $army->getCombatPower($raidBattleContext);
+    if ($raidPower > 0) {
+        $raidArmies[] = $army;
+        $raidArmyPowers[$previewArmyId] = $raidPower;
+    }
+
+    $arenaAttackPower = $army->getCombatPower($arenaAttackContext);
+    if ($arenaAttackPower > 0) {
+        $arenaAttackArmies[] = $army;
+        $arenaAttackPowers[$previewArmyId] = $arenaAttackPower;
+    }
+
+    $arenaDefensePower = $army->getCombatPower($arenaDefenseContext);
+    if ($arenaDefensePower > 0) {
+        $arenaDefenseArmies[] = $army;
+        $arenaDefensePowers[$previewArmyId] = $arenaDefensePower;
     }
 }
 $pageTitle = '挑战玩法';
@@ -86,14 +144,14 @@ $pageTitle = '挑战玩法';
                 <form method="post" class="gameplay-form">
                     <?php echo csrfField(); ?>
                     <input type="hidden" name="action" value="tower_challenge">
-                    <label>出战军队
+                    <label>出战军队（对 NPC 军队战力）
                         <select name="army_id" required>
-                            <?php foreach ($idleArmies as $army): ?>
-                                <option value="<?php echo (int) $army->getArmyId(); ?>"><?php echo escapeHtml($army->getName()); ?>（<?php echo number_format($army->getCombatPower()); ?>）</option>
+                            <?php foreach ($towerArmies as $army): ?>
+                                <option value="<?php echo (int) $army->getArmyId(); ?>"><?php echo escapeHtml($army->getName()); ?>（<?php echo number_format($towerArmyPowers[$army->getArmyId()]); ?>）</option>
                             <?php endforeach; ?>
                         </select>
                     </label>
-                    <button class="gameplay-button" type="submit" <?php echo empty($idleArmies) ? 'disabled' : ''; ?>>挑战当前层</button>
+                    <button class="gameplay-button" type="submit" <?php echo empty($towerArmies) ? 'disabled' : ''; ?>>挑战当前层</button>
                 </form>
             <?php endif; ?>
         </section>
@@ -149,16 +207,16 @@ $pageTitle = '挑战玩法';
                                 <?php echo csrfField(); ?>
                                 <input type="hidden" name="action" value="raid_attack">
                                 <input type="hidden" name="raid_id" value="<?php echo (int) $raid['raid_id']; ?>">
-                                <label>出战军队
+                                <label>出战军队（对 NPC 结构战力）
                                     <select name="army_id" required>
-                                        <?php foreach ($idleArmies as $army): ?>
-                                            <option value="<?php echo (int) $army->getArmyId(); ?>"><?php echo escapeHtml($army->getName()); ?>（<?php echo number_format($army->getCombatPower()); ?>）</option>
+                                        <?php foreach ($raidArmies as $army): ?>
+                                            <option value="<?php echo (int) $army->getArmyId(); ?>"><?php echo escapeHtml($army->getName()); ?>（<?php echo number_format($raidArmyPowers[$army->getArmyId()]); ?>）</option>
                                         <?php endforeach; ?>
                                     </select>
                                 </label>
-                                <button class="gameplay-button" type="submit" <?php echo empty($idleArmies) ? 'disabled' : ''; ?>>发动讨伐</button>
+                                <button class="gameplay-button" type="submit" <?php echo empty($raidArmies) ? 'disabled' : ''; ?>>发动讨伐</button>
                             </form>
-                            <?php if (empty($idleArmies)): ?>
+                            <?php if (empty($raidArmies)): ?>
                                 <p class="muted">当前没有可出战的空闲军队。</p>
                             <?php elseif ($contributionRemaining > 0): ?>
                                 <p class="muted">距离奖励门槛还差 <?php echo number_format($contributionRemaining); ?> 点伤害。</p>
@@ -195,14 +253,14 @@ $pageTitle = '挑战玩法';
                 <form method="post" class="gameplay-form">
                     <?php echo csrfField(); ?>
                     <input type="hidden" name="action" value="set_arena_defense">
-                    <label>防守军队
+                    <label>防守军队（对玩家军队防守战力）
                         <select name="army_id" required>
-                            <?php foreach ($idleArmies as $army): ?>
-                                <option value="<?php echo (int) $army->getArmyId(); ?>"><?php echo escapeHtml($army->getName()); ?>（<?php echo number_format($army->getCombatPower()); ?>）</option>
+                            <?php foreach ($arenaDefenseArmies as $army): ?>
+                                <option value="<?php echo (int) $army->getArmyId(); ?>"><?php echo escapeHtml($army->getName()); ?>（<?php echo number_format($arenaDefensePowers[$army->getArmyId()]); ?>）</option>
                             <?php endforeach; ?>
                         </select>
                     </label>
-                    <button class="gameplay-button" type="submit" <?php echo empty($idleArmies) ? 'disabled' : ''; ?>>设置防守</button>
+                    <button class="gameplay-button" type="submit" <?php echo empty($arenaDefenseArmies) ? 'disabled' : ''; ?>>设置防守</button>
                 </form>
             <?php endif; ?>
 
@@ -220,11 +278,11 @@ $pageTitle = '挑战玩法';
                                 <input type="hidden" name="action" value="arena_challenge">
                                 <input type="hidden" name="defender_id" value="<?php echo (int) $opponent['user_id']; ?>">
                                 <select name="army_id" required>
-                                    <?php foreach ($idleArmies as $army): ?>
-                                        <option value="<?php echo (int) $army->getArmyId(); ?>"><?php echo escapeHtml($army->getName()); ?></option>
+                                    <?php foreach ($arenaAttackArmies as $army): ?>
+                                        <option value="<?php echo (int) $army->getArmyId(); ?>"><?php echo escapeHtml($army->getName()); ?>（进攻战力 <?php echo number_format($arenaAttackPowers[$army->getArmyId()]); ?>）</option>
                                     <?php endforeach; ?>
                                 </select>
-                                <button class="gameplay-button" type="submit" <?php echo empty($idleArmies) ? 'disabled' : ''; ?>>挑战</button>
+                                <button class="gameplay-button" type="submit" <?php echo empty($arenaAttackArmies) ? 'disabled' : ''; ?>>挑战</button>
                             </form>
                         </td>
                     </tr>

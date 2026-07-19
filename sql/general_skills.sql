@@ -4,7 +4,7 @@ CREATE TABLE `general_skills` (
   `skill_id` int(11) NOT NULL AUTO_INCREMENT,
   `general_id` int(11) NOT NULL,
   `skill_type` varchar(20) NOT NULL,
-  `skill_name` varchar(50) NOT NULL,
+  `skill_name` varchar(100) NOT NULL,
   `slot` int(11) NOT NULL DEFAULT 0,
   `skill_level` int(11) NOT NULL DEFAULT 1,
   `skill_effect` text NOT NULL,

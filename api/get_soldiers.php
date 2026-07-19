@@ -72,6 +72,9 @@ foreach ($city->getSoldiers() as $soldier) {
 
 // 返回全部兵种，方便客户端稳定渲染空记录 / Return every type so clients can render empty records consistently
 $orderedSoldiers = [];
+$trainingCostBonuses = $city->getAssignedGeneralCityBonuses([
+    'phase' => 'training'
+]);
 foreach ($types as $type) {
     $facilityType = Soldier::getTrainingFacilityType($type);
     $availableLevel = isset($facilityLevels[$facilityType]) ? $facilityLevels[$facilityType] : 0;
@@ -90,7 +93,13 @@ foreach ($types as $type) {
 
     $soldiersByType[$type]['training_available'] = $availableLevel > 0;
     $soldiersByType[$type]['training_facility'] = $facilityType;
-    $soldiersByType[$type]['training_cost'] = Soldier::getTrainingCost($type);
+    $soldiersByType[$type]['training_cost'] =
+        Soldier::getAdjustedTrainingCost(
+            $cityId,
+            $type,
+            1,
+            $trainingCostBonuses
+        );
     $orderedSoldiers[$type] = $soldiersByType[$type];
 }
 

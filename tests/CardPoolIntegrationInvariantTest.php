@@ -124,6 +124,67 @@ assertCardPoolIntegration(
         && stripos($splitStatements[3], 'COMMIT') !== false,
     'Installer SQL splitter must ignore semicolons inside quotes and SQL comments'
 );
+$triggerStatements = splitInstallerSqlStatements(
+    "DROP TRIGGER IF EXISTS fireseed_prod_test;\n"
+    . "CREATE TRIGGER fireseed_prod_test\n"
+    . "AFTER INSERT ON resources\n"
+    . "FOR EACH ROW INSERT INTO audit_log VALUES (NEW.user_id);"
+);
+assertCardPoolIntegration(
+    count($triggerStatements) === 2
+        && stripos($triggerStatements[0], 'DROP TRIGGER') !== false
+        && stripos($triggerStatements[1], 'CREATE TRIGGER') !== false,
+    'Installer SQL splitter must emit each single-statement trigger DDL separately'
+);
+
+$serverPrepareDetectorSource = extractCardPoolTestFunction(
+    $files['installer'],
+    'isInstallerSqlServerPrepareCommand'
+);
+assertCardPoolIntegration(
+    $serverPrepareDetectorSource !== null,
+    'Fresh installer must identify SQL-level prepared-statement controls'
+);
+if ($serverPrepareDetectorSource !== null
+    && !function_exists('isInstallerSqlServerPrepareCommand')) {
+    eval($serverPrepareDetectorSource);
+}
+assertCardPoolIntegration(
+    isInstallerSqlServerPrepareCommand(
+        "-- bundled DDL control / 内置DDL控制\n"
+        . 'PREPARE fireseed_stmt FROM @fireseed_ddl'
+    )
+        && isInstallerSqlServerPrepareCommand(
+            'EXECUTE fireseed_stmt'
+        )
+        && isInstallerSqlServerPrepareCommand(
+            'DEALLOCATE PREPARE fireseed_stmt'
+        )
+        && isInstallerSqlServerPrepareCommand(
+            'DROP TRIGGER IF EXISTS fireseed_prod_test'
+        )
+        && isInstallerSqlServerPrepareCommand(
+            "CREATE TRIGGER fireseed_prod_test\n"
+            . "AFTER INSERT ON resources\n"
+            . "FOR EACH ROW INSERT INTO audit_log VALUES (NEW.user_id)"
+        )
+        && !isInstallerSqlServerPrepareCommand(
+            'SELECT * FROM skill_card_catalog'
+        )
+        && !isInstallerSqlServerPrepareCommand(
+            "SELECT 1\n"
+            . "CREATE TRIGGER fireseed_prod_test\n"
+            . "AFTER INSERT ON resources\n"
+            . "FOR EACH ROW INSERT INTO audit_log VALUES (NEW.user_id)"
+        )
+        && !isInstallerSqlServerPrepareCommand(
+            "SELECT 1\nPREPARE fireseed_stmt FROM @fireseed_ddl"
+        )
+        && !isInstallerSqlServerPrepareCommand(
+            "DROP TRIGGER IF EXISTS fireseed_prod_test\nSELECT 1"
+        ),
+    'Only one complete bundled SQL control or trigger DDL statement may bypass mysqli prepare'
+);
 
 assertCardPoolIntegration(
     strpos($files['init'], 'CardPoolService.php') !== false
@@ -205,6 +266,15 @@ assertCardPoolIntegration(
             "\$row['skill_name']"
         ) !== false,
     'Starter, draw, duplicate, and published-pool cards must expose inherent skill names'
+);
+assertCardPoolIntegration(
+    strpos($files['admin_generals'], '$nameLength > 100') !== false
+        && strpos(
+            $files['admin_generals'],
+            '固有技能的100字符上限'
+        ) !== false
+        && strpos($files['admin_generals'], '$nameLength > 50') === false,
+    'General-template mapping must accept the catalog-wide 100-character skill-name limit'
 );
 
 assertCardPoolIntegration(
@@ -399,94 +469,16 @@ assertCardPoolIntegration(
 );
 
 assertCardPoolIntegration(
-    strpos($files['admin_skills'], "'level_values'") !== false
-        && strpos($files['admin_skills'], "'cost_level_values'") !== false
-        && strpos($files['admin_skills'], "['mode']") !== false
-        && strpos($files['admin_skills'], "['values']") !== false,
-    'Structured level-curve modes must receive dedicated catalog validation'
+    strpos(
+        $files['admin_skills'],
+        'SkillDefinitionValidator::validate('
+    ) !== false
+        && strpos(
+            $files['admin_skills'],
+            '$allowLegacy && $definitionMode'
+        ) !== false,
+    'Catalog writes must delegate every curve mode to the central definition validator'
 );
-assertCardPoolIntegration(
-    preg_match(
-        '/count\s*\([^)]*values[^)]*\).{0,240}maxLevel/is',
-        $files['admin_skills']
-    ) === 1
-        && (
-            strpos($files['admin_skills'], 'is_numeric(') !== false
-            || (
-                strpos($files['admin_skills'], 'is_int(') !== false
-                && strpos($files['admin_skills'], 'is_float(') !== false
-            )
-        )
-        && strpos($files['admin_skills'], 'is_finite(') !== false,
-    'Structured curves must contain finite numeric values covering max_level'
-);
-
-$curveValidatorSource = extractCardPoolTestFunction(
-    $files['admin_skills'],
-    'adminSkillValidateLevelCurves'
-);
-assertCardPoolIntegration(
-    $curveValidatorSource !== null,
-    'Structured curve validator must remain independently testable'
-);
-if ($curveValidatorSource !== null
-    && !function_exists('adminSkillValidateLevelCurves')) {
-    eval($curveValidatorSource);
-}
-
-$validLevelCurve = (object) [
-    'attack' => (object) [
-        'mode' => 'level_values',
-        'values' => [1, 2.5, 3]
-    ],
-    'speed' => (object) [
-        'mode' => 'cost_level_values',
-        'values' => [4, 5, 6]
-    ]
-];
-assertCardPoolIntegration(
-    empty(adminSkillValidateLevelCurves($validLevelCurve, 3)),
-    'Both structured curve modes must accept finite numeric values through max_level'
-);
-assertCardPoolIntegration(
-    !empty(adminSkillValidateLevelCurves($validLevelCurve, 3, 'active')),
-    'Structured curves must be rejected for active skills until active execution supports them'
-);
-
-$invalidCurves = [
-    'short' => (object) [
-        'attack' => (object) [
-            'mode' => 'level_values',
-            'values' => [1, 2]
-        ]
-    ],
-    'numeric_string' => (object) [
-        'attack' => (object) [
-            'mode' => 'level_values',
-            'values' => [1, '2', 3]
-        ]
-    ],
-    'not_finite' => (object) [
-        'attack' => (object) [
-            'mode' => 'cost_level_values',
-            'values' => [1, INF, 3]
-        ]
-    ],
-    'array_without_descriptor' => (object) [
-        'attack' => [1, 2, 3]
-    ],
-    'object_without_descriptor' => (object) [
-        'attack' => (object) [
-            'values_by_name' => [1, 2, 3]
-        ]
-    ]
-];
-foreach ($invalidCurves as $caseName => $effectObject) {
-    assertCardPoolIntegration(
-        !empty(adminSkillValidateLevelCurves($effectObject, 3)),
-        "Structured curve validator must reject {$caseName} values"
-    );
-}
 
 foreach (['recruit_page', 'skill_page'] as $pageName) {
     assertCardPoolIntegration(

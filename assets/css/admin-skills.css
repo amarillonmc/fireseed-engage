@@ -1,0 +1,329 @@
+/* 种火集结号 - 技能机制组合器样式 / Fireseed Engage - Skill mechanism builder styles */
+
+#skillCardModal .modal-content {
+    width: min(1180px, 100%);
+}
+
+.skill-definition-editor {
+    padding: 16px;
+    border: 1px solid #dfe6e9;
+    border-radius: 8px;
+    background: #f8fafb;
+}
+
+.definition-editor-heading,
+.effects-heading,
+.effect-card-heading,
+.condition-heading {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 12px;
+}
+
+.definition-editor-heading > div:first-child,
+.effects-heading > div:first-child {
+    min-width: 0;
+}
+
+.definition-help {
+    display: block;
+    margin: 4px 0 0;
+    color: #63727c;
+    font-size: 13px;
+    font-weight: 400;
+    line-height: 1.45;
+}
+
+.definition-mode-tabs {
+    display: inline-flex;
+    flex: 0 0 auto;
+    gap: 2px;
+    padding: 3px;
+    border-radius: 6px;
+    background: #e4eaed;
+}
+
+.definition-mode-button {
+    padding: 7px 10px;
+    border: 0;
+    border-radius: 4px;
+    color: #42535d;
+    background: transparent;
+    cursor: pointer;
+    font-weight: 700;
+}
+
+.definition-mode-button.active {
+    color: #fff;
+    background: #16a085;
+}
+
+.definition-loading,
+.definition-errors,
+.compatibility-warning {
+    margin-top: 14px;
+    padding: 11px 12px;
+    border-radius: 5px;
+    line-height: 1.5;
+}
+
+.definition-loading {
+    color: #315269;
+    border: 1px solid #c8dce8;
+    background: #eef7fc;
+}
+
+.definition-errors {
+    color: #922b21;
+    border: 1px solid #efb7b2;
+    background: #fdecea;
+}
+
+.definition-errors ul {
+    margin: 0;
+    padding-left: 20px;
+}
+
+.compatibility-warning {
+    margin-bottom: 12px;
+    color: #7d5200;
+    border: 1px solid #f1cd76;
+    background: #fff7de;
+}
+
+.builder-meta-grid {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 12px;
+    margin-top: 16px;
+}
+
+.builder-field > label,
+.parameter-field > label,
+.value-editor > label {
+    display: block;
+    margin-bottom: 5px;
+    color: #2c3e50;
+    font-weight: 700;
+}
+
+.builder-checkbox-field {
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+}
+
+.builder-checkbox-field label {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+}
+
+.builder-checkbox-field input {
+    width: auto;
+}
+
+.effects-heading {
+    align-items: center;
+    margin: 20px 0 10px;
+}
+
+.effect-builder-list {
+    display: grid;
+    gap: 12px;
+}
+
+.effect-card {
+    padding: 14px;
+    border: 1px solid #d6dee2;
+    border-left: 4px solid #1abc9c;
+    border-radius: 7px;
+    background: #fff;
+}
+
+.effect-card.invalid {
+    border-left-color: #c0392b;
+    background: #fffafa;
+}
+
+.effect-card-heading {
+    align-items: center;
+    margin-bottom: 10px;
+}
+
+.effect-number {
+    color: #34495e;
+    font-weight: 800;
+}
+
+.small-button {
+    padding: 6px 9px;
+    border: 1px solid #ccd5da;
+    border-radius: 4px;
+    color: #34495e;
+    background: #fff;
+    cursor: pointer;
+    font-weight: 700;
+}
+
+.small-button:hover {
+    background: #f0f4f5;
+}
+
+.small-button.danger {
+    color: #a93226;
+    border-color: #e8b7b2;
+}
+
+.effect-grid,
+.parameter-grid,
+.condition-grid,
+.value-editor-grid {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 10px;
+}
+
+.effect-grid .form-wide,
+.parameter-grid .form-wide,
+.condition-grid .form-wide,
+.value-editor-grid .form-wide {
+    grid-column: 1 / -1;
+}
+
+.mechanism-description {
+    min-height: 38px;
+    margin: 8px 0 12px;
+    padding: 9px 10px;
+    border-radius: 4px;
+    color: #445861;
+    background: #edf5f2;
+    line-height: 1.45;
+}
+
+.mechanism-code {
+    color: #607d8b;
+    font-family: Consolas, "Courier New", monospace;
+    font-size: 12px;
+}
+
+.value-editor {
+    padding: 10px;
+    border: 1px solid #e0e6e9;
+    border-radius: 5px;
+    background: #fbfcfc;
+}
+
+.value-editor textarea {
+    min-height: 76px;
+    font-family: Consolas, "Courier New", monospace;
+}
+
+.value-range {
+    margin-top: 5px;
+    color: #6d7c84;
+    font-size: 12px;
+}
+
+.conditions-block {
+    margin-top: 12px;
+    padding-top: 12px;
+    border-top: 1px dashed #ccd5da;
+}
+
+.condition-heading {
+    align-items: center;
+    margin-bottom: 8px;
+}
+
+.condition-list {
+    display: grid;
+    gap: 8px;
+}
+
+.condition-row {
+    padding: 9px;
+    border: 1px solid #e2e7e9;
+    border-radius: 5px;
+    background: #f8fafb;
+}
+
+.condition-row select[multiple] {
+    min-height: 82px;
+}
+
+.placeholder-catalog {
+    margin-top: 16px;
+    padding: 10px 12px;
+    border: 1px dashed #b8c2c7;
+    border-radius: 6px;
+    color: #53636c;
+    background: #f4f6f7;
+}
+
+.placeholder-catalog summary {
+    cursor: pointer;
+    font-weight: 700;
+}
+
+.placeholder-mechanism-list {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 8px;
+    margin-top: 10px;
+}
+
+.placeholder-item {
+    padding: 9px;
+    border-radius: 5px;
+    color: #59666d;
+    background: #e8ecee;
+}
+
+.placeholder-item strong {
+    display: block;
+}
+
+.legacy-json-panel {
+    margin-top: 14px;
+}
+
+.legacy-json-panel textarea {
+    min-height: 240px;
+    font-family: Consolas, "Courier New", monospace;
+}
+
+.skill-definition-editor [hidden] {
+    display: none !important;
+}
+
+@media (max-width: 760px) {
+    .definition-editor-heading,
+    .effects-heading {
+        align-items: stretch;
+        flex-direction: column;
+    }
+
+    .definition-mode-tabs {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        width: 100%;
+    }
+
+    .builder-meta-grid,
+    .effect-grid,
+    .parameter-grid,
+    .condition-grid,
+    .value-editor-grid,
+    .placeholder-mechanism-list {
+        grid-template-columns: 1fr;
+    }
+
+    .effect-grid .form-wide,
+    .parameter-grid .form-wide,
+    .condition-grid .form-wide,
+    .value-editor-grid .form-wide {
+        grid-column: auto;
+    }
+}

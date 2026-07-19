@@ -34,8 +34,14 @@ if (!$army->isValid() || $army->getOwnerId() != $user->getUserId() || $army->get
 }
 
 $moveError = '';
-$prefillTargetX = isset($_GET['target_x']) ? (int) $_GET['target_x'] : '';
-$prefillTargetY = isset($_GET['target_y']) ? (int) $_GET['target_y'] : '';
+$parsedTargetX = isset($_GET['target_x'])
+    ? filter_var($_GET['target_x'], FILTER_VALIDATE_INT)
+    : false;
+$parsedTargetY = isset($_GET['target_y'])
+    ? filter_var($_GET['target_y'], FILTER_VALIDATE_INT)
+    : false;
+$prefillTargetX = $parsedTargetX !== false ? (int) $parsedTargetX : '';
+$prefillTargetY = $parsedTargetY !== false ? (int) $parsedTargetY : '';
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     if (!validateCsrfToken()) {
         $moveError = '安全令牌无效，请刷新页面后重试。';
@@ -57,6 +63,32 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
 // 获取军队当前位置
 $currentPosition = $army->getCurrentPosition();
+
+// 仅在目标坐标有效时应用距离条件；否则展示明确标注的无目标基准 / Apply distance conditions only for valid target coordinates; otherwise show an explicitly labeled targetless baseline
+$hasKnownTarget = is_int($prefillTargetX)
+    && is_int($prefillTargetY)
+    && $prefillTargetX >= 0
+    && $prefillTargetX < MAP_WIDTH
+    && $prefillTargetY >= 0
+    && $prefillTargetY < MAP_HEIGHT;
+$marchContext = ['phase' => 'march'];
+$moveDistance = null;
+if ($hasKnownTarget) {
+    $moveDistance = abs((int) $currentPosition[0] - $prefillTargetX)
+        + abs((int) $currentPosition[1] - $prefillTargetY);
+    $marchContext['distance'] = $moveDistance;
+}
+$previewMovementSpeed = $army->getMovementSpeed($marchContext);
+$previewMovementSeconds = null;
+if ($moveDistance !== null && $previewMovementSpeed > 0) {
+    $previewMovementSeconds = (int) ceil(
+        $moveDistance / $previewMovementSpeed * 3600
+    );
+}
+
+// 移动页面不知道未来战斗的攻守方与目标，只展示不套用未知条件的战斗基准 / The movement page does not know a future battle side or target, so it shows a combat baseline without unknown conditions
+$baseCombatContext = ['phase' => 'battle'];
+$baseCombatPower = $army->getCombatPower($baseCombatContext);
 
 // 页面标题
 $pageTitle = '移动军队';
@@ -207,8 +239,22 @@ $pageTitle = '移动军队';
                 <div class="move-army-info">
                     <h4><?php echo escapeHtml($army->getName()); ?></h4>
                     <p>当前位置: (<?php echo $currentPosition[0]; ?>, <?php echo $currentPosition[1]; ?>)</p>
-                    <p>移动速度: <?php echo number_format($army->getMovementSpeed(), 2); ?> 格/小时</p>
-                    <p>战斗力: <?php echo number_format($army->getCombatPower()); ?></p>
+                    <?php if ($hasKnownTarget): ?>
+                        <p>目标行军速度: <?php echo number_format($previewMovementSpeed, 2); ?> 格/小时</p>
+                        <p>曼哈顿距离: <?php echo number_format($moveDistance); ?> 格</p>
+                        <p>预计行军时间:
+                            <?php echo $previewMovementSeconds === null
+                                ? '无法抵达'
+                                : escapeHtml(formatTime($previewMovementSeconds)); ?>
+                        </p>
+                    <?php else: ?>
+                        <p>行军基准速度（目标距离未定）:
+                            <?php echo number_format($previewMovementSpeed, 2); ?> 格/小时
+                        </p>
+                    <?php endif; ?>
+                    <p>基础战斗力（未应用攻守方与目标条件）:
+                        <?php echo number_format($baseCombatPower); ?>
+                    </p>
                 </div>
                 
                 <div class="move-army-form">

@@ -613,11 +613,15 @@ class TerritoryGarrisonService {
             $cityY = (int) $city['y'];
             if ($currentX !== $cityX || $currentY !== $cityY) {
                 $withdrawalArmy = new Army($armyId);
-                $speed = $withdrawalArmy->getMovementSpeed();
+                $distance = abs($cityX - $currentX)
+                    + abs($cityY - $currentY);
+                $speed = $withdrawalArmy->getMovementSpeed([
+                    'phase' => 'return',
+                    'distance' => $distance
+                ]);
                 if (!$withdrawalArmy->isValid() || $speed <= 0) {
                     throw new RuntimeException('撤回军队无法计算返程速度');
                 }
-                $distance = abs($cityX - $currentX) + abs($cityY - $currentY);
                 $seconds = (int) ceil($distance / $speed * 3600);
                 $returnTime = date('Y-m-d H:i:s', time() + max(1, $seconds));
 

@@ -46,7 +46,7 @@ CREATE TABLE `generals` (
 CREATE TABLE `general_skills` (
   `skill_id` int(11) NOT NULL AUTO_INCREMENT,
   `general_id` int(11) NOT NULL,
-  `skill_name` varchar(50) NOT NULL,
+  `skill_name` varchar(100) NOT NULL,
   `skill_type` enum('自带','装备') NOT NULL DEFAULT '自带',
   `slot` int(11) NOT NULL DEFAULT 0, -- 0表示自带技能，1-2表示额外技能槽
   `skill_level` int(11) NOT NULL DEFAULT 1,

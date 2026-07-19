@@ -94,11 +94,97 @@ document.addEventListener('DOMContentLoaded', function() {
         });
     });
 
+    const trainingResourceNames = {
+        bright: '亮晶晶',
+        warm: '暖洋洋',
+        cold: '冷冰冰',
+        green: '郁萌萌',
+        day: '昼闪闪',
+        night: '夜静静'
+    };
+
+    // 仅保留服务端支持的非负整数费用 / Keep only non-negative integer costs for server-supported resources
+    function normalizeTrainingCost(rawCost) {
+        if (!rawCost || typeof rawCost !== 'object' || Array.isArray(rawCost)) {
+            return {};
+        }
+        const rawKeys = Object.keys(rawCost);
+        if (rawKeys.some(resourceType =>
+            !Object.prototype.hasOwnProperty.call(
+                trainingResourceNames,
+                resourceType
+            ))) {
+            return {};
+        }
+
+        const normalized = {};
+        let malformed = false;
+        Object.keys(trainingResourceNames).forEach(resourceType => {
+            if (!Object.prototype.hasOwnProperty.call(rawCost, resourceType)) {
+                return;
+            }
+            const amount = rawCost[resourceType];
+            if (typeof amount === 'number'
+                && Number.isSafeInteger(amount)
+                && amount >= 0) {
+                normalized[resourceType] = amount;
+            } else {
+                malformed = true;
+            }
+        });
+        return malformed ? {} : normalized;
+    }
+
+    // 安全解析服务器首屏按钮携带的费用JSON / Safely parse cost JSON carried by server-rendered buttons
+    function parseTrainingCostData(rawJson) {
+        if (typeof rawJson !== 'string' || rawJson.trim() === '') {
+            return {};
+        }
+
+        try {
+            return normalizeTrainingCost(JSON.parse(rawJson));
+        } catch (error) {
+            return {};
+        }
+    }
+
+    // 格式化单名或指定数量的训练费用 / Format per-soldier or quantity-scaled training costs
+    function formatTrainingCost(cost, quantity) {
+        if (!Number.isSafeInteger(quantity) || quantity <= 0) {
+            return '费用信息暂不可用';
+        }
+
+        const parts = [];
+        let malformed = false;
+        Object.keys(trainingResourceNames).forEach(resourceType => {
+            if (!Object.prototype.hasOwnProperty.call(cost, resourceType)) {
+                return;
+            }
+            const total = cost[resourceType] * quantity;
+            if (!Number.isSafeInteger(total) || total < 0) {
+                malformed = true;
+                return;
+            }
+            parts.push(
+                `${trainingResourceNames[resourceType]} ${numberFormat(total)}`
+            );
+        });
+        return !malformed && parts.length > 0
+            ? parts.join('、')
+            : '费用信息暂不可用';
+    }
+
     // 绑定服务器渲染的训练按钮 / Bind server-rendered training buttons
     const initialTrainingButtons = document.querySelectorAll('.train-button[data-soldier-type]');
     initialTrainingButtons.forEach(button => {
         button.addEventListener('click', function() {
-            showTrainingDialog(this.getAttribute('data-soldier-type'));
+            const trainingCost = parseTrainingCostData(
+                this.getAttribute('data-training-cost')
+            );
+            showTrainingDialog(
+                this.getAttribute('data-soldier-type'),
+                trainingCost
+            );
         });
     });
     
@@ -322,8 +408,8 @@ document.addEventListener('DOMContentLoaded', function() {
         const barracksTable = document.querySelector('.barracks-table tbody');
         if (!barracksTable) return;
         
-        // 清空现有的行
-        barracksTable.innerHTML = '';
+        // 使用DOM API清空现有行 / Clear existing rows with the DOM API
+        barracksTable.replaceChildren();
         
         // 添加士兵行
         for (const type in soldiers) {
@@ -375,6 +461,14 @@ document.addEventListener('DOMContentLoaded', function() {
                 inTrainingCell.textContent = '0';
             }
             row.appendChild(inTrainingCell);
+
+            // 每名训练费用 / Per-soldier training cost
+            const trainingCost = normalizeTrainingCost(
+                soldier.training_cost
+            );
+            const costCell = document.createElement('td');
+            costCell.textContent = formatTrainingCost(trainingCost, 1);
+            row.appendChild(costCell);
             
             // 训练按钮
             const actionCell = document.createElement('td');
@@ -382,7 +476,7 @@ document.addEventListener('DOMContentLoaded', function() {
             trainButton.className = 'train-button';
             trainButton.textContent = '训练';
             trainButton.addEventListener('click', function() {
-                showTrainingDialog(type);
+                showTrainingDialog(type, trainingCost);
             });
             actionCell.appendChild(trainButton);
             row.appendChild(actionCell);
@@ -409,7 +503,9 @@ document.addEventListener('DOMContentLoaded', function() {
     }
     
     // 显示训练对话框
-    function showTrainingDialog(soldierType) {
+    function showTrainingDialog(soldierType, rawTrainingCost) {
+        const trainingCost = normalizeTrainingCost(rawTrainingCost);
+
         // 创建对话框
         const dialog = document.createElement('div');
         dialog.className = 'dialog';
@@ -431,8 +527,34 @@ document.addEventListener('DOMContentLoaded', function() {
         const quantityInput = document.createElement('input');
         quantityInput.type = 'number';
         quantityInput.min = 1;
+        quantityInput.max = 10000;
         quantityInput.value = 1;
         dialogContent.appendChild(quantityInput);
+
+        // 费用摘要只通过文本节点更新，避免解释服务端内容 / Update cost summaries only through text nodes so server content is never interpreted
+        const costSummary = document.createElement('div');
+        costSummary.className = 'training-cost-summary';
+        const perSoldierCost = document.createElement('p');
+        perSoldierCost.textContent =
+            `每名费用：${formatTrainingCost(trainingCost, 1)}`;
+        const totalCost = document.createElement('p');
+        costSummary.appendChild(perSoldierCost);
+        costSummary.appendChild(totalCost);
+        dialogContent.appendChild(costSummary);
+
+        const updateTotalCost = function() {
+            const quantity = Number.parseInt(quantityInput.value, 10);
+            if (!Number.isSafeInteger(quantity)
+                || quantity < 1
+                || quantity > 10000) {
+                totalCost.textContent = '总费用：请输入 1 至 10000 的数量';
+                return;
+            }
+            totalCost.textContent =
+                `总费用：${formatTrainingCost(trainingCost, quantity)}`;
+        };
+        quantityInput.addEventListener('input', updateTotalCost);
+        updateTotalCost();
         
         // 按钮容器
         const buttonContainer = document.createElement('div');
@@ -450,9 +572,11 @@ document.addEventListener('DOMContentLoaded', function() {
         const confirmButton = document.createElement('button');
         confirmButton.textContent = '训练';
         confirmButton.addEventListener('click', function() {
-            const quantity = parseInt(quantityInput.value);
+            const quantity = Number.parseInt(quantityInput.value, 10);
             
-            if (quantity > 0) {
+            if (Number.isSafeInteger(quantity)
+                && quantity > 0
+                && quantity <= 10000) {
                 trainSoldiers(soldierType, quantity);
                 document.body.removeChild(dialog);
             }

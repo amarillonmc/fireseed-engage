@@ -1,0 +1,93 @@
+种火集结号 - 《メガミエンゲイジ》技能机制分类、接口与移植
+Fireseed Engage - ME skill-mechanism classification, interface, and migration
+
+时间 / Timestamp
+2026-07-18 23:56:18 -04:00
+
+变更原因 / Reasoning
+原有技能效果主要依赖平面 JSON 键，无法让管理员安全组合新机制，也无法区分机制、条件、等级曲线和发动生命周期。本次将来源技能按可复用机制整理，并以受限数据定义驱动运行时，使同机制的上位技能只需调整名称、参数和曲线，不再增加按技能名分支。
+The previous flat JSON keys could not safely compose new administrator-defined skills or separate mechanisms, conditions, level curves, and activation lifecycles. This change classifies source skills into reusable mechanisms and drives runtime behavior from bounded data definitions, so higher-tier variants change names, parameters, and curves without adding name-specific branches.
+
+资料分类 / Source classification
+- 完整核对 doc/me_skills.md 的 470 个技能、470 个唯一名称和 470 个唯一来源 ID，并以互斥主分类附录逐条覆盖。
+- 新增逐技能机制矩阵，按来源顺序为 470 条技能分别记录完整复合机制、生命周期/CT 特征、数值依赖、用途域和迁移状态，并展开神聖乙女与美少女賛歌的同模板参数差异。
+- 记录 16 个主分类的数量、205 个 Lv1 文本模板、89 组重复模板、15 种 CT 曲线形状、来源异常和人工复核点。
+- 将当前有权威状态与结算钩子的能力登记为 20 个已实现/适配机制；将寻宝、人气、テンション、地图采集、资源转换、援军移送、牵制战、性别编成、上位兵种等登记为 20 个只读占位机制。
+- Audited all 470 skills, unique names, and source IDs in doc/me_skills.md, with an exclusive source-order coverage appendix.
+- Added a source-ordered per-skill mechanism matrix covering every composite effect, lifecycle/CT trait, value dependency, usage domain, and migration status, including the same-template parameter comparison between 神聖乙女 and 美少女賛歌.
+- Recorded the 16 category counts, 205 normalized Lv1 templates, 89 repeated-template groups, 15 CT curve shapes, source anomalies, and manual-review points.
+- Registered 20 implemented/adapted mechanisms backed by authoritative state and settlement hooks, plus 20 read-only placeholders for treasure hunting, popularity, tension, map collection, conversion, reinforcement transfer, skirmishes, gender rosters, advanced units, and other unsupported concepts.
+
+数据接口与后台 / Data interface and administration
+- 新增 schema_version=2 的机制注册表、数值解析器、中央校验器和效果执行器。
+- 支持 fixed、等级、COST、智力、COST×智力、COST+智力仿射和指定属性曲线；所有曲线必须与 max_level 等长。
+- 支持常驻、立即和明确限时生命周期；CT 与 duration 分离，下一次出征类保持占位。解析后的冷却与持续时间最终值封顶一年。
+- 支持每技能最多 32 个效果、每效果最多 8 个条件，以及 phase、side、target_tag、distance 的逐机制白名单。
+- 完整 AND 条件会对真实消费者 context profiles 做可满足性校验，包括固定 target_tags、side 关联和真实地图曼哈顿距离上限；永不可能触发的配置会在保存前被拒绝。
+- 管理后台提供多机制、多参数、多曲线和多条件组合器；新技能强制使用 v2，只有既有 legacy 技能可进入兼容编辑模式。
+- 未知、占位、非法生命周期、无消费者条件、畸形 JSON、未知字段、越界值和伪造运行快照均由服务端拒绝。
+- Added the schema-version-2 mechanism registry, value resolver, central validator, and effect engine.
+- Supports fixed, level, COST, intelligence, COST×intelligence, affine COST+intelligence, and selected-stat curves, each exactly matching max_level.
+- Supports continuous, instant, and explicitly timed lifecycles; CT remains separate from duration, while next-dispatch behavior stays unavailable. Resolved cooldown and duration values are capped at one year.
+- Supports up to 32 effects per skill, 8 conditions per effect, and per-mechanism allowlists for phase, side, target_tag, and distance.
+- Complete AND condition sets are checked for satisfiability against real consumer context profiles, including fixed target_tags, side correlations, and the real map's Manhattan-distance ceiling; configurations that can never trigger are rejected before saving.
+- The admin UI now composes multiple mechanisms, parameters, curves, and conditions. New skills require v2; legacy mode is restricted to existing legacy cards.
+- The server rejects unknown or placeholder mechanisms, invalid lifecycles, conditions without consumers, malformed JSON, unknown fields, out-of-range values, and forged runtime snapshots.
+
+运行时接线 / Runtime integration
+- 军队攻击、防御、速度、元素编成叠层、战损减免、返程速度、攻城百分比/固定值/倍率均接入标准战斗、赛季地点战和相关挑战上下文。
+- 出征快照保存权威距离、目标标签和攻城修正；倍率采用无顺序依赖的确定性乘算。
+- 侦察范围、城内资源生产、训练时间、训练成本、建造时间、城防、主动技能威力和全局任务奖励光环均接入实际消费者。
+- 立即动作支持指定/全部资源发放、武将治疗、驻城修复和技能冷却缩短，并在事务内使用权威所有权、容量与整数边界。
+- 行军、军队选择、兵营、建设、挑战与赛季页面使用与实际结算一致的上下文和费用/时间预览。
+- Wired army attack, defense, speed, elemental roster stacks, casualty reduction, return speed, and percentage/flat/multiplier siege effects into standard battles, season-site battles, and relevant challenge contexts.
+- Departure snapshots retain authoritative distance, target tags, and siege modifiers; multipliers use deterministic order-independent composition.
+- Integrated scouting range, city production, training time and cost, construction time, city defense, active-skill power, and the global quest-reward aura with their authoritative consumers.
+- Instant actions now grant one/all resources, heal generals, repair the assigned city, and reduce cooldowns inside ownership-, capacity-, and integer-safe transactions.
+- Movement, army selection, barracks, construction, challenge, and season pages now preview the same contexts, costs, and durations used by settlement.
+
+资源生产区间 / Production intervals
+- 生产快照升级为 v2；每条逐设施流按 facility_id 稳定排序，并同时保存最终 per_tick 与不含技能的 base_per_tick。v1 快照安全失效后只捕获当前 v2 基线，不猜测历史产量。
+- 独立状态记录 settled_at、首变化相对游标偏移、最近实际/观察边界、饱和 change_count、观察窗口状态，以及独立的计划偏移/已知计划变化数。普通资源增减仍不触碰这些字段。
+- 单次变化继续按同一 3 秒 tick 锚点精确分配旧/新快照；跨边界 tick 按起点归旧快照，当前快照从下一完整 tick 生效，不丢余数。
+- 多次变化从首边界后的下一 tick 到首次观察边界只支付两端同 facility_id、同资源且 base_per_tick 完全相同的共同基础率；当前最终率须等待观察边界的跨界 tick 完成。端点相同的 high→low→high 或 low→high→low 不再能追授 bonus，多次无关变化仍保留未变化设施的基础产出；升级导致 base 不同、新增、删除或改色设施在不确定段不支付。
+- 跨界 tick 尚未结束时固定观察边界；后续任一触发器会清除 window_observed，使下一次结算把保守窗口延伸到新的观察时刻，不能从旧边界后的 tick 提前使用最终快照。
+- 设施计划边界不再复用 dirty_at。快照捕获会记录所有已知未来转换数；到期计划与实际变化计数合并，城市/设施结构触发器自身也至少按多变化标记，因此“未来完成时间→普通变化→延迟结算”不能从普通变化时刻提前追授设施。
+- 19 个状态变化触发器与 1 个资源初始化触发器保持可重跑、无 BEGIN 的单语句；首边界、末边界、窗口失效和饱和计数均由 MySQL/MariaDB 可用表达式维护。
+- 赛季冻结平移 settled_at 与实际/观察 dirty_at；首变化和计划变化都采用相对 settled_at 的偏移，故自动等量平移。意外指纹变化仍只从当前时刻起生效。
+- Production snapshots now use v2. Stable facility_id-ordered streams store both final per_tick and unskilled base_per_tick rates. A v1 snapshot fails closed and captures only a current v2 baseline without guessed historical production.
+- Independent state stores settled_at, a first-change cursor offset, the latest actual/observation boundary, a saturating change_count, observation-window state, and separate scheduled offsets/counts. Ordinary resource mutations do not touch them.
+- One change still assigns old/current snapshots exactly on one three-second tick anchor. A crossing tick belongs to the old snapshot by start time, the current snapshot begins on the next complete tick, and remainders remain intact.
+- Across multiple changes, ticks after the first boundary through the first observation pay only base_per_tick values that are identical for the same facility_id and resource at both endpoints. Final current rates wait until the observation's crossing tick ends. Equal-endpoint high-low-high and low-high-low toggles cannot backfill bonuses; multiple unrelated changes retain unchanged facilities' base output, while upgraded, added, deleted, or retyped facilities receive nothing in the uncertain segment.
+- An unfinished crossing tick fixes the observation boundary. Any later trigger clears window_observed so the next settlement extends the conservative window to its new observation instead of activating the final snapshot after a stale boundary.
+- Scheduled facility boundaries no longer reuse dirty_at. Snapshot capture counts every known future transition; due schedules merge with actual changes, and city/facility structural triggers are themselves marked as multi-change. A future completion followed by an ordinary change therefore cannot backdate the facility to that ordinary change.
+- Nineteen state-change triggers plus one resource initializer remain rerunnable single statements without BEGIN. MySQL/MariaDB-compatible expressions maintain first/latest boundaries, window invalidation, and saturating counts.
+- Season freezes shift settled_at and the actual/observation dirty_at. First-change and scheduled boundaries are offsets from settled_at and therefore shift automatically. Unexpected fingerprints still take effect only from now.
+
+安装与初始数据 / Installation and seed data
+- 新增可重复执行的 2026-07-18 升级脚本；旧服须先依次执行 gameplay expansion 与 card-pool resources 两份 2026-07-17 迁移。
+- 一次性独立标记仅在首次执行时插入缺失 card_code，之后不恢复、不补写、不覆盖运营修改，也不改变卡池。
+- 安装 13 张生命周期明确的来源基础技能：剣士の士気、司祭の士気、騎士の士気、疾駆の心得、大地の士気、太陽の士気、星の士気、月の士気、防戦準備、マナの洗礼、女神の慈愛、拠点増強、詠唱短縮。
+- 连同 gameplay_expansion.sql 既有的本项目原生技能，20 个已实现机制中有 13 个具备至少一张可工作的安装种子；其余 7 个的来源候选均缺少 duration 或一次行动生命周期，保留接口但不以猜测语义入库。
+- 来源 CT 暂按 H:MM 转秒，只用于 cooldown；四势力显式映射为大地→郁萌萌、太陽→昼闪闪、星→亮晶晶、月→夜静静。
+- AGENTS.md 记录安装器可移植性例外：仅仓库内置 SQL 文件中单条 PREPARE、EXECUTE、DEALLOCATE PREPARE、CREATE TRIGGER 或 DROP TRIGGER 可绕过 mysqli 二进制预处理协议。检测器先剥离前导注释，再以 \A...\z 锚定完整正文；恶意前缀、后缀和拼接语句均有负例测试。
+- 已运行上一版 20260718 脚本的服务器会通过 information_schema 与同一仓库内置 PREPARE 流程可重跑补齐生产状态列，并把旧版复用 dirty_at 的计划状态转换到独立计划偏移。
+- Added a rerunnable 2026-07-18 migration. Legacy servers must first run the 2026-07-17 gameplay-expansion and card-pool-resources migrations in order.
+- An independent one-time marker inserts only missing card codes on the first run, then never restores, supplements, or overwrites operator changes and never mutates card pools.
+- Seeds 13 source skills with unambiguous lifecycles: 剣士の士気, 司祭の士気, 騎士の士気, 疾駆の心得, 大地の士気, 太陽の士気, 星の士気, 月の士気, 防戦準備, マナの洗礼, 女神の慈愛, 拠点増強, and 詠唱短縮.
+- Together with the project-native skills already seeded by gameplay_expansion.sql, 13 of the 20 implemented mechanisms have at least one working installation seed. The remaining seven source candidates lack a duration or one-action lifecycle, so their interfaces remain available without seeding guessed behavior.
+- Source CT is provisionally converted from H:MM to cooldown seconds only. The four source factions explicitly map as Earth→Green, Sun→Day, Star→Bright, and Moon→Night.
+- AGENTS.md documents the installer portability exception: only one PREPARE, EXECUTE, DEALLOCATE PREPARE, CREATE TRIGGER, or DROP TRIGGER statement from a repository-owned SQL file may bypass mysqli's binary prepared-statement protocol. The detector strips leading comments and anchors the entire body with \A...\z; malicious prefixes, suffixes, and concatenated statements have negative tests.
+- Servers that ran the previous 20260718 migration rerunnably add the new production-state columns through information_schema and the same bundled PREPARE flow, then convert the former scheduled dirty_at value into an independent scheduled offset.
+
+验证 / Verification
+- 23 个 PHP 测试脚本共 6,914 项断言全部通过，覆盖生产快照、防追溯、SQL 架构、技能种子、安装器分句与 470 项技能分类。
+- 144 个 PHP 文件全部通过 php -l。
+- admin-skills.js、script.js 与 map.js 全部通过 node --check。
+- git diff --check 通过。
+- 当前环境没有 MySQL/MariaDB 客户端或测试服务器；数据库升级已通过静态架构、触发器数量、安装器分句、幂等种子与依赖链测试，尚未在真实数据库执行。
+- All 6,914 assertions across 23 PHP test scripts pass, covering production snapshots, anti-retroactivity, SQL schema, skill seeds, installer splitting, and all 470 classified skills.
+- All 144 PHP files pass php -l.
+- admin-skills.js, script.js, and map.js pass node --check.
+- git diff --check passes.
+- This environment has no MySQL/MariaDB client or test server. The migration is covered by static schema, trigger-count, installer-splitting, idempotent-seed, and dependency-chain checks, but has not been executed against a live database.
