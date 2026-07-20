@@ -1,0 +1,119 @@
+种火集结号 - 内测准入、科研经济与赛季机制实施记录
+Fireseed Engage - Internal-beta gate, research economy, and seasonal mechanics implementation log
+
+完成时间 / Completed at
+2026-07-19 18:40:58 -04:00
+
+一、实施结论 / Outcome
+
+1. 已按 doc/internal-beta-readiness-spec-20260719.txt 落实本轮确认的机制与发布门禁。
+   Implemented the approved mechanics and release gates from the authoritative internal-beta specification.
+2. 代码与静态规则已达到部署候选状态；正式邀请玩家前仍须在真实 MySQL/MariaDB 副本上完成安装、迁移、回滚与重跑演练。
+   Code and static rules are deployment candidates; a real MySQL/MariaDB install, migration, rollback, and rerun rehearsal remains mandatory before inviting players.
+3. 卡池价格、科技系数、资源权重、生产速度与战斗数值均为可替换的内测基准，不视为最终平衡。
+   Pool prices, technology coefficients, resource weights, production rates, and combat values remain replaceable beta baselines.
+
+二、发布与安全门禁 / Release and security gate
+
+1. 部署机密迁移到不跟踪的 config/local.php 或 FIRESEED_* 环境变量，生产默认关闭调试输出。
+   Deployment secrets now live in untracked local configuration or environment variables, with debug output disabled by default.
+2. 会话 Cookie、登录节流、登录后会话轮换、安全登出、CSRF、维护模式、关闭注册与人数上限均接入运行时。
+   Hardened session cookies, login throttling, session rotation, safe logout, CSRF, maintenance mode, registration control, and player caps are enforced at runtime.
+3. 修复后台存储型脚本注入、公开接口异常信息泄露、排行字段错配及地图后台危险清空入口。
+   Fixed stored administration script injection, public exception leakage, ranking schema drift, and unsafe map-clearing administration.
+4. 新增 Apache 入口保护、Nginx 等价示例与 PHP 8.2 GitHub Actions 静态回归。
+   Added Apache entry protection, equivalent Nginx guidance, and PHP 8.2 GitHub Actions regression checks.
+
+三、安装器与升级 / Installer and upgrades
+
+1. 所有浏览器安装均要求高熵 FIRESEED_INSTALL_TOKEN；令牌仅经安全 POST 提交，授权时轮换会话并原子消费。
+   Every browser install requires a high-entropy token submitted only by secure POST, followed by session rotation and atomic consumption.
+2. 安装过程使用全局文件互斥锁；本地配置与安装锁采用完整写入校验和同目录原子替换，失败时恢复原配置。
+   A process-wide file mutex serializes installation; local configuration and installation locks use complete-write checks, same-directory replacement, and failure restoration.
+3. 数据库表单、环境变量和最终运行配置必须指向同一数据库；字符集固定 utf8mb4，应用与数据库时区固定 Asia/Shanghai / +08:00。
+   Form, environment, and runtime database settings must match; character set is fixed to utf8mb4 and application/database time to Asia/Shanghai / +08:00.
+4. 任一必需 SQL 缺失、不可读、为空或无可执行语句时安装立即失败，不再产生残缺但带锁的安装。
+   Missing, unreadable, empty, or non-executable required SQL now fails installation instead of producing a locked partial setup.
+5. 新增两份可重跑升级脚本：
+   Added two rerunnable migrations:
+   - sql/upgrade_20260719_world_season.sql
+   - sql/upgrade_20260719_research_economy.sql
+6. 两份迁移使用事务标记串行化一次性数据变换；全新安装预置完成标记，避免误跑覆盖运营调整。
+   Both migrations serialize one-time transforms with transactional markers; fresh installs preseed completion markers to protect operator tuning.
+7. 旧空地已支付的思考回路会一次性完整退款；旧存储科研超上限等级及失效队列会安全收敛。
+   Legacy paid empty-tile Circuit is refunded in full, while over-cap storage research and stale queues are safely normalized.
+
+四、科研、经济与长期资产 / Research, economy, and persistent assets
+
+1. 科技明确区分 seasonal 与 permanent 范围，并使用 effect_key 接入实际运行效果。
+   Technologies now declare seasonal or permanent scope and use effect keys consumed by runtime systems.
+2. 赛季科研只使用暖、冷、绿、昼四种资源；永久科研只使用亮晶晶与夜静静。
+   Seasonal research uses only Warm, Cold, Green, and Day; permanent research uses only Bright and Night.
+3. 科研效果已接入资源生产与存储、训练、建造、士兵攻防、城防，以及思考回路、武将 COST 和分基地上限。
+   Research now affects production, storage, training, construction, troop combat, city defense, and the three persistent capacity limits.
+4. 玩家等级不再改变成长上限，只保留兼容字段；上限同步不会截断允许暂时超限的思考回路余额。
+   Player level no longer drives progression, and cap synchronization preserves legitimately over-cap Circuit balances.
+5. 主基地固定拥有六类产出设施；亮、夜产出倍率默认是四色的 0.2，且不受赛季资源仓储上限限制。
+   Main bases contain all six producers; Bright and Night default to 0.2 times seasonal output and use independent persistent storage.
+6. 默认武将池只消耗亮晶晶，默认技能池只消耗夜静静；普通建造、升级、训练和赛季科研不消费长期货币。
+   Default general pools consume only Bright, skill pools only Night, and ordinary seasonal actions do not spend persistent currencies.
+
+五、地图、占领与赛季 / Map, occupation, and seasons
+
+1. 删除探索入口和战争迷雾，所有地图格基础信息从开局公开；敌军编成、驻军与城防细节继续由侦察保护。
+   Removed exploration and fog while keeping detailed enemy military information scouting-protected.
+2. 空地占领免费；资源地支付可配置思考回路，并持久记录实际支付额。
+   Empty land is free; resource nodes charge configurable Circuit and persist the exact paid amount.
+3. 放弃资源地、改建分基地及相关领地清算均按记录成本全额退款，不受常规上限截断。
+   Resource abandonment, sub-base conversion, and related settlement refund the recorded cost in full without cap truncation.
+4. 亮、夜世界资源点权重显著低于四色资源点；十二门按一至十二点方向排列，银白之孔固定中心。
+   Bright and Night world nodes are rarer; the Twelve Gateways follow clock positions and the Silver Hole remains centered.
+5. 赛季重建在单一事务中冻结旧赛季、清理赛季资产、重建地图、重新建立主城、发放一次亮夜奖励并开启新赛季。
+   Seasonal reconstruction atomically freezes the old season, clears seasonal assets, rebuilds the world and capitals, grants one Bright/Night reward, and opens the new season.
+6. 武将、技能卡、长期道具、永久科研、亮夜余额及同盟身份保留；赛季资源、城市、军队、领地、赛季科研与赛季玩法进度重置。
+   Persistent cards, items, research, currencies, and alliance identity survive, while seasonal economy, cities, armies, territory, research, and activity progress reset.
+
+六、双审查后修复 / Post-review fixes
+
+1. 六系资源新增定点小数产出余数，并只推进完整生产周期；亮、夜 0.2 倍低速产出及科研百分比不再被三秒轮询取整吞掉。
+   All six resources now carry fixed-precision fractional output and advance only complete production ticks, so three-second polling cannot erase 0.2-rate Bright/Night output or research bonuses.
+2. 武将分配在赛季锁、玩家锁与目标锁下重新读取武将、人数、COST 和永久科研上限，再于同一事务写入，关闭并发超限路径。
+   General assignment now revalidates the general, headcount, COST, and permanent cap under season, player, and target locks before inserting in the same transaction.
+3. 卡池后台会随武将／技能类型切换亮／夜默认成本与帮助文本；赛季页面改为准确展示保留资产和重置资产。
+   Pool administration now switches Bright/Night defaults and help by pool type, while the season page accurately lists persistent and reset assets.
+4. 资源地占比与储量、NPC据点占比及一级至九级分布权重全部集中为可迁移、可校验的临时配置。
+   Resource-node share and amounts plus NPC-fort share and level-one-to-nine weights are now migrated, validated provisional settings.
+5. 标准与规格两路独立审查提出的全部真实 P1/P2 均已修复，并为每项边界补充回归断言。
+   Every confirmed P1/P2 from the independent standards and specification reviews was fixed with regression coverage.
+6. 直接分配、战斗驻军合并、属臣释放迁城及兼容入口统一使用事务内武将人数与COST上限裁决；批量转入超限者保留卡牌所有权并自动解除分配。
+   Direct assignment, battle garrison merges, vassal relocation, and the compatibility entry point now share one transactional headcount/COST authority; overflow transfers remain owned but become unassigned.
+7. 资源点与NPC据点按实际整数配额联合校验，并为“当前账号数或注册上限中的较大者”及十三个特殊地点预留空格；生成后再次核对主城容量。
+   Resource-node and NPC-fort integer quotas are jointly validated while reserving tiles for the greater of current accounts or the registration cap plus thirteen special sites; capital capacity is rechecked after generation.
+8. 主城仍优先使用中心附近随机出生点；随机未命中时会锁定并使用任一剩余空格，因此多玩家换季不再依赖概率。
+   Capitals still prefer randomized central spawns, but now lock and use any remaining empty tile as an exhaustive fallback, removing chance from multi-player season rollover.
+9. 提高注册人数上限时会核对当前已部署地图的实际主城容量；开放注册也会动态检查空格，账号、资源钱包与首都在同一事务中创建，任何并发抢占都会整体回滚而不会留下孤立账号。
+   Raising the registration cap now checks the deployed world's actual capital capacity; open registration also checks empty space dynamically, while the account, resource wallet, and capital are created atomically so concurrent tile claims roll back without orphaning accounts.
+10. 后台独立生成或重置地图会先排他锁定当前赛季，再以锁定式当前读检查城池，避免与并发注册交错后留下城市与地图不一致状态。
+    Standalone administration generation or reset now exclusively locks the current season before a locking city read, preventing concurrent registration from leaving cities inconsistent with the rebuilt world.
+
+七、验证结果 / Validation
+
+1. 20 个 PHP 测试文件共 911 项断言全部通过。
+   All 20 PHP test files passed with 911 assertions.
+2. 全仓库 140 个 PHP 文件语法检查通过。
+   PHP syntax checks passed for all 140 files.
+3. assets/js 下 2 个 JavaScript 文件及 2 段相关后台内联脚本语法检查通过。
+   JavaScript syntax checks passed for both files under assets/js and two relevant inline administration scripts.
+4. git diff --check 通过；仅报告 Git 的 CRLF 工作区提示，无补丁空白错误。
+   git diff --check passed with only Git workspace line-ending notices and no whitespace defects.
+5. 安装与迁移专项审计未发现残留 P1/P2。
+   The installer and migration audit found no remaining P1/P2 issue.
+
+八、部署前必做 / Required before player testing
+
+1. 在目标版本 MySQL/MariaDB 的数据库副本上分别演练全新安装与既有库迁移。
+   Rehearse both fresh installation and legacy migration on a copy using the target MySQL/MariaDB version.
+2. 验证中断后的回滚、迁移重跑、赛季重建耗时和 512×512 地图事务性能。
+   Verify interrupted rollback, migration reruns, seasonal-reset duration, and 512×512 world transaction performance.
+3. 完成注册、登录、建城、生产、科研、抽卡、出征、占领、退款、赛季切换和资产保留的多账号冒烟测试。
+   Complete multi-account smoke tests covering registration, login, construction, production, research, draws, marching, occupation, refunds, season rollover, and persistence.

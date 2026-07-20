@@ -355,6 +355,30 @@ class CardPoolService {
     }
 
     /**
+     * 按卡池类型执行增值货币边界 / Enforce value-currency boundaries by pool type
+     * @param string $poolType 卡池类型 / Pool type
+     * @param mixed $cost 成本数组或JSON / Cost array or JSON
+     * @return array 标准化成本 / Normalized cost
+     */
+    public static function normalizePoolCostBundle($poolType, $cost): array {
+        $normalizedType = self::normalizePoolType($poolType);
+        $normalizedCost = self::normalizeCostBundle($cost);
+        $allowedKey = $normalizedType === 'general' ? 'bright' : 'night';
+
+        if (count($normalizedCost) !== 1
+            || !isset($normalizedCost[$allowedKey])
+            || (int) $normalizedCost[$allowedKey] <= 0) {
+            throw new InvalidArgumentException(
+                $normalizedType === 'general'
+                    ? '武将卡池只能消耗亮晶晶 / General pools may consume only Bright Crystals'
+                    : '技能卡池只能消耗夜静静 / Skill pools may consume only Night Crystals'
+            );
+        }
+
+        return $normalizedCost;
+    }
+
+    /**
      * 标准化卡池允许的抽取次数 / Normalizes allowed draw counts
      *
      * @param mixed $counts 次数数组或JSON / Count array or JSON
@@ -850,7 +874,10 @@ class CardPoolService {
             'pool_type' => (string) $row['pool_type'],
             'name' => (string) $row['name'],
             'description' => (string) $row['description'],
-            'cost' => self::normalizeCostBundle((string) $row['cost_json']),
+            'cost' => self::normalizePoolCostBundle(
+                (string) $row['pool_type'],
+                (string) $row['cost_json']
+            ),
             'allowed_counts' => self::normalizeAllowedCounts(
                 (string) $row['allowed_counts_json']
             ),

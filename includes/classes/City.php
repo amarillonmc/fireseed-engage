@@ -498,133 +498,11 @@ class City {
 
         try {
             lockSeasonForWorldAction($db);
-
-            // 玩家锁会串行化同一账号的并发首访 / The user lock serializes concurrent first visits for one account
-            $query = "SELECT user_id, username
-                      FROM users
-                      WHERE user_id = ?
-                      FOR UPDATE";
-            $stmt = $db->prepare($query);
-            $stmt->bind_param('i', $userId);
-            $stmt->execute();
-            $result = $stmt->get_result();
-            $user = $result ? $result->fetch_assoc() : null;
-            $stmt->close();
-            if (!$user) {
-                throw new RuntimeException(
-                    '用户不存在 / User does not exist'
-                );
-            }
-
-            // 锁内重验使重复请求直接复用已经创建的主城 / Reuse the main city when a duplicate request reaches the locked section
-            $query = "SELECT city_id
-                      FROM cities
-                      WHERE owner_id = ? AND is_main_city = 1
-                      ORDER BY city_id
-                      LIMIT 1
-                      FOR UPDATE";
-            $stmt = $db->prepare($query);
-            $stmt->bind_param('i', $userId);
-            $stmt->execute();
-            $result = $stmt->get_result();
-            $existingCity = $result ? $result->fetch_assoc() : null;
-            $stmt->close();
-            if ($existingCity) {
-                $db->commit();
-                return (int) $existingCity['city_id'];
-            }
-
-            $cityName = (string) $user['username'] . '的城池';
-            $centerX = (int) MAP_CENTER_X;
-            $centerY = (int) MAP_CENTER_Y;
-
-            for ($radius = 10; $radius <= 100; $radius += 10) {
-                for ($attempt = 0; $attempt < 10; $attempt++) {
-                    $angle = mt_rand(0, 360) * M_PI / 180;
-                    $distance = mt_rand(0, $radius);
-                    $x = (int) round($centerX + $distance * cos($angle));
-                    $y = (int) round($centerY + $distance * sin($angle));
-                    $x = max(0, min(MAP_WIDTH - 1, $x));
-                    $y = max(0, min(MAP_HEIGHT - 1, $y));
-
-                    // 只锁候选点，避免在大地图上取得范围锁 / Lock only the candidate tile to avoid broad map-range locks
-                    $query = "SELECT tile_id, type, owner_id
-                              FROM map_tiles
-                              WHERE x = ? AND y = ?
-                              FOR UPDATE";
-                    $stmt = $db->prepare($query);
-                    $stmt->bind_param('ii', $x, $y);
-                    $stmt->execute();
-                    $result = $stmt->get_result();
-                    $tile = $result ? $result->fetch_assoc() : null;
-                    $stmt->close();
-                    if (!$tile
-                        || $tile['type'] !== 'empty'
-                        || $tile['owner_id'] !== null) {
-                        continue;
-                    }
-
-                    $level = 1;
-                    $durability = 1000;
-                    $maxDurability = 1000;
-                    $isMainCity = 1;
-                    $query = "INSERT INTO cities
-                                 (name, owner_id, x, y, level, durability,
-                                  max_durability, is_main_city)
-                              VALUES (?, ?, ?, ?, ?, ?, ?, ?)";
-                    $stmt = $db->prepare($query);
-                    $stmt->bind_param(
-                        'siiiiiii',
-                        $cityName,
-                        $userId,
-                        $x,
-                        $y,
-                        $level,
-                        $durability,
-                        $maxDurability,
-                        $isMainCity
-                    );
-                    if (!$stmt->execute()) {
-                        $stmt->close();
-                        throw new RuntimeException(
-                            '创建主城失败 / Failed to create the main city'
-                        );
-                    }
-                    $cityId = (int) $db->insert_id;
-                    $stmt->close();
-
-                    $query = "UPDATE map_tiles
-                              SET type = 'player_city',
-                                  subtype = NULL,
-                                  owner_id = ?,
-                                  resource_amount = NULL,
-                                  npc_level = NULL,
-                                  npc_garrison = 0,
-                                  npc_respawn_time = NULL,
-                                  is_visible = 1
-                              WHERE tile_id = ?
-                                AND type = 'empty'
-                                AND owner_id IS NULL";
-                    $stmt = $db->prepare($query);
-                    $tileId = (int) $tile['tile_id'];
-                    $stmt->bind_param('ii', $userId, $tileId);
-                    $updated = $stmt->execute()
-                        && $stmt->affected_rows === 1;
-                    $stmt->close();
-                    if (!$updated || !self::createInitialFacilities($cityId)) {
-                        throw new RuntimeException(
-                            '初始化主城失败 / Failed to initialize the main city'
-                        );
-                    }
-
-                    $db->commit();
-                    return $cityId;
-                }
-            }
-
-            throw new RuntimeException(
-                '没有可用的主城位置 / No initial-city location is available'
+            $cityId = self::createInitialPlayerCityInCurrentTransaction(
+                $userId
             );
+            $db->commit();
+            return $cityId;
         } catch (Throwable $exception) {
             $db->rollback();
             error_log(
@@ -632,6 +510,225 @@ class City {
             );
             return false;
         }
+    }
+
+    /**
+     * 当前世界是否仍有未占领主城空格 / Whether the current world has an unclaimed capital tile
+     * @return bool
+     */
+    public static function hasAvailableInitialCityTile() {
+        $db = Database::getInstance()->getConnection();
+        $query = "SELECT tile_id
+                  FROM map_tiles
+                  WHERE type = 'empty' AND owner_id IS NULL
+                  ORDER BY tile_id
+                  LIMIT 1";
+        $stmt = $db->prepare($query);
+        if (!$stmt || !$stmt->execute()) {
+            if ($stmt) {
+                $stmt->close();
+            }
+            return false;
+        }
+        $result = $stmt->get_result();
+        $available = $result && $result->num_rows === 1;
+        $stmt->close();
+        return $available;
+    }
+
+    /**
+     * 在调用者事务中创建初始主城 / Create an initial main city in the caller's transaction
+     *
+     * 调用者必须已经开启事务并锁定当前赛季；本方法不会提交或回滚。
+     * The caller must already own a transaction and the current-season lock;
+     * this method never commits or rolls back.
+     *
+     * @param int $userId 用户ID / User ID
+     * @return int 城池ID / City ID
+     */
+    public static function createInitialPlayerCityInCurrentTransaction($userId) {
+        $userId = (int) $userId;
+        if ($userId <= 0) {
+            throw new InvalidArgumentException(
+                '用户参数无效 / Invalid user parameter'
+            );
+        }
+
+        $db = Database::getInstance()->getConnection();
+
+        // 玩家锁会串行化同一账号的并发首访。 / The user lock serializes concurrent first visits for one account.
+        $query = "SELECT user_id, username
+                  FROM users
+                  WHERE user_id = ?
+                  FOR UPDATE";
+        $stmt = $db->prepare($query);
+        $stmt->bind_param('i', $userId);
+        $stmt->execute();
+        $result = $stmt->get_result();
+        $user = $result ? $result->fetch_assoc() : null;
+        $stmt->close();
+        if (!$user) {
+            throw new RuntimeException(
+                '用户不存在 / User does not exist'
+            );
+        }
+
+        // 锁内重验使重复请求复用已经创建的主城。 / Reuse a main city created by an earlier request.
+        $query = "SELECT city_id
+                  FROM cities
+                  WHERE owner_id = ? AND is_main_city = 1
+                  ORDER BY city_id
+                  LIMIT 1
+                  FOR UPDATE";
+        $stmt = $db->prepare($query);
+        $stmt->bind_param('i', $userId);
+        $stmt->execute();
+        $result = $stmt->get_result();
+        $existingCity = $result ? $result->fetch_assoc() : null;
+        $stmt->close();
+        if ($existingCity) {
+            return (int) $existingCity['city_id'];
+        }
+
+        $cityName = (string) $user['username'] . '的城池';
+        $centerX = (int) MAP_CENTER_X;
+        $centerY = (int) MAP_CENTER_Y;
+
+        for ($radius = 10; $radius <= 100; $radius += 10) {
+            for ($attempt = 0; $attempt < 10; $attempt++) {
+                $angle = mt_rand(0, 360) * M_PI / 180;
+                $distance = mt_rand(0, $radius);
+                $x = (int) round($centerX + $distance * cos($angle));
+                $y = (int) round($centerY + $distance * sin($angle));
+                $x = max(0, min(MAP_WIDTH - 1, $x));
+                $y = max(0, min(MAP_HEIGHT - 1, $y));
+
+                // 只锁候选点，避免在大地图上取得范围锁。 / Lock only one candidate and avoid broad range locks.
+                $query = "SELECT tile_id, type, owner_id
+                          FROM map_tiles
+                          WHERE x = ? AND y = ?
+                          FOR UPDATE";
+                $stmt = $db->prepare($query);
+                $stmt->bind_param('ii', $x, $y);
+                $stmt->execute();
+                $result = $stmt->get_result();
+                $tile = $result ? $result->fetch_assoc() : null;
+                $stmt->close();
+                if (!$tile
+                    || $tile['type'] !== 'empty'
+                    || $tile['owner_id'] !== null) {
+                    continue;
+                }
+
+                return self::createInitialCityOnLockedTile(
+                    $db,
+                    $userId,
+                    $cityName,
+                    $x,
+                    $y,
+                    (int) $tile['tile_id']
+                );
+            }
+        }
+
+        // 随机出生点未命中时穷尽式选取剩余空格，换季不再依赖概率 / Exhaustively fall back to a remaining empty tile so season rollover never depends on random hits
+        $query = "SELECT tile_id, x, y
+                  FROM map_tiles
+                  WHERE type = 'empty' AND owner_id IS NULL
+                  ORDER BY tile_id
+                  LIMIT 1
+                  FOR UPDATE";
+        $stmt = $db->prepare($query);
+        $stmt->execute();
+        $result = $stmt->get_result();
+        $fallbackTile = $result ? $result->fetch_assoc() : null;
+        $stmt->close();
+        if ($fallbackTile) {
+            return self::createInitialCityOnLockedTile(
+                $db,
+                $userId,
+                $cityName,
+                (int) $fallbackTile['x'],
+                (int) $fallbackTile['y'],
+                (int) $fallbackTile['tile_id']
+            );
+        }
+
+        throw new RuntimeException(
+            '没有可用的主城位置 / No initial-city location is available'
+        );
+    }
+
+    /**
+     * 在已锁定空格创建初始主城 / Create an initial capital on a locked empty tile
+     * @param mysqli $db 数据库连接 / Database connection
+     * @param int $userId 玩家ID / User ID
+     * @param string $cityName 城池名 / City name
+     * @param int $x X坐标 / X coordinate
+     * @param int $y Y坐标 / Y coordinate
+     * @param int $tileId 地图格ID / Map-tile ID
+     * @return int 新主城ID / New capital ID
+     */
+    private static function createInitialCityOnLockedTile(
+        $db,
+        $userId,
+        $cityName,
+        $x,
+        $y,
+        $tileId
+    ) {
+        $level = 1;
+        $durability = 1000;
+        $maxDurability = 1000;
+        $isMainCity = 1;
+        $query = "INSERT INTO cities
+                     (name, owner_id, x, y, level, durability,
+                      max_durability, is_main_city)
+                  VALUES (?, ?, ?, ?, ?, ?, ?, ?)";
+        $stmt = $db->prepare($query);
+        $stmt->bind_param(
+            'siiiiiii',
+            $cityName,
+            $userId,
+            $x,
+            $y,
+            $level,
+            $durability,
+            $maxDurability,
+            $isMainCity
+        );
+        if (!$stmt->execute()) {
+            $stmt->close();
+            throw new RuntimeException(
+                '创建主城失败 / Failed to create the main city'
+            );
+        }
+        $cityId = (int) $db->insert_id;
+        $stmt->close();
+
+        $query = "UPDATE map_tiles
+                  SET type = 'player_city',
+                      subtype = NULL,
+                      owner_id = ?,
+                      resource_amount = NULL,
+                      npc_level = NULL,
+                      npc_garrison = 0,
+                      npc_respawn_time = NULL,
+                      is_visible = 1
+                  WHERE tile_id = ?
+                    AND type = 'empty'
+                    AND owner_id IS NULL";
+        $stmt = $db->prepare($query);
+        $stmt->bind_param('ii', $userId, $tileId);
+        $updated = $stmt->execute() && $stmt->affected_rows === 1;
+        $stmt->close();
+        if (!$updated || !self::createInitialFacilities($cityId)) {
+            throw new RuntimeException(
+                '初始化主城失败 / Failed to initialize the main city'
+            );
+        }
+
+        return $cityId;
     }
 
     /**
@@ -898,23 +995,19 @@ class City {
             return self::applySpeedBonusToDuration($baseSeconds, 0);
         }
 
-        $phase = $bonusKey === 'training_speed'
-            ? 'training'
-            : 'construction';
-        $bonuses = $this->getAssignedGeneralCityBonuses([
-            'phase' => $phase
-        ]);
-        $bonus = isset($bonuses[$bonusKey])
-            ? (float) $bonuses[$bonusKey]
-            : 0.0;
-        $scopedKey = $scope === null
-            ? null
-            : $bonusKey . '_' . trim((string) $scope);
-        if ($scopedKey !== null && isset($bonuses[$scopedKey])) {
-            $bonus += (float) $bonuses[$scopedKey];
-        }
-
-        return self::applySpeedBonusToDuration($baseSeconds, $bonus);
+        $bonuses = $this->getAssignedGeneralCityBonuses();
+        $duration = self::applySpeedBonusToDuration(
+            $baseSeconds,
+            $bonuses[$bonusKey]
+        );
+        $technologyEffect = TechnologyEffectService::getUserEffect(
+            $this->ownerId,
+            $bonusKey
+        );
+        return TechnologyEffectService::applySpeedBonusToDuration(
+            $duration,
+            $technologyEffect
+        );
     }
 
     /**
@@ -951,6 +1044,13 @@ class City {
         }
         $cityBonuses = $this->getAssignedGeneralCityBonuses($context);
         $defensePower = self::applyPercentageBonus($defensePower, $cityBonuses['defense']);
+        $defensePower = TechnologyEffectService::applyFractionalBonus(
+            $defensePower,
+            TechnologyEffectService::getUserEffect(
+                $this->ownerId,
+                'city_defense'
+            )
+        );
 
         return floor($defensePower);
     }

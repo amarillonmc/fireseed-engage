@@ -12,7 +12,6 @@ document.addEventListener('DOMContentLoaded', function() {
     const requestedY = urlParams.has('y') ? Number(urlParams.get('y')) : NaN;
     let centerX = Number.isInteger(requestedX) ? requestedX : Math.floor(MAP_WIDTH / 2);
     let centerY = Number.isInteger(requestedY) ? requestedY : Math.floor(MAP_HEIGHT / 2);
-    const explorationArmySelect = document.getElementById('explore-army');
     const imageResourceConfig = window.FIRESEED_IMAGE_RESOURCES
         && typeof window.FIRESEED_IMAGE_RESOURCES === 'object'
         ? window.FIRESEED_IMAGE_RESOURCES
@@ -27,11 +26,6 @@ document.addEventListener('DOMContentLoaded', function() {
     
     // 加载地图
     loadMap(centerX, centerY);
-    
-    // 探索按钮点击事件
-    document.getElementById('explore-btn').addEventListener('click', function() {
-        exploreMap(centerX, centerY);
-    });
     
     // 刷新按钮点击事件
     document.getElementById('refresh-btn').addEventListener('click', function() {
@@ -242,7 +236,7 @@ document.addEventListener('DOMContentLoaded', function() {
                 y: tileY,
                 type: normalizeTileType(tile.type),
                 subtype: normalizeTileSubtype(tile.subtype),
-                is_visible: tile.is_visible === true || Number(tile.is_visible) === 1,
+                is_visible: true,
                 garrison_total: normalizeNonNegativeInteger(tile.garrison_total),
                 garrison_units: normalizeGarrisonUnits(tile.garrison_units)
             });
@@ -266,8 +260,8 @@ document.addEventListener('DOMContentLoaded', function() {
                     cell.classList.add('current');
                 }
                 
-                // 如果地图格子存在且可见
-                if (tile && tile.is_visible) {
+                // 完整地图中的每个有效格子都直接显示。 / Render every valid tile because the whole map is public.
+                if (tile) {
                     cell.classList.add(tile.type);
                     
                     if (tile.subtype) {
@@ -297,8 +291,8 @@ document.addEventListener('DOMContentLoaded', function() {
                         showTileInfo(tile);
                     });
                 } else {
-                    // 未探索的格子
-                    cell.classList.add('not-visible');
+                    // 缺失格子表示服务端数据异常，不再解释为战争迷雾。 / A missing row is a data error, never fog of war.
+                    cell.classList.add('map-data-missing');
                     
                     // 添加坐标
                     const coords = document.createElement('div');
@@ -316,26 +310,11 @@ document.addEventListener('DOMContentLoaded', function() {
     function showTileInfo(tile) {
         const mapInfo = document.getElementById('map-info');
         
-        if (!tile || !tile.is_visible) {
-            const hiddenX = tile && Number.isFinite(Number(tile.x)) ? Math.trunc(Number(tile.x)) : 0;
-            const hiddenY = tile && Number.isFinite(Number(tile.y)) ? Math.trunc(Number(tile.y)) : 0;
+        if (!tile) {
             mapInfo.innerHTML = `
-                <h3>未探索区域</h3>
-                <p>该区域尚未被探索，无法获取详细信息。</p>
-                <div class="map-actions">
-                    <button id="explore-tile-btn" data-x="${hiddenX}" data-y="${hiddenY}">探索</button>
-                </div>
+                <h3>地图数据不可用</h3>
+                <p>该坐标暂时没有有效的地图数据，请刷新后重试。</p>
             `;
-            
-            // 添加探索按钮点击事件
-            document.getElementById('explore-tile-btn').addEventListener('click', function() {
-                const x = normalizeCoordinate(Number(this.getAttribute('data-x')), MAP_WIDTH);
-                const y = normalizeCoordinate(Number(this.getAttribute('data-y')), MAP_HEIGHT);
-                if (x !== null && y !== null) {
-                    exploreMap(x, y);
-                }
-            });
-            
             return;
         }
 
@@ -522,28 +501,6 @@ document.addEventListener('DOMContentLoaded', function() {
                 window.location.href = 'season.php';
             });
         }
-    }
-    
-    // 探索地图
-    function exploreMap(x, y) {
-        const armyId = explorationArmySelect
-            ? Number(explorationArmySelect.value)
-            : 0;
-        postForm('api/explore_map.php', {
-            x: x,
-            y: y,
-            army_id: Number.isInteger(armyId) && armyId > 0 ? armyId : 0
-        })
-            .then(response => response.json())
-            .then(data => {
-                if (data.success) {
-                    showNotification(`探索成功，发现了${data.discovered_tiles.length}个新地点`);
-                    loadMap(x, y);
-                } else {
-                    showNotification(data.message);
-                }
-            })
-            .catch(error => console.error('Error exploring map:', error));
     }
     
     // 占领地图格子

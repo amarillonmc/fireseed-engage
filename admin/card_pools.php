@@ -237,6 +237,7 @@ function adminPoolValidateMetadata(array $input, $includeIdentity) {
         if (!in_array($poolType, ['general', 'skill'], true)) {
             throw new InvalidArgumentException('卡池类型无效');
         }
+        CardPoolService::normalizePoolCostBundle($poolType, $cost);
         $data['pool_code'] = $poolCode;
         $data['pool_type'] = $poolType;
     }
@@ -350,7 +351,10 @@ function adminPoolLoadActiveResource($db, $poolType, $resourceId) {
  * @return void
  */
 function adminPoolValidatePublishable($db, array $pool) {
-    CardPoolService::normalizeCostBundle((string) $pool['cost_json']);
+    CardPoolService::normalizePoolCostBundle(
+        (string) $pool['pool_type'],
+        (string) $pool['cost_json']
+    );
     CardPoolService::normalizeAllowedCounts(
         (string) $pool['allowed_counts_json']
     );
@@ -698,6 +702,10 @@ if (isset($_SERVER['REQUEST_METHOD'])
                 lockResourceAdministrationBoundary($db);
                 $pool = adminPoolLoadForUpdate($db, $poolId);
                 adminPoolRequireEditable($adminManager, $pool);
+                CardPoolService::normalizePoolCostBundle(
+                    (string) $pool['pool_type'],
+                    $data['cost_json']
+                );
                 $changed = adminPoolMetadataChanged($pool, $data);
 
                 if ($changed) {
@@ -1459,10 +1467,8 @@ $pageTitle = '卡池管理';
                         <div class="form-group">
                             <label for="create_cost">每抽成本（JSON对象）</label>
                             <textarea id="create_cost" name="cost_json">{"bright": 100}</textarea>
-                            <p class="help">
-                                可用键：bright、warm、cold、green、day、night、
-                                circuit_points、skill_points、merit_points、arena_tokens。
-                                这里只接受游戏内可获得资源。
+                            <p class="help" id="create_cost_help">
+                                武将卡池只能使用 bright（亮晶晶）。
                             </p>
                         </div>
                         <div class="form-group">
@@ -1849,5 +1855,39 @@ $pageTitle = '卡池管理';
             </section>
         </div>
     </main>
+    <script>
+    document.addEventListener('DOMContentLoaded', function() {
+        const typeField = document.getElementById('create_pool_type');
+        const costField = document.getElementById('create_cost');
+        const help = document.getElementById('create_cost_help');
+        if (!typeField || !costField || !help) {
+            return;
+        }
+
+        const defaults = {
+            general: '{"bright": 100}',
+            skill: '{"night": 100}'
+        };
+        let previousDefault = defaults[typeField.value] || defaults.general;
+
+        function synchronizePoolCostRule() {
+            const poolType = typeField.value === 'skill'
+                ? 'skill'
+                : 'general';
+            const nextDefault = defaults[poolType];
+            const currentCost = costField.value.trim();
+            if (currentCost === '' || currentCost === previousDefault) {
+                costField.value = nextDefault;
+            }
+            help.textContent = poolType === 'skill'
+                ? '技能卡池只能使用 night（夜静静）。'
+                : '武将卡池只能使用 bright（亮晶晶）。';
+            previousDefault = nextDefault;
+        }
+
+        typeField.addEventListener('change', synchronizePoolCostRule);
+        synchronizePoolCostRule();
+    });
+    </script>
 </body>
 </html>

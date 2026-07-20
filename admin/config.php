@@ -25,6 +25,11 @@ if (!$adminManager->hasPermission('edit_game_config')) {
 $gameConfig = new GameConfig();
 $error = '';
 $success = '';
+$playerLimitConfigKeys = [
+    'initial_max_circuit_points',
+    'initial_max_general_cost',
+    'initial_subbase_limit'
+];
 
 // 处理配置更新 / Process configuration updates
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
@@ -45,14 +50,29 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                         $configCategory = $configKey === 'image_display_mode'
                             ? 'display'
                             : null;
-                        if ($gameConfig->set(
+                        $updatesPlayerLimits = in_array(
                             $configKey,
-                            $configValue,
-                            null,
-                            $configCategory
-                        )) {
+                            $playerLimitConfigKeys,
+                            true
+                        );
+                        $updated = $updatesPlayerLimits
+                            ? $gameConfig->batchUpdate([
+                                $configKey => $configValue
+                            ])
+                            : $gameConfig->set(
+                                $configKey,
+                                $configValue,
+                                null,
+                                $configCategory
+                            );
+                        if ($updated) {
                             $success = '配置更新成功';
-                            $user->logAdminAction('update_config', 'config', null, "$configKey = $configValue");
+                            $user->logAdminAction(
+                                'update_config',
+                                'config',
+                                null,
+                                "$configKey = $configValue"
+                            );
                         } else {
                             $error = '配置更新失败';
                         }
@@ -78,7 +98,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 
                 if (empty($error) && !empty($configs)) {
                     if ($gameConfig->batchUpdate($configs)) {
-                        $success = '批量更新成功，共更新 ' . count($configs) . ' 项配置';
+                        $success = '批量更新成功，共更新 '
+                            . count($configs)
+                            . ' 项配置';
                         $user->logAdminAction('batch_update_config', 'config', null, 
                             'Updated ' . count($configs) . ' configs');
                     } else {

@@ -63,7 +63,11 @@ $pageTitle = '十二门与赛季';
                     <?php echo escapeHtml(isset($statusLabels[$overview['season']['status']]) ? $statusLabels[$overview['season']['status']] : $overview['season']['status']); ?></p>
                 <p>银白之孔需要连续占领 <?php echo number_format(VICTORY_OCCUPATION_DAYS); ?> 天；
                     胜利后冻结 <?php echo number_format(SEASON_RESET_DELAY_HOURS); ?> 小时再重置领地。</p>
-                <p>玩家武将、城池、资源与联盟关系在赛季重置后保留。</p>
+                <p>
+                    赛季重置后保留账号、亮晶晶与夜静静、武将与技能卡成长、
+                    长期道具、永久科研，以及同盟身份、成员和职位；
+                    四色资源、思考回路、城池、设施、军队、领地和赛季科研会重置。
+                </p>
             <?php else: ?>
                 <p>赛季尚未初始化。</p>
             <?php endif; ?>

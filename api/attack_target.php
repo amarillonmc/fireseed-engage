@@ -79,7 +79,7 @@ if ($targetX !== null && $targetY !== null) {
 
     $targetTile = new Map();
     if (!$targetTile->loadByCoordinates($targetX, $targetY) || !$targetTile->isVisible()) {
-        echo json_encode(['success' => false, 'message' => '目标不存在或尚未探索']);
+        echo json_encode(['success' => false, 'message' => '目标不存在']);
         exit;
     }
 
@@ -151,7 +151,7 @@ if ($targetType === 'city') {
 } else {
     $target = new Map($targetId);
     if (!$target->isValid() || !$target->isVisible()) {
-        echo json_encode(['success' => false, 'message' => '目标地点不存在或尚未探索']);
+        echo json_encode(['success' => false, 'message' => '目标地点不存在']);
         exit;
     }
     $query = "SELECT site_id FROM world_sites WHERE tile_id = ? LIMIT 1";

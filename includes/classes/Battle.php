@@ -971,16 +971,20 @@ class Battle {
             }
 
             // 先锁定该军武将，再把分配目标改为城池 / Lock army generals before changing their assignment target to the city
-            $query = "SELECT g.general_id
+            $query = "SELECT ga.assignment_id, g.general_id
                       FROM general_assignments ga
                       INNER JOIN generals g ON g.general_id = ga.general_id
                       WHERE ga.assignment_type = 'army' AND ga.target_id = ?
-                      ORDER BY g.general_id
+                      ORDER BY ga.assignment_id
                       FOR UPDATE";
             $stmt = $this->db->prepare($query);
             $stmt->bind_param('i', $armyId);
             $stmt->execute();
-            $stmt->get_result();
+            $result = $stmt->get_result();
+            $movedAssignmentIds = [];
+            while ($result && ($row = $result->fetch_assoc())) {
+                $movedAssignmentIds[] = (int) $row['assignment_id'];
+            }
             $stmt->close();
 
             $query = "UPDATE general_assignments
@@ -988,11 +992,24 @@ class Battle {
                       WHERE assignment_type = 'army' AND target_id = ?";
             $stmt = $this->db->prepare($query);
             $stmt->bind_param('ii', $cityId, $armyId);
-            if (!$stmt->execute()) {
+            $moved = $stmt->execute()
+                && $stmt->affected_rows === count($movedAssignmentIds);
+            if (!$moved) {
                 $stmt->close();
                 throw new RuntimeException('无法并入驻城武将 / Failed to merge army generals into city defense');
             }
             $stmt->close();
+
+            if (!empty($movedAssignmentIds)) {
+                // 城池先保留原驻将，超出人数或COST的转入武将回到未分配状态 / Preserve city incumbents and leave overflow transfers unassigned
+                General::enforceAssignmentLimitsInCurrentTransaction(
+                    'city',
+                    $cityId,
+                    $ownerId,
+                    'unassign',
+                    $movedAssignmentIds
+                );
+            }
 
             $query = "DELETE FROM armies
                       WHERE army_id = ? AND owner_id = ?
@@ -1495,11 +1512,7 @@ class Battle {
                     }
                     unset($rewards['capture_city']);
                 } elseif (!empty($rewards['capture_city'])) {
-                    if (!$this->consumeTerritoryOccupationCost($attackerId)) {
-                        // 战斗胜利仍成立，但思考回路不足时不转移控制权 / Victory still stands, but insufficient circuit points prevent ownership transfer
-                        unset($rewards['capture_city']);
-                        $rewards['occupation_blocked'] = true;
-                    } else {
+                    // 思考回路只用于资源地，副城易主不收取回路。 / Circuit is reserved for resource nodes and never charged for a sub-base transfer.
                         $query = "UPDATE cities
                               SET owner_id = ?
                               WHERE city_id = ? AND owner_id = ?
@@ -1554,7 +1567,6 @@ class Battle {
                         }
                         $stmt->close();
                         $territoryCaptured = true;
-                    }
                 }
 
                 // 资源行最后按用户ID锁定并做真实转移，避免先锁资源再锁城池 / Lock resource rows last by user ID and transfer actual loot without minting
@@ -1726,7 +1738,14 @@ class Battle {
                     }
                     $stmt->close();
                 }
-                if (!$this->consumeTerritoryOccupationCost($attackerId)) {
+                $occupationCost = $defender->getType() === 'resource'
+                    ? Map::getResourceOccupationCost()
+                    : 0;
+                if ($defender->getType() === 'resource'
+                    && !$this->consumeResourceOccupationCost(
+                        $attackerId,
+                        $occupationCost
+                    )) {
                     // 兵力胜利不等于自动占领；费用不足时保留原领主 / A military victory does not transfer ownership when the occupation cost is unpaid
                     unset($rewards['tile_control']);
                     $rewards['occupation_blocked'] = true;
@@ -1734,6 +1753,7 @@ class Battle {
                 }
                 $query = "UPDATE map_tiles
                           SET owner_id = ?,
+                              occupation_circuit_cost = ?,
                               last_collection_time = CASE
                                 WHEN type = 'resource' THEN NOW()
                                 ELSE last_collection_time
@@ -1742,8 +1762,9 @@ class Battle {
                             AND type IN ('empty', 'resource')";
                 $stmt = $this->db->prepare($query);
                 $stmt->bind_param(
-                    'iii',
+                    'iiii',
                     $attackerId,
+                    $occupationCost,
                     $tileId,
                     $oldOwnerId
                 );
@@ -1911,10 +1932,13 @@ class Battle {
     }
 
     /**
-     * 原子扣除实际易主所需思考回路 / Atomically consume the circuit-point cost for an actual ownership transfer
+     * 原子扣除资源地易主所需思考回路 / Atomically consume Circuit for a resource-node transfer
+     * @param int $userId 玩家ID / Player ID
+     * @param int $cost 本次应记录的资源地成本 / Cost recorded for this resource transfer
+     * @return bool 是否成功扣除 / Whether the charge succeeded
      */
-    private function consumeTerritoryOccupationCost($userId) {
-        $cost = max(0, (int) TERRITORY_OCCUPATION_COST);
+    private function consumeResourceOccupationCost($userId, $cost) {
+        $cost = max(0, min(2147483647, (int) $cost));
         if ($cost === 0) {
             return true;
         }
@@ -2013,12 +2037,15 @@ class Battle {
             'day' => 'day_crystal',
             'night' => 'night_crystal'
         ];
-        $capacity = max(
+        $seasonalCapacity = max(
             0,
             (int) Resource::getUserResourceStorageCapacity($attackerUserId)
         );
         $actualRewards = [];
         foreach ($columns as $type => $column) {
+            $capacity = in_array($type, ['bright', 'night'], true)
+                ? 2147483647
+                : $seasonalCapacity;
             $requested = isset($requestedRewards[$type])
                 ? max(0, (int) $requestedRewards[$type])
                 : 0;

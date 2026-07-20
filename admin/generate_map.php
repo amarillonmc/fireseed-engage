@@ -14,11 +14,20 @@ if (!$user->isValid() || !$user->isAdmin()) {
     exit;
 }
 
+$adminManager = new AdminManager($user);
+if (!$adminManager->hasPermission('manage_map')) {
+    http_response_code(403);
+    die('您没有权限访问此页面');
+}
+
 $message = '';
 $statistics = null;
 
-// 处理地图生成请求
-if ($_SERVER['REQUEST_METHOD'] === 'POST') {
+// 地图生成与重置必须通过CSRF校验 / Map generation and reset require CSRF validation
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && !validateCsrfToken()) {
+    $message = '请求已过期，请刷新页面后重试'
+        . ' / Request expired; refresh and try again.';
+} elseif ($_SERVER['REQUEST_METHOD'] === 'POST') {
     if (isset($_POST['action'])) {
         $mapGenerator = new MapGenerator();
         
@@ -178,6 +187,7 @@ $pageTitle = '地图管理';
                     <h3>地图操作</h3>
                     
                     <form class="admin-form" method="post" action="">
+                        <?php echo csrfField(); ?>
                         <div class="form-group">
                             <label>
                                 <input type="checkbox" name="clear_existing" value="yes">

@@ -1,5 +1,5 @@
 <?php
-// 种火集结号 - 武将分配类
+// 种火集结号 - 武将分配类 / Fireseed Engage - general assignment class
 
 class GeneralAssignment {
     private $db;
@@ -46,61 +46,45 @@ class GeneralAssignment {
     }
     
     /**
-     * 创建新分配
-     * @param int $generalId 武将ID
-     * @param string $assignmentType 分配类型
-     * @param int $targetId 目标ID
-     * @return bool|int 成功返回分配ID，失败返回false
+     * 创建新分配 / Create an assignment
+     * @param int $generalId 武将ID / General ID
+     * @param string $assignmentType 分配类型 / Assignment type
+     * @param int $targetId 目标ID / Target ID
+     * @return bool|int 成功返回分配ID，失败返回false / Assignment ID on success, false otherwise
      */
     public function createAssignment($generalId, $assignmentType, $targetId) {
-        // 检查参数
+        // 检查参数 / Validate arguments
         if (empty($generalId) || empty($assignmentType) || empty($targetId)) {
             return false;
         }
         
-        // 检查分配类型是否有效
+        // 检查分配类型是否有效 / Validate assignment type
         $validTypes = ['city', 'army'];
-        if (!in_array($assignmentType, $validTypes)) {
+        if (!in_array($assignmentType, $validTypes, true)) {
             return false;
         }
-        
-        // 检查武将是否已分配
-        $query = "SELECT assignment_id FROM general_assignments WHERE general_id = ?";
-        $stmt = $this->db->prepare($query);
-        $stmt->bind_param('i', $generalId);
-        $stmt->execute();
-        $result = $stmt->get_result();
-        
-        if ($result && $result->num_rows > 0) {
-            $stmt->close();
+
+        // 兼容入口也必须走武将类的事务、归属与编制上限校验 / The compatibility entry point must use General's transaction, ownership, and roster-limit checks
+        $general = new General((int) $generalId);
+        if (!$general->isValid()
+            || !$general->assignGeneral($assignmentType, (int) $targetId)) {
             return false;
         }
-        
-        $stmt->close();
-        
-        // 创建分配记录
-        $query = "INSERT INTO general_assignments (general_id, assignment_type, target_id) VALUES (?, ?, ?)";
-        $stmt = $this->db->prepare($query);
-        $stmt->bind_param('isi', $generalId, $assignmentType, $targetId);
-        $result = $stmt->execute();
-        
-        if (!$result) {
-            $stmt->close();
+
+        $assignment = self::getGeneralAssignment((int) $generalId);
+        if (!$assignment || !$assignment->isValid()) {
             return false;
         }
-        
-        $assignmentId = $this->db->insert_id;
-        $stmt->close();
-        
-        // 设置对象属性
-        $this->assignmentId = $assignmentId;
-        $this->generalId = $generalId;
-        $this->assignmentType = $assignmentType;
-        $this->targetId = $targetId;
-        $this->assignedAt = date('Y-m-d H:i:s');
+
+        // 同类实例可安全复制已验证的私有状态 / Instances of this class may copy validated private state
+        $this->assignmentId = $assignment->assignmentId;
+        $this->generalId = $assignment->generalId;
+        $this->assignmentType = $assignment->assignmentType;
+        $this->targetId = $assignment->targetId;
+        $this->assignedAt = $assignment->assignedAt;
         $this->isValid = true;
         
-        return $assignmentId;
+        return $this->assignmentId;
     }
     
     /**

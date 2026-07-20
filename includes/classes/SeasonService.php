@@ -1066,7 +1066,7 @@ class SeasonService {
     }
 
     /**
-     * 重置地图占领状态并创建下一赛季 / Reset occupation state and create the next season
+     * 原子重建赛季世界并创建下一赛季 / Atomically rebuild the world and create the next season
      * @param int $seasonId 赛季ID / Season ID
      * @return array 重置结果 / Reset result
      */
@@ -1075,7 +1075,9 @@ class SeasonService {
 
         try {
             $query = "SELECT season_number FROM seasons
-                      WHERE season_id = ? AND status = 'reset_pending' FOR UPDATE";
+                      WHERE season_id = ? AND status = 'reset_pending'
+                        AND ended_at IS NULL
+                      FOR UPDATE";
             $stmt = $this->db->prepare($query);
             $stmt->bind_param('i', $seasonId);
             $stmt->execute();
@@ -1083,117 +1085,198 @@ class SeasonService {
             $season = $result ? $result->fetch_assoc() : null;
             $stmt->close();
             if (!$season) {
-                throw new RuntimeException('赛季不满足重置条件');
+                throw new RuntimeException(
+                    '赛季不满足重置条件 / Season is not eligible for reset'
+                );
             }
 
-            // 先取消仍在路上的旧赛季攻击，避免它们在新赛季重新结算 / Cancel in-flight old-season attacks before they can resolve in the new season
-            if (!executePreparedSql(
-                $this->db,
-                "DELETE FROM battles WHERE result = 'pending'"
-            )) {
-                throw new RuntimeException('取消旧赛季待处理战斗失败');
-            }
-            if (!executePreparedSql(
-                $this->db,
-                "DELETE FROM alliance_operation_armies"
-            )) {
-                throw new RuntimeException('释放旧赛季协同作战军队失败');
-            }
-            if (!executePreparedSql(
-                $this->db,
-                "UPDATE alliance_operations
-                 SET status = 'cancelled'
-                 WHERE status IN ('open', 'launched')"
-            )) {
-                throw new RuntimeException('取消旧赛季协同作战失败');
-            }
+            $userIds = $this->lockAllPlayersForSeasonReset();
 
-            // 当前赛季采用非破坏性重置，因此先把领地驻军送回每名玩家的主城 / This season reset is non-destructive, so return territory troops to each owner's main city first
-            $query = "INSERT INTO soldiers
-                         (city_id, type, level, quantity, in_training)
-                      SELECT homes.city_id, g.soldier_type, MAX(g.level),
-                             LEAST(2147483647, SUM(g.quantity)), 0
-                      FROM territory_garrisons g
-                      INNER JOIN (
-                        SELECT owner_id,
-                               COALESCE(
-                                 MIN(CASE WHEN is_main_city = 1 THEN city_id END),
-                                 MIN(city_id)
-                               ) AS city_id
-                        FROM cities
-                        GROUP BY owner_id
-                      ) homes ON homes.owner_id = g.owner_id
-                      GROUP BY homes.city_id, g.soldier_type
-                      ON DUPLICATE KEY UPDATE
-                        level = GREATEST(level, VALUES(level)),
-                        quantity = LEAST(
-                          2147483647,
-                          quantity + VALUES(quantity)
-                        )";
-            if (!executePreparedSql($this->db, $query)) {
-                throw new RuntimeException('返还赛季领地驻军失败');
-            }
-            if (!executePreparedSql(
-                $this->db,
-                "DELETE FROM territory_garrisons"
-            )) {
-                throw new RuntimeException('清理领地驻军失败');
-            }
-            if (!executePreparedSql(
-                $this->db,
-                "UPDATE map_tiles SET owner_id = NULL
-                 WHERE type IN ('empty', 'resource', 'npc_fort', 'special')"
-            )) {
-                throw new RuntimeException('清理地图占领状态失败');
-            }
-            if (!executePreparedSql(
-                $this->db,
-                "UPDATE world_sites
-                 SET owner_id = NULL, durability = max_durability,
-                     captured_at = NULL, occupation_started_at = NULL"
-            )) {
-                throw new RuntimeException('重置特殊地点失败');
-            }
-            if (!executePreparedSql(
-                $this->db,
-                "UPDATE arena_profiles SET season_points = 0"
-            )) {
-                throw new RuntimeException('重置竞技场赛季积分失败');
-            }
-
-            $gatewayGarrison = (int) round(
-                NPC_FORT_BASE_GARRISON * pow(NPC_FORT_GARRISON_COEFFICIENT, 9)
+            // 同盟本体、成员与职位跨赛季保留；其余同盟态全部重新开始。
+            // Alliance identity, membership, and roles persist; all seasonal
+            // alliance state starts over.
+            $this->executeSeasonResetStatement(
+                'DELETE FROM alliance_operation_armies',
+                '清理联盟协同军队失败 / Failed to clear alliance operation armies'
             );
-            $query = "UPDATE map_tiles mt
-                      INNER JOIN world_sites ws ON ws.tile_id = mt.tile_id
-                      SET mt.npc_garrison = CASE
-                        WHEN ws.site_type = 'gateway' THEN ?
-                        ELSE 1000000000
-                      END";
+            $this->executeSeasonResetStatement(
+                'DELETE FROM alliance_operations',
+                '清理联盟行动失败 / Failed to clear alliance operations'
+            );
+            $this->executeSeasonResetStatement(
+                'DELETE FROM alliance_applications',
+                '清理联盟申请失败 / Failed to clear alliance applications'
+            );
+            $this->executeSeasonResetStatement(
+                'DELETE FROM alliance_aid_log',
+                '清理联盟援助记录失败 / Failed to clear alliance aid records'
+            );
+            $this->restoreVassalAllianceMembershipsForSeasonReset();
+            $this->executeSeasonResetStatement(
+                'DELETE FROM vassal_relations',
+                '清理附属关系失败 / Failed to clear vassalage'
+            );
+            $this->executeSeasonResetStatement(
+                'UPDATE alliance_members SET contribution = 0',
+                '重置联盟贡献失败 / Failed to reset alliance contribution'
+            );
+            $this->executeSeasonResetStatement(
+                'UPDATE alliances SET level = 1, experience = 0',
+                '重置联盟成长失败 / Failed to reset alliance progression'
+            );
+
+            // 武将与技能成长保留，但一切城池、军队分配及临时技能态随赛季清空。
+            // General and skill progression persists, while city/army
+            // assignments and transient effects reset.
+            $this->executeSeasonResetStatement(
+                'DELETE FROM general_assignments',
+                '清理武将分配失败 / Failed to clear general assignments'
+            );
+            $this->executeSeasonResetStatement(
+                'DELETE FROM active_skill_effects',
+                '清理临时技能效果失败 / Failed to clear temporary skill effects'
+            );
+            $this->executeSeasonResetStatement(
+                'DELETE FROM skill_cooldowns',
+                '清理技能冷却失败 / Failed to clear skill cooldowns'
+            );
+
+            // 任务、战斗、挑战与侦察记录都是赛季进度；成就与长期材料不在此列。
+            // Quest, battle, challenge, and scouting state is seasonal;
+            // achievements and long-term items are deliberately untouched.
+            $seasonalProgressStatements = [
+                [
+                    'DELETE FROM user_quests',
+                    '重置任务进度失败 / Failed to reset quest progress'
+                ],
+                [
+                    'DELETE FROM gameplay_events',
+                    '重置玩法事件失败 / Failed to reset gameplay events'
+                ],
+                [
+                    'DELETE FROM raid_participation',
+                    '重置讨伐参与失败 / Failed to reset raid participation'
+                ],
+                [
+                    'DELETE FROM raid_events',
+                    '重置讨伐事件失败 / Failed to reset raid events'
+                ],
+                [
+                    'DELETE FROM arena_battles',
+                    '重置竞技场战报失败 / Failed to reset arena battles'
+                ],
+                [
+                    "UPDATE arena_profiles
+                     SET defense_army_id = NULL, rating = 1000,
+                         wins = 0, losses = 0, season_points = 0",
+                    '重置竞技场档案失败 / Failed to reset arena profiles'
+                ],
+                [
+                    'DELETE FROM tower_progress',
+                    '重置高塔进度失败 / Failed to reset tower progress'
+                ],
+                [
+                    'DELETE FROM scouting_missions',
+                    '重置侦察记录失败 / Failed to reset scouting records'
+                ],
+                [
+                    'DELETE FROM prisoners',
+                    '重置俘虏失败 / Failed to reset prisoners'
+                ],
+                [
+                    'DELETE FROM battles',
+                    '重置战斗记录失败 / Failed to reset battles'
+                ]
+            ];
+            foreach ($seasonalProgressStatements as $statement) {
+                $this->executeSeasonResetStatement(
+                    $statement[0],
+                    $statement[1]
+                );
+            }
+
+            // 仅清除赛季科研；永久科研与由其提供的上限必须保留。
+            // Remove only seasonal research and preserve permanent effects.
+            $this->executeSeasonResetStatement(
+                "DELETE ut
+                 FROM user_technologies ut
+                 INNER JOIN technologies t ON t.tech_id = ut.tech_id
+                 WHERE t.scope = 'seasonal'",
+                '重置赛季科研失败 / Failed to reset seasonal research'
+            );
+            foreach ($userIds as $userId) {
+                if (class_exists('TechnologyEffectService')
+                    && !TechnologyEffectService::synchronizePlayerLimits(
+                        $userId
+                    )) {
+                    throw new RuntimeException(
+                        '同步永久科研上限失败 / Failed to synchronize permanent research caps'
+                    );
+                }
+            }
+
+            // 先解除引用，再删除全部赛季军事与城市实体。 / Release references before deleting seasonal military and city entities.
+            $this->executeSeasonResetStatement(
+                'DELETE FROM territory_garrisons',
+                '清理领地驻军失败 / Failed to clear territory garrisons'
+            );
+            $this->executeSeasonResetStatement(
+                'DELETE FROM armies',
+                '清理军队失败 / Failed to clear armies'
+            );
+            $this->executeSeasonResetStatement(
+                'DELETE FROM cities',
+                '清理城市失败 / Failed to clear cities'
+            );
+
+            $initialCircuit = $this->readBoundedSeasonConfig(
+                'initial_circuit_points',
+                1
+            );
+            $query = "UPDATE users
+                      SET level = 1,
+                          circuit_points = LEAST(max_circuit_points, ?)";
             $stmt = $this->db->prepare($query);
-            $stmt->bind_param('i', $gatewayGarrison);
+            $stmt->bind_param('i', $initialCircuit);
             if (!$stmt->execute()) {
-                throw new RuntimeException('恢复特殊地点驻军失败');
+                $stmt->close();
+                throw new RuntimeException(
+                    '重置思考回路失败 / Failed to reset Circuit Points'
+                );
             }
             $stmt->close();
 
-            $query = "UPDATE armies a
-                      INNER JOIN cities c ON c.city_id = a.city_id
-                      SET a.status = 'idle', a.current_x = c.x, a.current_y = c.y,
-                          a.target_x = NULL, a.target_y = NULL,
-                          a.departure_time = NULL, a.arrival_time = NULL,
-                          a.return_time = NULL";
-            if (!executePreparedSql($this->db, $query)) {
-                throw new RuntimeException('召回赛季军队失败');
+            // 技能点和长期道具保留；功勋及竞技场代币归零。 / Preserve skill points and items; reset seasonal wallet balances.
+            $this->executeSeasonResetStatement(
+                'UPDATE gameplay_wallets
+                 SET skill_points = skill_points,
+                     merit_points = 0, arena_tokens = 0',
+                '重置赛季钱包失败 / Failed to reset seasonal wallet balances'
+            );
+            $this->resetResourceWalletsForNewSeason();
+
+            // 地图替换处于同一事务；生成失败会完整恢复旧地图、城市和资源。
+            // World replacement shares this transaction, so any generation
+            // failure restores the former map, cities, and balances.
+            $mapGenerator = new MapGenerator();
+            $mapGenerator->regenerateMapInCurrentTransaction();
+            foreach ($userIds as $userId) {
+                City::createInitialPlayerCityInCurrentTransaction($userId);
             }
 
-            $query = "UPDATE seasons SET ended_at = NOW() WHERE season_id = ?";
+            $query = "UPDATE seasons
+                      SET status = 'won', ended_at = NOW()
+                      WHERE season_id = ? AND status = 'reset_pending'
+                        AND ended_at IS NULL";
             $stmt = $this->db->prepare($query);
             $stmt->bind_param('i', $seasonId);
-            if (!$stmt->execute()) {
-                throw new RuntimeException('结束旧赛季失败');
-            }
+            $ended = $stmt->execute() && $stmt->affected_rows === 1;
             $stmt->close();
+            if (!$ended) {
+                throw new RuntimeException(
+                    '结束旧赛季失败 / Failed to close the former season'
+                );
+            }
 
             $nextNumber = (int) $season['season_number'] + 1;
             $query = "INSERT INTO seasons (season_number, status, started_at)
@@ -1201,19 +1284,270 @@ class SeasonService {
             $stmt = $this->db->prepare($query);
             $stmt->bind_param('i', $nextNumber);
             if (!$stmt->execute()) {
-                throw new RuntimeException('创建新赛季失败');
+                $stmt->close();
+                throw new RuntimeException(
+                    '创建新赛季失败 / Failed to create the next season'
+                );
             }
             $stmt->close();
             $this->db->commit();
 
             return [
                 'changed' => true,
-                'message' => '赛季已重置，武将、城池、资源与联盟均已保留',
+                'message' => '赛季已原子重建；长期资产与联盟关系已保留',
                 'season_number' => $nextNumber
             ];
         } catch (Throwable $e) {
             $this->db->rollback();
             return ['changed' => false, 'message' => $e->getMessage()];
         }
+    }
+
+    /**
+     * 锁定并列出全部玩家 / Lock and list every player
+     * @return array 玩家ID / User IDs
+     */
+    private function lockAllPlayersForSeasonReset() {
+        $query = "SELECT user_id FROM users ORDER BY user_id FOR UPDATE";
+        $stmt = $this->db->prepare($query);
+        if (!$stmt || !$stmt->execute()) {
+            if ($stmt) {
+                $stmt->close();
+            }
+            throw new RuntimeException(
+                '锁定赛季玩家失败 / Failed to lock players for season reset'
+            );
+        }
+        $result = $stmt->get_result();
+        $userIds = [];
+        while ($result && ($row = $result->fetch_assoc())) {
+            $userIds[] = (int) $row['user_id'];
+        }
+        $stmt->close();
+        return $userIds;
+    }
+
+    /**
+     * 在清除附属状态前恢复原联盟社交关系 / Restore former alliance ties before clearing vassalage
+     * @return void
+     */
+    private function restoreVassalAllianceMembershipsForSeasonReset() {
+        $query = "SELECT vassal_id, previous_alliance_id,
+                         previous_alliance_role, previous_alliance_joined_at
+                  FROM vassal_relations
+                  WHERE status = 'active'
+                    AND previous_alliance_id IS NOT NULL
+                  ORDER BY previous_alliance_id, vassal_id
+                  FOR UPDATE";
+        $stmt = $this->db->prepare($query);
+        if (!$stmt || !$stmt->execute()) {
+            if ($stmt) {
+                $stmt->close();
+            }
+            throw new RuntimeException(
+                '读取附属联盟关系失败 / Failed to read vassal alliance ties'
+            );
+        }
+        $result = $stmt->get_result();
+        $relations = [];
+        while ($result && ($row = $result->fetch_assoc())) {
+            $relations[] = $row;
+        }
+        $stmt->close();
+
+        foreach ($relations as $relation) {
+            $allianceId = (int) $relation['previous_alliance_id'];
+            $userId = (int) $relation['vassal_id'];
+            $query = "SELECT leader_id
+                      FROM alliances
+                      WHERE alliance_id = ?
+                      FOR UPDATE";
+            $stmt = $this->db->prepare($query);
+            $stmt->bind_param('i', $allianceId);
+            $stmt->execute();
+            $result = $stmt->get_result();
+            $alliance = $result ? $result->fetch_assoc() : null;
+            $stmt->close();
+            if (!$alliance) {
+                continue;
+            }
+
+            $query = "SELECT member_id
+                      FROM alliance_members
+                      WHERE user_id = ?
+                      FOR UPDATE";
+            $stmt = $this->db->prepare($query);
+            $stmt->bind_param('i', $userId);
+            $stmt->execute();
+            $result = $stmt->get_result();
+            $hasMembership = $result && $result->num_rows > 0;
+            $stmt->close();
+            if ($hasMembership) {
+                continue;
+            }
+
+            $role = (string) $relation['previous_alliance_role'];
+            if (!in_array($role, ['leader', 'officer', 'member'], true)) {
+                $role = 'member';
+            }
+            if ($alliance['leader_id'] === null) {
+                $role = 'leader';
+                $query = "UPDATE alliances
+                          SET leader_id = ?
+                          WHERE alliance_id = ? AND leader_id IS NULL";
+                $stmt = $this->db->prepare($query);
+                $stmt->bind_param('ii', $userId, $allianceId);
+                $restoredLeader = $stmt->execute()
+                    && $stmt->affected_rows === 1;
+                $stmt->close();
+                if (!$restoredLeader) {
+                    throw new RuntimeException(
+                        '恢复联盟盟主失败 / Failed to restore alliance leader'
+                    );
+                }
+            } elseif ($role === 'leader') {
+                $role = 'officer';
+            }
+
+            $joinedAt = $relation['previous_alliance_joined_at']
+                ?: date('Y-m-d H:i:s');
+            $query = "INSERT INTO alliance_members
+                         (alliance_id, user_id, role, contribution, joined_at)
+                      VALUES (?, ?, ?, 0, ?)";
+            $stmt = $this->db->prepare($query);
+            $stmt->bind_param(
+                'iiss',
+                $allianceId,
+                $userId,
+                $role,
+                $joinedAt
+            );
+            if (!$stmt->execute()) {
+                $stmt->close();
+                throw new RuntimeException(
+                    '恢复原联盟身份失败 / Failed to restore former alliance membership'
+                );
+            }
+            $stmt->close();
+        }
+    }
+
+    /**
+     * 执行无参数赛季重置语句 / Execute a parameterless season-reset statement
+     * @param string $query SQL语句 / SQL statement
+     * @param string $message 失败消息 / Failure message
+     * @return void
+     */
+    private function executeSeasonResetStatement($query, $message) {
+        $stmt = $this->db->prepare($query);
+        if (!$stmt || !$stmt->execute()) {
+            if ($stmt) {
+                $stmt->close();
+            }
+            throw new RuntimeException($message);
+        }
+        $stmt->close();
+    }
+
+    /**
+     * 读取非负整数赛季配置 / Read a bounded non-negative season setting
+     * @param string $key 配置键 / Configuration key
+     * @param int $default 默认值 / Default value
+     * @return int 配置值 / Configuration value
+     */
+    private function readBoundedSeasonConfig($key, $default) {
+        $value = GameConfig::get($key, $default);
+        if (!is_numeric($value)) {
+            $value = $default;
+        }
+        return max(0, min(2147483647, (int) $value));
+    }
+
+    /**
+     * 重置四色资源并发放一次赛季亮夜奖励 / Reset seasonal resources and grant Bright/Night once
+     * @return void
+     */
+    private function resetResourceWalletsForNewSeason() {
+        $warm = $this->readBoundedSeasonConfig(
+            'initial_warm_crystal',
+            1000
+        );
+        $cold = $this->readBoundedSeasonConfig(
+            'initial_cold_crystal',
+            1000
+        );
+        $green = $this->readBoundedSeasonConfig(
+            'initial_green_crystal',
+            1000
+        );
+        $day = $this->readBoundedSeasonConfig(
+            'initial_day_crystal',
+            1000
+        );
+        $brightGrant = $this->readBoundedSeasonConfig(
+            'season_start_bright_grant',
+            1000
+        );
+        $nightGrant = $this->readBoundedSeasonConfig(
+            'season_start_night_grant',
+            1000
+        );
+
+        $maximumBrightBeforeGrant = 2147483647 - $brightGrant;
+        $maximumNightBeforeGrant = 2147483647 - $nightGrant;
+        $query = "SELECT resource_id
+                  FROM resources
+                  WHERE bright_crystal > ? OR night_crystal > ?
+                  ORDER BY resource_id
+                  LIMIT 1
+                  FOR UPDATE";
+        $stmt = $this->db->prepare($query);
+        $stmt->bind_param(
+            'ii',
+            $maximumBrightBeforeGrant,
+            $maximumNightBeforeGrant
+        );
+        if (!$stmt->execute()) {
+            $stmt->close();
+            throw new RuntimeException(
+                '检查赛季奖励余额失败 / Failed to validate season grants'
+            );
+        }
+        $result = $stmt->get_result();
+        $wouldOverflow = $result && $result->num_rows > 0;
+        $stmt->close();
+        if ($wouldOverflow) {
+            throw new RuntimeException(
+                '赛季开始奖励会导致资源溢出 / Season-start grant would overflow'
+            );
+        }
+
+        $query = "UPDATE resources
+                  SET warm_crystal = ?, cold_crystal = ?,
+                      green_crystal = ?, day_crystal = ?,
+                      warm_production_remainder = 0,
+                      cold_production_remainder = 0,
+                      green_production_remainder = 0,
+                      day_production_remainder = 0,
+                      bright_crystal = bright_crystal + ?,
+                      night_crystal = night_crystal + ?,
+                      last_update = NOW()";
+        $stmt = $this->db->prepare($query);
+        $stmt->bind_param(
+            'iiiiii',
+            $warm,
+            $cold,
+            $green,
+            $day,
+            $brightGrant,
+            $nightGrant
+        );
+        if (!$stmt->execute()) {
+            $stmt->close();
+            throw new RuntimeException(
+                '重置赛季资源失败 / Failed to reset seasonal resources'
+            );
+        }
+        $stmt->close();
     }
 }

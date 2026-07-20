@@ -343,9 +343,9 @@ CREATE TEMPORARY TABLE `fireseed_card_pool_seed` LIKE `card_pools`;
 
 INSERT INTO `fireseed_card_pool_seed`
 (`pool_code`,`pool_type`,`name`,`description`,`cost_json`,`allowed_counts_json`,`status`,`sort_order`) VALUES
-('general_normal','general','常规契约','以四色基础资源进行的常驻武将契约。','{"bright":100,"warm":100,"cold":100,"green":100}','[1,5,10]','published',10),
-('general_advanced','general','高级契约','加入昼闪闪与夜静静资源的高级武将契约。','{"bright":500,"warm":500,"cold":500,"green":500,"day":100,"night":100}','[1,5,10]','published',20),
-('general_resonance','general','回路共鸣','消耗思考回路的高阶武将契约。','{"circuit_points":5}','[1,5,10]','published',30),
+('general_normal','general','常规契约','消耗亮晶晶的常驻武将契约。','{"bright":500}','[1,5,10]','published',10),
+('general_advanced','general','高级契约','消耗较多亮晶晶的高级武将契约。','{"bright":1500}','[1,5,10]','published',20),
+('general_resonance','general','亮晶共鸣','消耗亮晶晶的高阶武将契约。','{"bright":5000}','[1,5,10]','published',30),
 ('skill_standard','skill','夜静技能卡池','消耗夜静静抽取技能卡的常驻卡池。','{"night":250}','[1,5,10]','published',10);
 
 -- 在创建前快照本轮真正缺失的预设池；已有、归档或被运营调整过的同代码池均不属于种子目标。 / Snapshot seed pools that are genuinely absent before creation; existing, archived, or operator-managed pools with the same code are never seed targets.

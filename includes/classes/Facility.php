@@ -270,6 +270,19 @@ class Facility {
         switch ($this->type) {
             case 'resource_production':
                 $baseValue = 1; // 基础资源产出：1点/3秒
+                if (in_array($this->subtype, ['bright', 'night'], true)) {
+                    // 跨赛季货币可日常产出，但默认显著慢于赛季资源 / Persistent currencies remain producible but default to a much slower rate
+                    $baseValue *= max(
+                        0.0,
+                        min(
+                            1.0,
+                            (float) GameConfig::get(
+                                'persistent_resource_production_multiplier',
+                                0.2
+                            )
+                        )
+                    );
+                }
                 break;
             case 'governor_office':
                 $baseValue = 3000; // 基础耐久值
@@ -313,82 +326,66 @@ class Facility {
         switch ($this->type) {
             case 'resource_production':
                 $baseCost = [
-                    'bright' => 100,
                     'warm' => 100,
                     'cold' => 100,
                     'green' => 100,
-                    'day' => 100,
-                    'night' => 0
+                    'day' => 100
                 ];
                 break;
             case 'governor_office':
                 $baseCost = [
-                    'bright' => 500,
                     'warm' => 200,
                     'cold' => 200,
                     'green' => 200,
-                    'day' => 200,
-                    'night' => 0
+                    'day' => 200
                 ];
                 break;
             case 'barracks':
                 $baseCost = [
-                    'bright' => 200,
                     'warm' => 300,
                     'cold' => 100,
                     'green' => 100,
-                    'day' => 300,
-                    'night' => 0
+                    'day' => 300
                 ];
                 break;
             case 'research_lab':
                 $baseCost = [
-                    'bright' => 400,
                     'warm' => 100,
                     'cold' => 100,
                     'green' => 300,
-                    'day' => 100,
-                    'night' => 0
+                    'day' => 100
                 ];
                 break;
             case 'dormitory':
                 $baseCost = [
-                    'bright' => 150,
                     'warm' => 150,
                     'cold' => 150,
                     'green' => 150,
-                    'day' => 150,
-                    'night' => 0
+                    'day' => 150
                 ];
                 break;
             case 'storage':
                 $baseCost = [
-                    'bright' => 200,
                     'warm' => 100,
                     'cold' => 200,
                     'green' => 100,
-                    'day' => 100,
-                    'night' => 0
+                    'day' => 100
                 ];
                 break;
             case 'watchtower':
                 $baseCost = [
-                    'bright' => 300,
                     'warm' => 100,
                     'cold' => 300,
                     'green' => 100,
-                    'day' => 200,
-                    'night' => 0
+                    'day' => 200
                 ];
                 break;
             case 'workshop':
                 $baseCost = [
-                    'bright' => 400,
                     'warm' => 200,
                     'cold' => 200,
                     'green' => 200,
-                    'day' => 100,
-                    'night' => 0
+                    'day' => 100
                 ];
                 break;
         }
@@ -803,14 +800,17 @@ class Facility {
      * 计算指定时长内的资源产量 / Calculate resource production for an elapsed duration
      * @param int $seconds 经过的秒数 / Elapsed seconds
      * @param float|null $productionBonus 已汇总的驻城生产百分比 / Pre-aggregated assigned-general production percentage
-     * @return int 产出的资源数量 / Produced resource amount
+     * @return float 产出的资源数量 / Produced resource amount
      */
     public function calculateResourceProduction($seconds, $productionBonus = null) {
         if (!$this->isValid || $this->type !== 'resource_production' || $seconds <= 0) {
-            return 0;
+            return 0.0;
         }
 
-        $productionTicks = floor($seconds / RESOURCE_PRODUCTION_INTERVAL);
+        $productionTicks = intdiv(
+            max(0, (int) $seconds),
+            max(1, (int) RESOURCE_PRODUCTION_INTERVAL)
+        );
         $baseProduction = $productionTicks * $this->getEffectValue();
 
         if ($productionBonus === null) {
@@ -830,7 +830,10 @@ class Facility {
         }
 
         // 在累计产量上应用驻城百分比，避免逐 tick 舍入损失 / Apply the city percentage after accumulation to avoid per-tick rounding loss
-        return (int) floor(City::applyPercentageBonus($baseProduction, $productionBonus));
+        return (float) City::applyPercentageBonus(
+            $baseProduction,
+            $productionBonus
+        );
     }
 
     /**

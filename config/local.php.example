@@ -1,0 +1,14 @@
+<?php
+// 种火集结号 - 本地部署配置示例 / Fireseed Engage - Local deployment configuration example
+
+return [
+    'DB_HOST' => 'localhost',
+    'DB_USER' => 'fireseed_user',
+    'DB_PASS' => 'replace-with-a-strong-database-password',
+    'DB_NAME' => 'fireseed_engage',
+    'SITE_URL' => 'https://game.example.com',
+    'ADMIN_EMAIL' => 'admin@example.com',
+    'DEBUG_MODE' => false,
+    'TRUST_PROXY_HEADERS' => false,
+    'SESSION_LIFETIME' => 86400
+];

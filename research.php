@@ -365,7 +365,14 @@ $categoryNames = [
                     ?>
                     <div class="technology-card">
                         <div class="technology-header">
-                            <div class="technology-name"><?php echo $technology->getName(); ?></div>
+                            <div class="technology-name">
+                                <?php echo $technology->getName(); ?>
+                                <small>
+                                    <?php echo $technology->getScope() === 'permanent'
+                                        ? '［永久］'
+                                        : '［本赛季］'; ?>
+                                </small>
+                            </div>
                             <div class="technology-level">
                                 <?php echo $currentLevel; ?> / <?php echo $maxLevel; ?>
                             </div>
@@ -378,13 +385,13 @@ $categoryNames = [
                         <div class="technology-effect">
                             <?php if ($currentLevel > 0): ?>
                             <div class="effect-current">
-                                当前效果: +<?php echo number_format($currentEffect * 100, 1); ?>%
+                                当前效果: <?php echo $technology->formatEffectAtLevel($currentLevel); ?>
                             </div>
                             <?php endif; ?>
                             
                             <?php if ($nextEffect > 0): ?>
                             <div class="effect-next">
-                                下一级效果: +<?php echo number_format($nextEffect * 100, 1); ?>%
+                                下一级效果: <?php echo $technology->formatEffectAtLevel($currentLevel + 1); ?>
                             </div>
                             <?php endif; ?>
                         </div>

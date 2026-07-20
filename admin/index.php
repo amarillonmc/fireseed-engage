@@ -413,6 +413,10 @@ $pageTitle = '管理后台';
                         <span class="nav-icon">🏠</span>
                         <span class="nav-text">返回游戏</span>
                     </a>
+                    <a href="../logout.php" class="nav-link">
+                        <span class="nav-icon">🚪</span>
+                        <span class="nav-text">退出登录</span>
+                    </a>
                 </div>
             </div>
 

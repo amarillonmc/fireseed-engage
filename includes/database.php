@@ -1,5 +1,5 @@
 <?php
-// 种火集结号 - 数据库连接类
+// 种火集结号 - 数据库连接类 / Fireseed Engage - Database connection class
 
 class Database {
     private $conn;
@@ -18,24 +18,44 @@ class Database {
         return self::$instance;
     }
     
-    // 连接数据库
+    // 连接数据库 / Connect to the database
     private function connect() {
+        mysqli_report(MYSQLI_REPORT_OFF);
         $this->conn = new mysqli(DB_HOST, DB_USER, DB_PASS, DB_NAME);
         
-        // 检查连接
+        // 记录底层原因但不向玩家泄露数据库详情 / Log the root cause without exposing database details to players
         if ($this->conn->connect_error) {
-            die("数据库连接失败: " . $this->conn->connect_error);
+            error_log(
+                'Database connection failed: ' . $this->conn->connect_error
+            );
+            throw new RuntimeException(
+                '数据库服务暂时不可用 / Database service is temporarily unavailable'
+            );
         }
         
-        // 设置字符集
-        $this->conn->set_charset(DB_CHARSET);
+        // 设置字符集 / Set the connection character set
+        if (!$this->conn->set_charset(DB_CHARSET)) {
+            error_log(
+                'Database character set initialization failed: '
+                . $this->conn->error
+            );
+            throw new RuntimeException(
+                '数据库服务初始化失败 / Database service initialization failed'
+            );
+        }
 
         // PHP 逻辑统一使用上海时区，数据库会话必须采用相同偏移 / Match the database session to PHP's Shanghai timezone
         if (!executePreparedSql(
             $this->conn,
             "SET SESSION time_zone = '+08:00'"
         )) {
-            die("数据库时区设置失败 / Failed to set database timezone");
+            error_log(
+                'Database timezone initialization failed: '
+                . $this->conn->error
+            );
+            throw new RuntimeException(
+                '数据库服务初始化失败 / Database service initialization failed'
+            );
         }
     }
     

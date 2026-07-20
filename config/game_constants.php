@@ -7,6 +7,8 @@ define('MAP_WIDTH', 512);
 define('MAP_HEIGHT', 512);
 define('MAP_CENTER_X', 256);
 define('MAP_CENTER_Y', 256);
+// 银白之孔与十二门总数 / Total Silver Hole and Twelve Gateway sites
+define('WORLD_SPECIAL_SITE_COUNT', 13);
 
 // 地图格子类型
 define('TILE_TYPE_EMPTY', 'empty');
@@ -23,7 +25,7 @@ define('STORAGE_LEVEL_COEFFICIENT', 1.5); // 贮存所每级增加的系数
 
 // 思考回路设置
 define('CIRCUIT_PRODUCTION_INTERVAL', 172800); // 每48小时产出1点思考回路
-define('TERRITORY_OCCUPATION_COST', 2); // 占领普通领地的思考回路成本 / Circuit cost to claim ordinary territory
+define('TERRITORY_OCCUPATION_COST', 2); // 资源地占领成本的兼容默认值 / Compatibility default for resource-tile occupation
 
 // 武将成长设置 / General progression settings
 define('GENERAL_ATTRIBUTE_HARD_CAP', 2000000000); // 保持在MySQL有符号INT范围内 / Stay inside signed MySQL INT

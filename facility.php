@@ -62,19 +62,25 @@ function deductFacilityUpgradeResources($db, $userId, $cost) {
     $green = isset($cost['green']) ? (int) $cost['green'] : 0;
     $day = isset($cost['day']) ? (int) $cost['day'] : 0;
     $night = isset($cost['night']) ? (int) $cost['night'] : 0;
-    $now = date('Y-m-d H:i:s');
-
     $query = "UPDATE resources
               SET bright_crystal = bright_crystal - ?,
                   warm_crystal = warm_crystal - ?,
                   cold_crystal = cold_crystal - ?,
                   green_crystal = green_crystal - ?,
                   day_crystal = day_crystal - ?,
-                  night_crystal = night_crystal - ?,
-                  last_update = ?
+                  night_crystal = night_crystal - ?
               WHERE user_id = ?";
     $stmt = $db->prepare($query);
-    $stmt->bind_param('iiiiiisi', $bright, $warm, $cold, $green, $day, $night, $now, $userId);
+    $stmt->bind_param(
+        'iiiiiii',
+        $bright,
+        $warm,
+        $cold,
+        $green,
+        $day,
+        $night,
+        $userId
+    );
     $updated = $stmt->execute() && $stmt->affected_rows === 1;
     $stmt->close();
 

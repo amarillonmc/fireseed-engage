@@ -25,8 +25,10 @@ if (!$adminManager->hasPermission('manage_map')) {
 $error = '';
 $success = '';
 
-// 处理地图操作
-if ($_SERVER['REQUEST_METHOD'] === 'POST') {
+// 所有地图管理变更都要求POST与CSRF令牌 / Require POST and a CSRF token for every map-admin mutation
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && !validateCsrfToken()) {
+    $error = '请求已过期，请刷新页面后重试 / Request expired; refresh and try again.';
+} elseif ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $action = $_POST['action'] ?? '';
     
     switch ($action) {
@@ -46,21 +48,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 }
             } catch (Exception $e) {
                 $error = '地图生成失败: ' . $e->getMessage();
-            }
-            break;
-            
-        case 'clear_map':
-            try {
-                $db = Database::getInstance()->getConnection();
-                
-                // 清除所有地图数据
-                $db->query("DELETE FROM map_tiles");
-                $db->query("DELETE FROM cities WHERE owner_id > 0"); // 保留NPC城池
-                
-                $success = '地图数据已清除！';
-                $user->logAdminAction('clear_map', 'map', null, 'Cleared all map data');
-            } catch (Exception $e) {
-                $error = '清除地图失败: ' . $e->getMessage();
             }
             break;
             
@@ -102,7 +89,11 @@ $result = $db->query("SELECT COUNT(*) as count FROM cities WHERE owner_id > 0");
 $mapStats['player_cities'] = $result ? $result->fetch_assoc()['count'] : 0;
 
 // 银白之孔
-$result = $db->query("SELECT COUNT(*) as count FROM map_tiles WHERE type = 'silver_hole'");
+$result = $db->query(
+    "SELECT COUNT(*) as count
+     FROM map_tiles
+     WHERE type = 'special' AND subtype = 'silver_hole'"
+);
 $mapStats['silver_holes'] = $result ? $result->fetch_assoc()['count'] : 0;
 
 // 被占领的格子数量
@@ -408,17 +399,18 @@ $pageTitle = '地图管理';
                         </div>
                         
                         <form method="post">
+                            <?php echo csrfField(); ?>
                             <input type="hidden" name="action" value="generate_map">
                             
                             <div class="checkbox-group">
                                 <label>
                                     <input type="checkbox" name="force_regenerate" value="1">
-                                    强制重新生成（覆盖现有地图）
+                                    重新生成空服地图
                                 </label>
                             </div>
                             
                             <div class="warning-box">
-                                <strong>注意：</strong>生成新地图可能会影响现有的游戏数据。
+                                <strong>注意：</strong>存在任何城池时该操作会被拒绝；进行中赛季必须使用赛季重建流程。
                             </div>
                             
                             <button type="submit" class="action-button btn-primary" 
@@ -436,6 +428,7 @@ $pageTitle = '地图管理';
                         </div>
                         
                         <form method="post">
+                            <?php echo csrfField(); ?>
                             <input type="hidden" name="action" value="reset_npc_cities">
                             
                             <div class="warning-box">
@@ -445,27 +438,6 @@ $pageTitle = '地图管理';
                             <button type="submit" class="action-button btn-warning" 
                                     onclick="return confirm('确定要重生所有NPC城池吗？')">
                                 重生NPC城池
-                            </button>
-                        </form>
-                    </div>
-                    
-                    <!-- 清除地图 -->
-                    <div class="action-card">
-                        <div class="action-title">清除地图数据</div>
-                        <div class="action-desc">
-                            清除所有地图数据，包括玩家城池和占领信息。
-                        </div>
-                        
-                        <form method="post">
-                            <input type="hidden" name="action" value="clear_map">
-                            
-                            <div class="danger-box">
-                                <strong>危险操作：</strong>这将删除所有地图数据，包括玩家的城池和领地！此操作不可撤销！
-                            </div>
-                            
-                            <button type="submit" class="action-button btn-danger" 
-                                    onclick="return confirm('警告：这将删除所有地图数据！\n包括玩家的城池和领地！\n此操作不可撤销！\n\n确定要继续吗？')">
-                                清除地图数据
                             </button>
                         </form>
                     </div>

@@ -17,11 +17,17 @@ if (!$user->isValid()) {
     exit;
 }
 
-// 获取排名类型
-$rankingType = isset($_GET['type']) ? $_GET['type'] : 'level';
-$validTypes = ['forces', 'level', 'cities', 'generals', 'combat_power', 'resources'];
-if (!in_array($rankingType, $validTypes)) {
-    $rankingType = 'level';
+// 玩家等级仅作旧数据兼容，不再提供等级排行 / Player level is legacy-only and no longer has a leaderboard
+$rankingType = isset($_GET['type']) ? $_GET['type'] : 'forces';
+$validTypes = [
+    'forces',
+    'cities',
+    'generals',
+    'combat_power',
+    'resources'
+];
+if (!in_array($rankingType, $validTypes, true)) {
+    $rankingType = 'forces';
 }
 
 // 获取分页参数
@@ -40,7 +46,8 @@ function getForceRankingEntries() {
     }
 
     $db = Database::getInstance()->getConnection();
-    $query = "SELECT u.user_id, u.username, u.level, u.created_at,
+    $query = "SELECT u.user_id, u.username,
+                     u.registration_date AS created_at,
                      (
                        SELECT COUNT(*)
                        FROM cities c
@@ -88,7 +95,6 @@ function getForceRankingEntries() {
             $grouped[$ownerId] = [
                 'user_id' => $ownerId,
                 'username' => (string) $owner['username'],
-                'level' => 0,
                 'created_at' => (string) $row['created_at'],
                 'member_count' => 0,
                 'city_count' => 0,
@@ -96,10 +102,6 @@ function getForceRankingEntries() {
             ];
         }
 
-        $grouped[$ownerId]['level'] = max(
-            (int) $grouped[$ownerId]['level'],
-            (int) $row['level']
-        );
         if (strcmp(
             (string) $row['created_at'],
             (string) $grouped[$ownerId]['created_at']
@@ -124,7 +126,8 @@ function getForceRankingEntries() {
         if ($comparison !== 0) {
             return $comparison;
         }
-        $comparison = (int) $right['level'] <=> (int) $left['level'];
+        $comparison = (int) $right['member_count']
+            <=> (int) $left['member_count'];
         if ($comparison !== 0) {
             return $comparison;
         }
@@ -159,39 +162,36 @@ function getRankingData($type, $limit, $offset) {
     $db = Database::getInstance()->getConnection();
     
     switch ($type) {
-        case 'level':
-            $query = "SELECT u.user_id, u.username, u.level, u.created_at,
-                             (SELECT COUNT(*) FROM cities c WHERE c.owner_id = u.user_id) as city_count
-                      FROM users u 
-                      ORDER BY u.level DESC, u.created_at ASC 
-                      LIMIT ? OFFSET ?";
-            break;
-            
         case 'cities':
-            $query = "SELECT u.user_id, u.username, u.level, u.created_at,
+            $query = "SELECT u.user_id, u.username,
+                             u.registration_date AS created_at,
                              COUNT(c.city_id) as city_count
-                      FROM users u 
+                      FROM users u
                       LEFT JOIN cities c ON u.user_id = c.owner_id
-                      GROUP BY u.user_id 
-                      ORDER BY city_count DESC, u.level DESC 
+                      GROUP BY u.user_id, u.username, u.registration_date
+                      ORDER BY city_count DESC, u.registration_date ASC,
+                               u.user_id ASC
                       LIMIT ? OFFSET ?";
             break;
             
         case 'generals':
-            $query = "SELECT u.user_id, u.username, u.level, u.created_at,
+            $query = "SELECT u.user_id, u.username,
+                             u.registration_date AS created_at,
                              COUNT(g.general_id) as general_count,
                              (SELECT COUNT(*) FROM cities c WHERE c.owner_id = u.user_id) as city_count
-                      FROM users u 
+                      FROM users u
                       LEFT JOIN generals g ON u.user_id = g.owner_id
-                      GROUP BY u.user_id 
-                      ORDER BY general_count DESC, u.level DESC 
+                      GROUP BY u.user_id, u.username, u.registration_date
+                      ORDER BY general_count DESC, u.registration_date ASC,
+                               u.user_id ASC
                       LIMIT ? OFFSET ?";
             break;
             
         case 'combat_power':
-            $query = "SELECT u.user_id, u.username, u.level, u.created_at,
-                             COALESCE(SUM(au.quantity * 
-                                 CASE au.type 
+            $query = "SELECT u.user_id, u.username,
+                             u.registration_date AS created_at,
+                             COALESCE(SUM(au.quantity *
+                                 CASE au.soldier_type
                                      WHEN 'pawn' THEN 1
                                      WHEN 'knight' THEN 2
                                      WHEN 'rook' THEN 2
@@ -202,22 +202,29 @@ function getRankingData($type, $limit, $offset) {
                                  END * au.level
                              ), 0) as combat_power,
                              (SELECT COUNT(*) FROM cities c WHERE c.owner_id = u.user_id) as city_count
-                      FROM users u 
+                      FROM users u
                       LEFT JOIN armies a ON u.user_id = a.owner_id
                       LEFT JOIN army_units au ON a.army_id = au.army_id
-                      GROUP BY u.user_id 
-                      ORDER BY combat_power DESC, u.level DESC 
+                      GROUP BY u.user_id, u.username, u.registration_date
+                      ORDER BY combat_power DESC, u.registration_date ASC,
+                               u.user_id ASC
                       LIMIT ? OFFSET ?";
             break;
             
         case 'resources':
-            $query = "SELECT u.user_id, u.username, u.level, u.created_at,
-                             (r.bright_crystal + r.warm_crystal + r.cold_crystal + 
-                              r.green_crystal + r.day_crystal + r.night_crystal) as total_resources,
+            $query = "SELECT u.user_id, u.username,
+                             u.registration_date AS created_at,
+                             COALESCE(
+                                 r.bright_crystal + r.warm_crystal
+                                 + r.cold_crystal + r.green_crystal
+                                 + r.day_crystal + r.night_crystal,
+                                 0
+                             ) as total_resources,
                              (SELECT COUNT(*) FROM cities c WHERE c.owner_id = u.user_id) as city_count
-                      FROM users u 
+                      FROM users u
                       LEFT JOIN resources r ON u.user_id = r.user_id
-                      ORDER BY total_resources DESC, u.level DESC 
+                      ORDER BY total_resources DESC, u.registration_date ASC,
+                               u.user_id ASC
                       LIMIT ? OFFSET ?";
             break;
             
@@ -274,7 +281,6 @@ $pageTitle = '排行榜';
 // 排名类型名称映射
 $typeNames = [
     'forces' => '势力领地排行',
-    'level' => '等级排行',
     'cities' => '城池排行',
     'generals' => '武将排行',
     'combat_power' => '战力排行',
@@ -410,11 +416,6 @@ $typeNames = [
             border-radius: 3px;
         }
         
-        .user-level {
-            color: #7f8c8d;
-            font-size: 14px;
-        }
-        
         .stat-value {
             font-weight: bold;
             color: #27ae60;
@@ -541,7 +542,6 @@ $typeNames = [
                             <tr>
                                 <th>排名</th>
                                 <th><?php echo $rankingType === 'forces' ? '势力代表' : '用户'; ?></th>
-                                <th>等级</th>
                                 <th>城池</th>
                                 <?php if ($rankingType === 'forces'): ?>
                                 <th>贡献者</th>
@@ -581,9 +581,6 @@ $typeNames = [
                                         <?php echo $rankingType === 'forces' ? '(你的势力)' : '(你)'; ?>
                                         <?php endif; ?>
                                     </div>
-                                </td>
-                                <td>
-                                    <span class="user-level">Lv.<?php echo $ranking['level']; ?></span>
                                 </td>
                                 <td>
                                     <span class="stat-value"><?php echo $ranking['city_count']; ?></span>

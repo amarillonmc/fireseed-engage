@@ -25,8 +25,10 @@ if (!$adminManager->hasPermission('view_users')) {
 $error = '';
 $success = '';
 
-// 处理用户操作
-if ($_SERVER['REQUEST_METHOD'] === 'POST') {
+// 所有后台用户变更都要求POST与CSRF令牌 / Require POST and a CSRF token for every user mutation
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && !validateCsrfToken()) {
+    $error = '请求已过期，请刷新页面后重试 / Request expired; refresh and try again.';
+} elseif ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $action = $_POST['action'] ?? '';
     $targetUserId = intval($_POST['user_id'] ?? 0);
     
@@ -49,33 +51,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 }
             } else {
                 $error = '您没有权限修改用户资源';
-            }
-            break;
-            
-        case 'update_level':
-            if ($adminManager->hasPermission('edit_user_basic')) {
-                $level = intval($_POST['level'] ?? 1);
-                if ($adminManager->updateUserLevel($targetUserId, $level)) {
-                    $success = '用户等级更新成功';
-                } else {
-                    $error = '用户等级更新失败';
-                }
-            } else {
-                $error = '您没有权限修改用户等级';
-            }
-            break;
-            
-        case 'update_circuit_points':
-            if ($adminManager->hasPermission('edit_user_basic')) {
-                $circuitPoints = intval($_POST['circuit_points'] ?? 0);
-                $maxCircuitPoints = intval($_POST['max_circuit_points'] ?? 1);
-                if ($adminManager->updateUserCircuitPoints($targetUserId, $circuitPoints, $maxCircuitPoints)) {
-                    $success = '用户思考回路更新成功';
-                } else {
-                    $error = '用户思考回路更新失败';
-                }
-            } else {
-                $error = '您没有权限修改用户思考回路';
             }
             break;
             
@@ -479,7 +454,7 @@ $pageTitle = '用户管理';
                     <thead>
                         <tr>
                             <th>用户</th>
-                            <th>等级</th>
+                            <th>永久成长上限</th>
                             <th>管理员</th>
                             <th>注册时间</th>
                             <th>最后登录</th>
@@ -492,7 +467,7 @@ $pageTitle = '用户管理';
                             <td>
                                 <div class="user-info">
                                     <div class="user-avatar">
-                                        <?php echo strtoupper(substr($userData['username'], 0, 1)); ?>
+                                        <?php echo escapeHtml(strtoupper(substr($userData['username'], 0, 1))); ?>
                                     </div>
                                     <div>
                                         <div class="user-name"><?php echo htmlspecialchars($userData['username']); ?></div>
@@ -501,7 +476,14 @@ $pageTitle = '用户管理';
                                 </div>
                             </td>
                             <td>
-                                <strong>Lv.<?php echo $userData['level']; ?></strong>
+                                <div>
+                                    思考回路：
+                                    <strong><?php echo number_format((int) $userData['max_circuit_points']); ?></strong>
+                                </div>
+                                <div>
+                                    武将 COST：
+                                    <strong><?php echo number_format((float) $userData['max_general_cost'], 1); ?></strong>
+                                </div>
                             </td>
                             <td>
                                 <?php if ($userData['admin_level'] > 0): ?>
@@ -520,22 +502,18 @@ $pageTitle = '用户管理';
                             </td>
                             <td>
                                 <?php if ($adminManager->hasPermission('edit_user_resources')): ?>
-                                <button class="action-button btn-primary" 
-                                        onclick="editUserResources(<?php echo $userData['user_id']; ?>, '<?php echo htmlspecialchars($userData['username']); ?>')">
+                                <button class="action-button btn-primary edit-resources-button"
+                                        data-user-id="<?php echo (int) $userData['user_id']; ?>"
+                                        data-username="<?php echo escapeHtml($userData['username']); ?>">
                                     资源
                                 </button>
                                 <?php endif; ?>
                                 
-                                <?php if ($adminManager->hasPermission('edit_user_basic')): ?>
-                                <button class="action-button btn-warning" 
-                                        onclick="editUserBasic(<?php echo $userData['user_id']; ?>, '<?php echo htmlspecialchars($userData['username']); ?>', <?php echo $userData['level']; ?>)">
-                                    基础
-                                </button>
-                                <?php endif; ?>
-                                
                                 <?php if ($adminManager->hasPermission('manage_admins')): ?>
-                                <button class="action-button btn-danger" 
-                                        onclick="editUserAdmin(<?php echo $userData['user_id']; ?>, '<?php echo htmlspecialchars($userData['username']); ?>', <?php echo $userData['admin_level']; ?>)">
+                                <button class="action-button btn-danger edit-admin-button"
+                                        data-user-id="<?php echo (int) $userData['user_id']; ?>"
+                                        data-username="<?php echo escapeHtml($userData['username']); ?>"
+                                        data-admin-level="<?php echo (int) $userData['admin_level']; ?>">
                                     权限
                                 </button>
                                 <?php endif; ?>
@@ -588,6 +566,7 @@ $pageTitle = '用户管理';
                 <span class="close" onclick="closeModal('resourceModal')">&times;</span>
             </div>
             <form method="post">
+                <?php echo csrfField(); ?>
                 <input type="hidden" name="action" value="update_resources">
                 <input type="hidden" name="user_id" id="resource_user_id">
                 
@@ -637,38 +616,6 @@ $pageTitle = '用户管理';
         </div>
     </div>
 
-    <!-- 编辑用户基础信息模态框 -->
-    <div id="basicModal" class="modal">
-        <div class="modal-content">
-            <div class="modal-header">
-                <div class="modal-title">编辑用户基础信息</div>
-                <span class="close" onclick="closeModal('basicModal')">&times;</span>
-            </div>
-            <form method="post">
-                <input type="hidden" name="action" value="update_level">
-                <input type="hidden" name="user_id" id="basic_user_id">
-                
-                <div class="form-group">
-                    <label class="form-label">用户名</label>
-                    <input type="text" id="basic_username" class="form-input" readonly>
-                </div>
-                
-                <div class="form-group">
-                    <label class="form-label">用户等级</label>
-                    <input type="number" name="level" id="basic_level" class="form-input" min="1" max="100" required>
-                </div>
-                
-                <div style="text-align: right; margin-top: 20px;">
-                    <button type="button" onclick="closeModal('basicModal')" 
-                            style="margin-right: 10px; padding: 8px 16px; background: #95a5a6; color: white; border: none; border-radius: 4px;">
-                        取消
-                    </button>
-                    <button type="submit" class="action-button btn-primary">保存</button>
-                </div>
-            </form>
-        </div>
-    </div>
-
     <!-- 编辑管理员权限模态框 -->
     <div id="adminModal" class="modal">
         <div class="modal-content">
@@ -677,6 +624,7 @@ $pageTitle = '用户管理';
                 <span class="close" onclick="closeModal('adminModal')">&times;</span>
             </div>
             <form method="post">
+                <?php echo csrfField(); ?>
                 <input type="hidden" name="action" value="set_admin_level">
                 <input type="hidden" name="user_id" id="admin_user_id">
                 
@@ -732,19 +680,32 @@ $pageTitle = '用户管理';
             document.getElementById('resourceModal').style.display = 'block';
         }
         
-        function editUserBasic(userId, username, level) {
-            document.getElementById('basic_user_id').value = userId;
-            document.getElementById('basic_username').value = username;
-            document.getElementById('basic_level').value = level;
-            document.getElementById('basicModal').style.display = 'block';
-        }
-        
         function editUserAdmin(userId, username, adminLevel) {
             document.getElementById('admin_user_id').value = userId;
             document.getElementById('admin_username').value = username;
             document.getElementById('admin_level').value = adminLevel;
             document.getElementById('adminModal').style.display = 'block';
         }
+
+        // 从HTML数据属性读取用户名，避免拼接到脚本源码 / Read usernames from HTML data attributes instead of script source
+        document.querySelectorAll('.edit-resources-button').forEach(function(button) {
+            button.addEventListener('click', function() {
+                editUserResources(
+                    Number(button.dataset.userId),
+                    button.dataset.username || ''
+                );
+            });
+        });
+
+        document.querySelectorAll('.edit-admin-button').forEach(function(button) {
+            button.addEventListener('click', function() {
+                editUserAdmin(
+                    Number(button.dataset.userId),
+                    button.dataset.username || '',
+                    Number(button.dataset.adminLevel)
+                );
+            });
+        });
         
         function closeModal(modalId) {
             document.getElementById(modalId).style.display = 'none';
@@ -752,7 +713,7 @@ $pageTitle = '用户管理';
         
         // 点击模态框外部关闭
         window.onclick = function(event) {
-            const modals = ['resourceModal', 'basicModal', 'adminModal'];
+            const modals = ['resourceModal', 'adminModal'];
             modals.forEach(modalId => {
                 const modal = document.getElementById(modalId);
                 if (event.target === modal) {

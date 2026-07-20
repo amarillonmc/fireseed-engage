@@ -27,43 +27,43 @@ function getFacilityConstructionOptions() {
         'resource_production' => [
             'name' => '资源产出点',
             'seconds' => 1800,
-            'cost' => ['bright' => 500, 'warm' => 500, 'cold' => 500, 'green' => 500, 'day' => 500],
+            'cost' => ['warm' => 500, 'cold' => 500, 'green' => 500, 'day' => 500],
             'requires_subtype' => true
         ],
         'barracks' => [
             'name' => '兵营',
             'seconds' => 3600,
-            'cost' => ['bright' => 1000, 'warm' => 500, 'cold' => 500, 'green' => 500, 'day' => 500],
+            'cost' => ['warm' => 500, 'cold' => 500, 'green' => 500, 'day' => 500],
             'requires_subtype' => false
         ],
         'research_lab' => [
             'name' => '研究所',
             'seconds' => 7200,
-            'cost' => ['bright' => 2000, 'warm' => 1000, 'cold' => 1000, 'green' => 1000, 'day' => 1000, 'night' => 1000],
+            'cost' => ['warm' => 1000, 'cold' => 1000, 'green' => 1000, 'day' => 1000],
             'requires_subtype' => false
         ],
         'dormitory' => [
             'name' => '宿舍',
             'seconds' => 1800,
-            'cost' => ['bright' => 500, 'warm' => 500, 'cold' => 500, 'green' => 500],
+            'cost' => ['warm' => 500, 'cold' => 500, 'green' => 500, 'day' => 500],
             'requires_subtype' => false
         ],
         'storage' => [
             'name' => '贮存所',
             'seconds' => 1800,
-            'cost' => ['bright' => 500, 'warm' => 500, 'cold' => 500, 'green' => 500],
+            'cost' => ['warm' => 500, 'cold' => 500, 'green' => 500, 'day' => 500],
             'requires_subtype' => false
         ],
         'watchtower' => [
             'name' => '瞭望台',
             'seconds' => 3600,
-            'cost' => ['bright' => 1000, 'warm' => 500, 'cold' => 500, 'green' => 500, 'day' => 500, 'night' => 1000],
+            'cost' => ['warm' => 500, 'cold' => 500, 'green' => 500, 'day' => 500],
             'requires_subtype' => false
         ],
         'workshop' => [
             'name' => '工程所',
             'seconds' => 3600,
-            'cost' => ['bright' => 1000, 'warm' => 1000, 'cold' => 1000, 'green' => 1000, 'day' => 500],
+            'cost' => ['warm' => 1000, 'cold' => 1000, 'green' => 1000, 'day' => 500],
             'requires_subtype' => false
         ]
     ];
@@ -113,19 +113,25 @@ function deductConstructionResources($db, $userId, $cost) {
     $green = isset($cost['green']) ? (int) $cost['green'] : 0;
     $day = isset($cost['day']) ? (int) $cost['day'] : 0;
     $night = isset($cost['night']) ? (int) $cost['night'] : 0;
-    $now = date('Y-m-d H:i:s');
-
     $query = "UPDATE resources
               SET bright_crystal = bright_crystal - ?,
                   warm_crystal = warm_crystal - ?,
                   cold_crystal = cold_crystal - ?,
                   green_crystal = green_crystal - ?,
                   day_crystal = day_crystal - ?,
-                  night_crystal = night_crystal - ?,
-                  last_update = ?
+                  night_crystal = night_crystal - ?
               WHERE user_id = ?";
     $stmt = $db->prepare($query);
-    $stmt->bind_param('iiiiiisi', $bright, $warm, $cold, $green, $day, $night, $now, $userId);
+    $stmt->bind_param(
+        'iiiiiii',
+        $bright,
+        $warm,
+        $cold,
+        $green,
+        $day,
+        $night,
+        $userId
+    );
     $updated = $stmt->execute() && $stmt->affected_rows === 1;
     $stmt->close();
 
@@ -186,9 +192,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         } else {
             if (!$options[$type]['requires_subtype']) {
                 $subtype = null;
-            } elseif ($subtype === 'night') {
-                // 夜静静产出点需要全部五种常规资源 / Night production points require all five regular resources
-                $options[$type]['cost']['night'] = 0;
             } else {
                 // 资源点不消耗其自身产出的资源 / A production point does not consume its own output resource
                 unset($options[$type]['cost'][$subtype]);
