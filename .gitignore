@@ -3,6 +3,7 @@ config/local.php
 config/installed.lock
 config/.installing.lock
 config/.install-token-consumed
+config/install-token.php
 config/.*-installer-backup-*.php
 config/.fireseed-install-*
 

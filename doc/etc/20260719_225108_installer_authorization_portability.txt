@@ -1,0 +1,49 @@
+种火集结号 - 安装器授权可移植性修正记录
+Fireseed Engage - Installer authorization portability change log
+
+完成时间 / Completed at
+2026-07-19 22:51:08 -04:00
+
+一、修改原因 / Rationale
+
+1. 强制要求 PHP 进程环境变量会阻止无法注入环境变量的 cPanel／共享主机完成安装。
+   Requiring a PHP process environment variable prevented installation on cPanel and shared hosting without environment injection.
+2. 服务器操作者可通过严格的回环监听和防火墙隔离本机安装器，因此直接无代理回环访问不需要额外令牌。
+   Operators can isolate a local installer through strict loopback binding and firewall rules, so direct unproxied loopback access needs no additional token.
+3. “未绑定域名”本身不构成安全边界；授权仍必须验证真实对端、Host 和代理头。
+   An absent domain binding is not itself a security boundary; authorization must still validate the actual peer, Host, and forwarding headers.
+
+二、授权规则 / Authorization rules
+
+1. 对端为 127.0.0.1 或 ::1、Host 为 localhost 或对应回环 IP，且不存在转发头时，安装器直接建立并轮换本机会话。
+   A loopback peer and loopback Host without forwarding headers establishes and rotates a local installer session directly.
+2. 其他请求仅可通过 HTTPS 使用一次性令牌授权；令牌可来自 FIRESEED_INSTALL_TOKEN 或被 Git 忽略的 config/install-token.php，环境变量优先。
+   All other requests require HTTPS token authorization from FIRESEED_INSTALL_TOKEN or the Git-ignored config/install-token.php, with the environment taking precedence.
+3. 两类令牌均强制至少 32 字节；短令牌或无效令牌文件失败关闭，不会自动降级到次级来源。
+   Both token forms require at least 32 bytes; short tokens and invalid token files fail closed without falling back to a secondary source.
+4. 端口 443 不再被当作 TLS 证明。仅明确的 HTTPS 服务器变量，或开启 FIRESEED_TRUST_PROXY_HEADERS 后可信代理提供的首个 X-Forwarded-Proto: https，可证明远程授权通道安全。
+   Port 443 is no longer treated as proof of TLS. Only an explicit HTTPS server signal or the first trusted X-Forwarded-Proto value after enabling FIRESEED_TRUST_PROXY_HEADERS proves a secure remote authorization channel.
+5. 令牌仅经 POST 比对；成功后轮换会话，以独占创建标记原子消费，并尝试删除文件令牌。
+   Tokens are compared only through POST; success rotates the session, atomically consumes the credential through exclusive marker creation, and attempts to delete file tokens.
+6. config/installed.lock、Web 服务器目录保护和安装完成后封锁 install.php 的要求保持不变。
+   The config/installed.lock guard, server directory protections, and requirement to block install.php after setup remain unchanged.
+
+三、兼容与文档 / Compatibility and documentation
+
+1. README 记录直接回环、环境变量和 cPanel 文件令牌三种安装方式及授权会话恢复步骤。
+   README documents direct loopback, environment-token, and cPanel file-token installation plus authorization-session recovery.
+2. config/install-token.php 已加入 .gitignore，并继续受 config/ 目录 Web 访问限制保护。
+   config/install-token.php is ignored by Git and remains protected by the config/ web-access deny rules.
+3. 科研经济静态测试先统一换行符后再匹配，避免 Windows CRLF 导致与业务无关的失败。
+   The research-economy invariant test now normalizes line endings before matching, avoiding Windows CRLF-only failures unrelated to game behavior.
+
+四、验证与复审 / Validation and review
+
+1. 安装授权专项测试共 15 项断言通过，覆盖回环边界、代理边界、TLS 证据、来源优先级、最短长度和失败关闭。
+   All 15 installer-authorization assertions passed across loopback, proxy, TLS-evidence, source-precedence, minimum-length, and fail-closed boundaries.
+2. 全套 21 个 PHP 测试文件共 927 项断言通过；全仓库 142 个 PHP 文件语法检查通过。
+   All 21 PHP test files passed with 927 assertions, and all 142 PHP files passed syntax checks.
+3. assets/js 下 2 个 JavaScript 文件语法检查通过，git diff --check 无补丁空白错误。
+   Both JavaScript files under assets/js passed syntax checks, and git diff --check reported no patch whitespace errors.
+4. 标准与规格两路独立复审确认修正后没有剩余 P1/P2。
+   Independent standards and specification reviews found no remaining P1/P2 after the fixes.

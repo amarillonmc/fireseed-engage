@@ -437,7 +437,8 @@ assertServiceInvariant(
         && strpos(
             $gitignore,
             'config/.install-token-consumed'
-        ) !== false,
+        ) !== false
+        && strpos($gitignore, 'config/install-token.php') !== false,
     'Installer authorization and execution locks must remain serialized and untracked'
 );
 assertServiceInvariant(
