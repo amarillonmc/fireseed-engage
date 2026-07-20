@@ -101,7 +101,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     if ($userId) {
                         $success = '注册成功，请登录';
                     } else {
-                        $error = '注册失败，用户名或电子邮箱可能已被使用';
+                        $error = '注册失败：用户名或邮箱可能已使用，或当前地图已无主城空格'
+                            . ' / Registration failed: the identity may be in use or the world has no capital space.';
                     }
                 }
             }

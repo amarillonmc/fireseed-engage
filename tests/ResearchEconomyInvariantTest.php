@@ -12,8 +12,10 @@ $files = [
     'city' => '/includes/classes/City.php',
     'army' => '/includes/classes/Army.php',
     'general' => '/includes/classes/General.php',
+    'general_assignment' => '/includes/classes/GeneralAssignment.php',
     'user' => '/includes/classes/User.php',
     'subbase' => '/includes/classes/SubBaseService.php',
+    'vassal' => '/includes/classes/VassalService.php',
     'build' => '/build.php',
     'facility_page' => '/facility.php',
     'soldier' => '/includes/classes/Soldier.php',
@@ -279,8 +281,12 @@ assertResearchEconomy(
     strpos($sources['user'], '$this->db->begin_transaction()') !== false
         && strpos($sources['user'], '$this->db->commit()') !== false
         && strpos($sources['user'], 'initial_bright_crystal') !== false
-        && strpos($sources['user'], 'initial_night_crystal') !== false,
-    'Account and configured initial wallet creation must be atomic'
+        && strpos($sources['user'], 'initial_night_crystal') !== false
+        && strpos(
+            $sources['user'],
+            'City::createInitialPlayerCityInCurrentTransaction($userId)'
+        ) !== false,
+    'Account, configured wallet, and initial capital creation must be atomic'
 );
 assertResearchEconomy(
     strpos($sources['user'], 'UPDATE users SET level = ? WHERE user_id = ?') !== false
@@ -309,6 +315,55 @@ assertResearchEconomy(
         && strpos($generalAssignment, 'getCityGenerals(') === false
         && strpos($generalAssignment, 'getArmyGenerals(') === false,
     'General assignment must serialize cap validation and insertion under row locks'
+);
+assertResearchEconomy(
+    strpos(
+        $generalAssignment,
+        'public static function enforceAssignmentLimitsInCurrentTransaction'
+    ) !== false
+        && substr_count(
+            $generalAssignment,
+            'enforceAssignmentLimitsInCurrentTransaction('
+        ) >= 3
+        && strpos(
+            $generalAssignment,
+            'calculateOverflowAssignmentIds('
+        ) !== false,
+    'Direct assignment must use the central roster-limit authority'
+);
+assertResearchEconomy(
+    strpos(
+        $sources['battle'],
+        "General::enforceAssignmentLimitsInCurrentTransaction(\n"
+            . "                    'city'"
+    ) !== false
+        && strpos($sources['battle'], "'unassign'") !== false
+        && strpos($sources['battle'], '$movedAssignmentIds') !== false,
+    'Battle army merges must unassign transfers that exceed the city roster'
+);
+assertResearchEconomy(
+    strpos(
+        $sources['vassal'],
+        'General::enforceAssignmentLimitsInCurrentTransaction('
+    ) !== false
+        && strpos($sources['vassal'], "'unassign'") !== false
+        && strpos($sources['vassal'], '$movedAssignmentIds') !== false,
+    'Vassal relocation must unassign transfers that exceed the new capital roster'
+);
+assertResearchEconomy(
+    strpos(
+        $sources['general_assignment'],
+        'new General((int) $generalId)'
+    ) !== false
+        && strpos(
+            $sources['general_assignment'],
+            'assignGeneral($assignmentType, (int) $targetId)'
+        ) !== false
+        && strpos(
+            $sources['general_assignment'],
+            'INSERT INTO general_assignments'
+        ) === false,
+    'The compatibility assignment API must not bypass the central assignment transaction'
 );
 
 foreach ([

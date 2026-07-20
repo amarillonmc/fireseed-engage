@@ -53,14 +53,61 @@ class GameConfig {
     }
     
     /**
-     * 设置配置值
-     * @param string $key 配置键
-     * @param mixed $value 配置值
-     * @param string $description 描述
+     * 设置配置值 / Set a configuration value
+     * @param string $key 配置键 / Configuration key
+     * @param mixed $value 配置值 / Configuration value
+     * @param string $description 描述 / Description
      * @param string|null $category 分类；更新时为空则保留原分类 / Category; null preserves it on update
      * @return bool
      */
     public function set($key, $value, $description = null, $category = null) {
+        $mapCapacityKeys = [
+            'map_resource_tile_ratio',
+            'map_npc_fort_tile_ratio',
+            'max_players'
+        ];
+        if (!in_array($key, $mapCapacityKeys, true)) {
+            return $this->setUnchecked(
+                $key,
+                $value,
+                $description,
+                $category
+            );
+        }
+
+        $previousCache = self::$cache;
+        if (!$this->db->begin_transaction()) {
+            return false;
+        }
+        $success = $this->validateMapCapacityChanges([$key => $value])
+            && $this->setUnchecked(
+                $key,
+                $value,
+                $description,
+                $category
+            );
+        if (!$success || !$this->db->commit()) {
+            $this->db->rollback();
+            self::$cache = $previousCache;
+            return false;
+        }
+        return true;
+    }
+
+    /**
+     * 保存已经完成组合校验的配置 / Persist a configuration after combined validation
+     * @param string $key 配置键 / Configuration key
+     * @param mixed $value 配置值 / Configuration value
+     * @param string|null $description 描述 / Description
+     * @param string|null $category 分类 / Category
+     * @return bool
+     */
+    private function setUnchecked(
+        $key,
+        $value,
+        $description = null,
+        $category = null
+    ) {
         // 转换值为字符串
         if (is_bool($value)) {
             $value = $value ? 'true' : 'false';
@@ -219,8 +266,8 @@ class GameConfig {
     }
     
     /**
-     * 批量更新配置
-     * @param array $configs 配置数组 [key => value]
+     * 批量更新配置 / Update configurations atomically
+     * @param array $configs 配置数组 [key => value] / Configuration map
      * @return bool
      */
     public function batchUpdate($configs) {
@@ -228,12 +275,14 @@ class GameConfig {
         if (!$this->db->begin_transaction()) {
             return false;
         }
-        $success = true;
+        $success = $this->validateMapCapacityChanges($configs);
         
-        foreach ($configs as $key => $value) {
-            if (!$this->set($key, $value)) {
-                $success = false;
-                break;
+        if ($success) {
+            foreach ($configs as $key => $value) {
+                if (!$this->setUnchecked($key, $value)) {
+                    $success = false;
+                    break;
+                }
             }
         }
 
@@ -348,6 +397,176 @@ class GameConfig {
      */
     public static function clearCache() {
         self::$cache = [];
+    }
+
+    /**
+     * 按整数配额判断地图内容能否保留所需空地 / Check integer world quotas against required empty capacity
+     * @param mixed $resourceRatio 资源点占比 / Resource-node ratio
+     * @param mixed $npcFortRatio NPC据点占比 / NPC-fort ratio
+     * @param mixed $requiredEmptyTiles 必须保留的空地数 / Required empty tiles
+     * @param mixed $totalTileCount 地图总格数 / Total map tiles
+     * @return bool
+     */
+    public static function areMapTileRatiosValid(
+        $resourceRatio,
+        $npcFortRatio,
+        $requiredEmptyTiles,
+        $totalTileCount
+    ) {
+        if (!is_numeric($resourceRatio)
+            || !is_numeric($npcFortRatio)
+            || !is_numeric($requiredEmptyTiles)
+            || !is_numeric($totalTileCount)) {
+            return false;
+        }
+
+        $resourceRatio = (float) $resourceRatio;
+        $npcFortRatio = (float) $npcFortRatio;
+        $requiredEmptyTiles = max(1, (int) $requiredEmptyTiles);
+        $totalTileCount = (int) $totalTileCount;
+        if ($resourceRatio < 0.0
+            || $resourceRatio > 1.0
+            || $npcFortRatio < 0.0
+            || $npcFortRatio > 1.0
+            || $totalTileCount <= $requiredEmptyTiles) {
+            return false;
+        }
+
+        $occupiedTileCount = (int) floor(
+            $totalTileCount * $resourceRatio
+        ) + (int) floor($totalTileCount * $npcFortRatio);
+        return $occupiedTileCount
+            <= $totalTileCount - $requiredEmptyTiles;
+    }
+
+    /**
+     * 以数据库现值和账号数校验地图容量变更 / Validate map capacity changes against stored values and account count
+     * @param array $configs 待保存配置 / Pending configurations
+     * @return bool
+     */
+    private function validateMapCapacityChanges($configs) {
+        $mapCapacityKeys = [
+            'map_resource_tile_ratio',
+            'map_npc_fort_tile_ratio',
+            'max_players'
+        ];
+        if (empty(array_intersect(
+            array_keys((array) $configs),
+            $mapCapacityKeys
+        ))) {
+            return true;
+        }
+
+        $capacity = [
+            'map_resource_tile_ratio' => 0.50,
+            'map_npc_fort_tile_ratio' => 0.25,
+            'max_players' => 1000
+        ];
+        $query = "SELECT `key`, `value`
+                  FROM game_config
+                  WHERE `key` IN (
+                    'map_resource_tile_ratio',
+                    'map_npc_fort_tile_ratio',
+                    'max_players'
+                  )
+                  FOR UPDATE";
+        $stmt = $this->db->prepare($query);
+        if (!$stmt || !$stmt->execute()) {
+            if ($stmt) {
+                $stmt->close();
+            }
+            return false;
+        }
+        $result = $stmt->get_result();
+        while ($result && ($row = $result->fetch_assoc())) {
+            $capacity[$row['key']] = $row['value'];
+        }
+        $stmt->close();
+        $storedMaxPlayers = max(1, (int) $capacity['max_players']);
+
+        foreach ($mapCapacityKeys as $key) {
+            if (array_key_exists($key, $configs)) {
+                $capacity[$key] = $configs[$key];
+            }
+        }
+        if (!is_numeric($capacity['max_players'])
+            || (int) $capacity['max_players'] < 1) {
+            return false;
+        }
+
+        $query = "SELECT COUNT(*) AS total FROM users";
+        $stmt = $this->db->prepare($query);
+        if (!$stmt || !$stmt->execute()) {
+            if ($stmt) {
+                $stmt->close();
+            }
+            return false;
+        }
+        $result = $stmt->get_result();
+        $row = $result ? $result->fetch_assoc() : null;
+        $stmt->close();
+        if (!$row) {
+            return false;
+        }
+        $playerCapacity = max(
+            (int) $capacity['max_players'],
+            (int) $row['total']
+        );
+        $requiredEmptyTiles = $playerCapacity
+            + (int) WORLD_SPECIAL_SITE_COUNT;
+        $totalTileCount = (int) MAP_WIDTH * (int) MAP_HEIGHT;
+        if (!self::areMapTileRatiosValid(
+            $capacity['map_resource_tile_ratio'],
+            $capacity['map_npc_fort_tile_ratio'],
+            $requiredEmptyTiles,
+            $totalTileCount
+        )) {
+            return false;
+        }
+
+        $proposedMaxPlayers = (int) $capacity['max_players'];
+        $raisesRegistrationCap = array_key_exists(
+            'max_players',
+            (array) $configs
+        ) && $proposedMaxPlayers > $storedMaxPlayers;
+        if (!$raisesRegistrationCap) {
+            return true;
+        }
+
+        // 注册上限立即生效，因此提高上限时还要核对当前世界，而不能只看下一张地图 / Registration caps apply immediately, so increases must fit the current world rather than only the next generation
+        $query = "SELECT
+                    (SELECT COUNT(*) FROM map_tiles) AS total_tiles,
+                    (
+                      SELECT COUNT(*)
+                      FROM map_tiles
+                      WHERE type = 'empty' AND owner_id IS NULL
+                    ) AS empty_tiles,
+                    (
+                      SELECT COUNT(DISTINCT owner_id)
+                      FROM cities
+                      WHERE is_main_city = 1
+                    ) AS placed_players";
+        $stmt = $this->db->prepare($query);
+        if (!$stmt || !$stmt->execute()) {
+            if ($stmt) {
+                $stmt->close();
+            }
+            return false;
+        }
+        $result = $stmt->get_result();
+        $world = $result ? $result->fetch_assoc() : null;
+        $stmt->close();
+        if (!$world) {
+            return false;
+        }
+        if ((int) $world['total_tiles'] > 0
+            && $proposedMaxPlayers
+                > (int) $world['placed_players']
+                    + (int) $world['empty_tiles']) {
+            return false;
+        }
+
+        return true;
     }
     
     /**

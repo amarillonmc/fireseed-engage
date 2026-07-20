@@ -7,6 +7,8 @@ define('MAP_WIDTH', 512);
 define('MAP_HEIGHT', 512);
 define('MAP_CENTER_X', 256);
 define('MAP_CENTER_Y', 256);
+// 银白之孔与十二门总数 / Total Silver Hole and Twelve Gateway sites
+define('WORLD_SPECIAL_SITE_COUNT', 13);
 
 // 地图格子类型
 define('TILE_TYPE_EMPTY', 'empty');

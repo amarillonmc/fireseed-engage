@@ -513,6 +513,30 @@ class City {
     }
 
     /**
+     * 当前世界是否仍有未占领主城空格 / Whether the current world has an unclaimed capital tile
+     * @return bool
+     */
+    public static function hasAvailableInitialCityTile() {
+        $db = Database::getInstance()->getConnection();
+        $query = "SELECT tile_id
+                  FROM map_tiles
+                  WHERE type = 'empty' AND owner_id IS NULL
+                  ORDER BY tile_id
+                  LIMIT 1";
+        $stmt = $db->prepare($query);
+        if (!$stmt || !$stmt->execute()) {
+            if ($stmt) {
+                $stmt->close();
+            }
+            return false;
+        }
+        $result = $stmt->get_result();
+        $available = $result && $result->num_rows === 1;
+        $stmt->close();
+        return $available;
+    }
+
+    /**
      * 在调用者事务中创建初始主城 / Create an initial main city in the caller's transaction
      *
      * 调用者必须已经开启事务并锁定当前赛季；本方法不会提交或回滚。
@@ -596,66 +620,115 @@ class City {
                     continue;
                 }
 
-                $level = 1;
-                $durability = 1000;
-                $maxDurability = 1000;
-                $isMainCity = 1;
-                $query = "INSERT INTO cities
-                             (name, owner_id, x, y, level, durability,
-                              max_durability, is_main_city)
-                          VALUES (?, ?, ?, ?, ?, ?, ?, ?)";
-                $stmt = $db->prepare($query);
-                $stmt->bind_param(
-                    'siiiiiii',
-                    $cityName,
+                return self::createInitialCityOnLockedTile(
+                    $db,
                     $userId,
+                    $cityName,
                     $x,
                     $y,
-                    $level,
-                    $durability,
-                    $maxDurability,
-                    $isMainCity
+                    (int) $tile['tile_id']
                 );
-                if (!$stmt->execute()) {
-                    $stmt->close();
-                    throw new RuntimeException(
-                        '创建主城失败 / Failed to create the main city'
-                    );
-                }
-                $cityId = (int) $db->insert_id;
-                $stmt->close();
-
-                $query = "UPDATE map_tiles
-                          SET type = 'player_city',
-                              subtype = NULL,
-                              owner_id = ?,
-                              resource_amount = NULL,
-                              npc_level = NULL,
-                              npc_garrison = 0,
-                              npc_respawn_time = NULL,
-                              is_visible = 1
-                          WHERE tile_id = ?
-                            AND type = 'empty'
-                            AND owner_id IS NULL";
-                $stmt = $db->prepare($query);
-                $tileId = (int) $tile['tile_id'];
-                $stmt->bind_param('ii', $userId, $tileId);
-                $updated = $stmt->execute()
-                    && $stmt->affected_rows === 1;
-                $stmt->close();
-                if (!$updated || !self::createInitialFacilities($cityId)) {
-                    throw new RuntimeException(
-                        '初始化主城失败 / Failed to initialize the main city'
-                    );
-                }
-
-                return $cityId;
             }
+        }
+
+        // 随机出生点未命中时穷尽式选取剩余空格，换季不再依赖概率 / Exhaustively fall back to a remaining empty tile so season rollover never depends on random hits
+        $query = "SELECT tile_id, x, y
+                  FROM map_tiles
+                  WHERE type = 'empty' AND owner_id IS NULL
+                  ORDER BY tile_id
+                  LIMIT 1
+                  FOR UPDATE";
+        $stmt = $db->prepare($query);
+        $stmt->execute();
+        $result = $stmt->get_result();
+        $fallbackTile = $result ? $result->fetch_assoc() : null;
+        $stmt->close();
+        if ($fallbackTile) {
+            return self::createInitialCityOnLockedTile(
+                $db,
+                $userId,
+                $cityName,
+                (int) $fallbackTile['x'],
+                (int) $fallbackTile['y'],
+                (int) $fallbackTile['tile_id']
+            );
         }
 
         throw new RuntimeException(
             '没有可用的主城位置 / No initial-city location is available'
         );
+    }
+
+    /**
+     * 在已锁定空格创建初始主城 / Create an initial capital on a locked empty tile
+     * @param mysqli $db 数据库连接 / Database connection
+     * @param int $userId 玩家ID / User ID
+     * @param string $cityName 城池名 / City name
+     * @param int $x X坐标 / X coordinate
+     * @param int $y Y坐标 / Y coordinate
+     * @param int $tileId 地图格ID / Map-tile ID
+     * @return int 新主城ID / New capital ID
+     */
+    private static function createInitialCityOnLockedTile(
+        $db,
+        $userId,
+        $cityName,
+        $x,
+        $y,
+        $tileId
+    ) {
+        $level = 1;
+        $durability = 1000;
+        $maxDurability = 1000;
+        $isMainCity = 1;
+        $query = "INSERT INTO cities
+                     (name, owner_id, x, y, level, durability,
+                      max_durability, is_main_city)
+                  VALUES (?, ?, ?, ?, ?, ?, ?, ?)";
+        $stmt = $db->prepare($query);
+        $stmt->bind_param(
+            'siiiiiii',
+            $cityName,
+            $userId,
+            $x,
+            $y,
+            $level,
+            $durability,
+            $maxDurability,
+            $isMainCity
+        );
+        if (!$stmt->execute()) {
+            $stmt->close();
+            throw new RuntimeException(
+                '创建主城失败 / Failed to create the main city'
+            );
+        }
+        $cityId = (int) $db->insert_id;
+        $stmt->close();
+
+        $query = "UPDATE map_tiles
+                  SET type = 'player_city',
+                      subtype = NULL,
+                      owner_id = ?,
+                      resource_amount = NULL,
+                      npc_level = NULL,
+                      npc_garrison = 0,
+                      npc_respawn_time = NULL,
+                      is_visible = 1
+                  WHERE tile_id = ?
+                    AND type = 'empty'
+                    AND owner_id IS NULL";
+        $stmt = $db->prepare($query);
+        $stmt->bind_param('ii', $userId, $tileId);
+        $updated = $stmt->execute() && $stmt->affected_rows === 1;
+        $stmt->close();
+        if (!$updated || !self::createInitialFacilities($cityId)) {
+            throw new RuntimeException(
+                '初始化主城失败 / Failed to initialize the main city'
+            );
+        }
+
+        return $cityId;
     }
 
     /**

@@ -64,13 +64,19 @@ class User {
     }
     
     /**
-     * 创建新用户
-     * @param string $username 用户名
-     * @param string $password 密码
-     * @param string $email 邮箱
-     * @return bool|int 成功返回用户ID，失败返回false
+     * 原子创建新用户、资源与可选主城 / Atomically create a user, wallet, and optional capital
+     * @param string $username 用户名 / Username
+     * @param string $password 密码 / Password
+     * @param string $email 邮箱 / Email
+     * @param bool $createInitialCity 是否同时创建主城 / Whether to create the capital
+     * @return bool|int 成功返回用户ID，失败返回false / User ID on success, false otherwise
      */
-    public function createUser($username, $password, $email) {
+    public function createUser(
+        $username,
+        $password,
+        $email,
+        $createInitialCity = true
+    ) {
         // 检查用户名是否已存在
         $query = "SELECT user_id FROM users WHERE username = ?";
         $stmt = $this->db->prepare($query);
@@ -136,6 +142,10 @@ class User {
             return false;
         }
         try {
+            if ($createInitialCity) {
+                // 注册与地图写入共享赛季锁序 / Registration follows the world-action season lock order
+                lockSeasonForWorldAction($this->db);
+            }
             $query = "INSERT INTO users
                          (username, password, email, registration_date, level,
                           circuit_points, max_circuit_points, max_general_cost,
@@ -187,6 +197,11 @@ class User {
                 );
             }
             $resourceStmt->close();
+
+            if ($createInitialCity) {
+                // 账号、钱包与首城同成同败，绝不留下无处落城的玩家 / Account, wallet, and capital commit or roll back together
+                City::createInitialPlayerCityInCurrentTransaction($userId);
+            }
             if (!$this->db->commit()) {
                 throw new RuntimeException(
                     '提交玩家初始化失败 / Failed to commit player initialization'
@@ -570,7 +585,13 @@ class User {
      */
     public static function createAdminUser($username, $password, $email, $adminLevel = 9) {
         $user = new User();
-        $userId = $user->createUser($username, $password, $email);
+        // 安装管理员创建在地图生成之前，首城由正常世界流程补建 / Installation creates the administrator before the world and defers its capital
+        $userId = $user->createUser(
+            $username,
+            $password,
+            $email,
+            false
+        );
 
         if ($userId) {
             $user->setAdminLevel($adminLevel);

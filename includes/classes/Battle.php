@@ -894,16 +894,20 @@ class Battle {
             }
 
             // 先锁定该军武将，再把分配目标改为城池 / Lock army generals before changing their assignment target to the city
-            $query = "SELECT g.general_id
+            $query = "SELECT ga.assignment_id, g.general_id
                       FROM general_assignments ga
                       INNER JOIN generals g ON g.general_id = ga.general_id
                       WHERE ga.assignment_type = 'army' AND ga.target_id = ?
-                      ORDER BY g.general_id
+                      ORDER BY ga.assignment_id
                       FOR UPDATE";
             $stmt = $this->db->prepare($query);
             $stmt->bind_param('i', $armyId);
             $stmt->execute();
-            $stmt->get_result();
+            $result = $stmt->get_result();
+            $movedAssignmentIds = [];
+            while ($result && ($row = $result->fetch_assoc())) {
+                $movedAssignmentIds[] = (int) $row['assignment_id'];
+            }
             $stmt->close();
 
             $query = "UPDATE general_assignments
@@ -911,11 +915,24 @@ class Battle {
                       WHERE assignment_type = 'army' AND target_id = ?";
             $stmt = $this->db->prepare($query);
             $stmt->bind_param('ii', $cityId, $armyId);
-            if (!$stmt->execute()) {
+            $moved = $stmt->execute()
+                && $stmt->affected_rows === count($movedAssignmentIds);
+            if (!$moved) {
                 $stmt->close();
                 throw new RuntimeException('无法并入驻城武将 / Failed to merge army generals into city defense');
             }
             $stmt->close();
+
+            if (!empty($movedAssignmentIds)) {
+                // 城池先保留原驻将，超出人数或COST的转入武将回到未分配状态 / Preserve city incumbents and leave overflow transfers unassigned
+                General::enforceAssignmentLimitsInCurrentTransaction(
+                    'city',
+                    $cityId,
+                    $ownerId,
+                    'unassign',
+                    $movedAssignmentIds
+                );
+            }
 
             $query = "DELETE FROM armies
                       WHERE army_id = ? AND owner_id = ?

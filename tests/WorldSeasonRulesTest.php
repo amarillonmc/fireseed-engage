@@ -2,10 +2,13 @@
 // 种火集结号 - 全图可见、资源占领与赛季重置规则测试 / Fireseed Engage - full-map, resource occupation, and season reset rule tests
 
 $root = dirname(__DIR__);
+require_once $root . '/config/game_constants.php';
 require_once $root . '/includes/classes/MapGenerator.php';
+require_once $root . '/includes/classes/GameConfig.php';
 
 $map = file_get_contents($root . '/includes/classes/Map.php');
 $battle = file_get_contents($root . '/includes/classes/Battle.php');
+$city = file_get_contents($root . '/includes/classes/City.php');
 $generator = file_get_contents($root . '/includes/classes/MapGenerator.php');
 $season = file_get_contents($root . '/includes/classes/SeasonService.php');
 $seasonPage = file_get_contents($root . '/season.php');
@@ -15,6 +18,9 @@ $mapPage = file_get_contents($root . '/map.php');
 $mapScript = file_get_contents($root . '/assets/js/map.js');
 $mapSchema = file_get_contents($root . '/sql/map_tiles.sql');
 $gameConfig = file_get_contents($root . '/sql/game_config.sql');
+$gameConfigClass = file_get_contents(
+    $root . '/includes/classes/GameConfig.php'
+);
 $upgradeSql = file_get_contents(
     $root . '/sql/upgrade_20260719_world_season.sql'
 );
@@ -44,6 +50,8 @@ $weights = [
     'night' => 4
 ];
 $quotas = MapGenerator::calculateWeightedQuotas(1000, $weights);
+$totalTileCount = MAP_WIDTH * MAP_HEIGHT;
+$requiredEmptyTiles = 1000 + WORLD_SPECIAL_SITE_COUNT;
 assertWorldSeasonRule(
     array_sum($quotas) === 1000,
     'Weighted resource quotas must assign every configured resource tile'
@@ -52,6 +60,57 @@ assertWorldSeasonRule(
     $quotas['bright'] < $quotas['warm']
         && $quotas['night'] < $quotas['day'],
     'Bright and night resource nodes must be rarer than seasonal nodes'
+);
+assertWorldSeasonRule(
+    GameConfig::areMapTileRatiosValid(
+        0.50,
+        0.49,
+        $requiredEmptyTiles,
+        $totalTileCount
+    ),
+    'Map quotas with enough player and special-site capacity must remain valid'
+);
+assertWorldSeasonRule(
+    !GameConfig::areMapTileRatiosValid(
+        0.50,
+        0.499999,
+        $requiredEmptyTiles,
+        $totalTileCount
+    ),
+    'A sub-100-percent ratio must still fail when integer quotas leave too few capital tiles'
+);
+assertWorldSeasonRule(
+    !GameConfig::areMapTileRatiosValid(
+        0.50,
+        0.50,
+        $requiredEmptyTiles,
+        $totalTileCount
+    ),
+    'Resource and NPC shares totaling exactly one must leave capital space'
+);
+assertWorldSeasonRule(
+    !GameConfig::areMapTileRatiosValid(
+        0.80,
+        0.30,
+        $requiredEmptyTiles,
+        $totalTileCount
+    ),
+    'Resource and NPC shares totaling more than one must be rejected'
+);
+assertWorldSeasonRule(
+    !GameConfig::areMapTileRatiosValid(
+        -0.01,
+        0.20,
+        $requiredEmptyTiles,
+        $totalTileCount
+    )
+        && !GameConfig::areMapTileRatiosValid(
+            'invalid',
+            0.20,
+            $requiredEmptyTiles,
+            $totalTileCount
+        ),
+    'Map shares must reject out-of-range and nonnumeric values'
 );
 
 assertWorldSeasonRule(
@@ -164,6 +223,58 @@ assertWorldSeasonRule(
         && strpos($generator, '(MAP_WIDTH * MAP_HEIGHT) * 0.25') === false,
     'Provisional world-generation values must come from central configuration'
 );
+assertWorldSeasonRule(
+    strpos($gameConfigClass, 'validateMapCapacityChanges($configs)') !== false
+        && strpos($gameConfigClass, 'areMapTileRatiosValid(') !== false
+        && strpos($gameConfigClass, "'max_players'") !== false
+        && strpos(
+            $gameConfigClass,
+            'SELECT COUNT(*) AS total FROM users'
+        ) !== false
+        && strpos($gameConfigClass, 'WORLD_SPECIAL_SITE_COUNT') !== false
+        && strpos($gameConfigClass, 'FOR UPDATE') !== false,
+    'Single and batch writes must reserve integer capacity for accounts and special sites'
+);
+assertWorldSeasonRule(
+    strpos($gameConfigClass, '$raisesRegistrationCap') !== false
+        && strpos($gameConfigClass, 'AS empty_tiles') !== false
+        && strpos($gameConfigClass, 'AS placed_players') !== false
+        && strpos(
+            $gameConfigClass,
+            '$proposedMaxPlayers > $storedMaxPlayers'
+        ) !== false,
+    'A registration-cap increase must also fit the currently deployed world'
+);
+assertWorldSeasonRule(
+    strpos($generator, 'readMapTileRatios()') !== false
+        && strpos(
+            $generator,
+            'GameConfig::areMapTileRatiosValid('
+        ) !== false
+        && strpos($generator, 'executeQuotaUpdate(') !== false
+        && strpos($generator, 'assertEmptyTileCapacity(') !== false
+        && strpos($generator, 'WORLD_SPECIAL_SITE_COUNT') !== false
+        && strpos(
+            $generator,
+            '$affectedRows !== (int) $expectedRows'
+        ) !== false,
+    'World generation must verify quotas and post-special-site capital capacity'
+);
+assertWorldSeasonRule(
+    strpos($city, 'createInitialCityOnLockedTile(') !== false
+        && strpos(
+            $city,
+            'public static function hasAvailableInitialCityTile()'
+        ) !== false
+        && strpos(
+            $city,
+            "WHERE type = 'empty' AND owner_id IS NULL"
+        ) !== false
+        && strpos($city, 'ORDER BY tile_id') !== false
+        && strpos($city, 'LIMIT 1') !== false
+        && strpos($city, 'FOR UPDATE') !== false,
+    'Initial-city placement must exhaustively fall back to a locked empty tile'
+);
 
 assertWorldSeasonRule(
     strpos($generator, 'regenerateMapInCurrentTransaction') !== false
@@ -171,6 +282,27 @@ assertWorldSeasonRule(
         && strpos($generator, '$this->db->begin_transaction();')
             < strpos($generator, '$this->clearExistingWorld();'),
     'World replacement must delete and regenerate inside a rollbackable transaction'
+);
+assertWorldSeasonRule(
+    substr_count(
+        $generator,
+        '$this->lockStandaloneWorldReplacement();'
+    ) === 2
+        && strpos(
+            $generator,
+            'private function lockStandaloneWorldReplacement()'
+        ) !== false
+        && preg_match(
+            '/lockStandaloneWorldReplacement\\(\\).*?'
+                . 'FROM seasons.*?FOR UPDATE/s',
+            $generator
+        ) === 1
+        && preg_match(
+            '/assertNoExistingCities\\(\\).*?'
+                . 'FROM cities.*?FOR UPDATE/s',
+            $generator
+        ) === 1,
+    'Standalone map generation and reset must lock the season before a locking city check'
 );
 
 foreach ([

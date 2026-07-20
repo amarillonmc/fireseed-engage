@@ -2462,6 +2462,25 @@ class VassalService {
      * @return void
      */
     private function reassignCityGenerals($userId, $cityId) {
+        $query = "SELECT ga.assignment_id
+                  FROM general_assignments ga
+                  INNER JOIN generals g ON g.general_id = ga.general_id
+                  INNER JOIN cities c ON c.city_id = ga.target_id
+                  WHERE ga.assignment_type = 'city'
+                    AND g.owner_id = ? AND c.owner_id = ?
+                    AND c.city_id <> ?
+                  ORDER BY ga.assignment_id
+                  FOR UPDATE";
+        $stmt = $this->db->prepare($query);
+        $stmt->bind_param('iii', $userId, $userId, $cityId);
+        $stmt->execute();
+        $result = $stmt->get_result();
+        $movedAssignmentIds = [];
+        while ($result && ($row = $result->fetch_assoc())) {
+            $movedAssignmentIds[] = (int) $row['assignment_id'];
+        }
+        $stmt->close();
+
         $query = "UPDATE general_assignments ga
                   INNER JOIN generals g ON g.general_id = ga.general_id
                   INNER JOIN cities c ON c.city_id = ga.target_id
@@ -2477,13 +2496,26 @@ class VassalService {
             $userId,
             $cityId
         );
-        if (!$stmt->execute()) {
+        $moved = $stmt->execute()
+            && $stmt->affected_rows === count($movedAssignmentIds);
+        if (!$moved) {
             $stmt->close();
             throw new RuntimeException(
                 '无法改派驻城武将 / Failed to reassign city generals'
             );
         }
         $stmt->close();
+
+        if (!empty($movedAssignmentIds)) {
+            // 新主城原驻将优先保留，超限转入武将仍归玩家所有但解除分配 / Keep the new capital's incumbents and leave overflow transfers owned but unassigned
+            General::enforceAssignmentLimitsInCurrentTransaction(
+                'city',
+                $cityId,
+                $userId,
+                'unassign',
+                $movedAssignmentIds
+            );
+        }
     }
 
     /**

@@ -443,10 +443,6 @@ class General {
                     '编制目标已经失效或易主 / Assignment target is stale or changed owners'
                 );
             }
-            $assignmentLimit = $assignmentType === 'city'
-                ? max(0, (int) $target['level'])
-                : max(0, 1 + (int) $target['level']);
-
             // 在目标之后锁内重验武将，和战斗的目标到武将锁序保持一致 / Revalidate and lock the general after the target to match combat's target-to-general order
             $query = "SELECT owner_id, cost, is_active
                       FROM generals
@@ -481,6 +477,12 @@ class General {
             if ($existingAssignment
                 && $existingAssignment['assignment_type'] === $assignmentType
                 && (int) $existingAssignment['target_id'] === $targetId) {
+                self::enforceAssignmentLimitsInCurrentTransaction(
+                    $assignmentType,
+                    $targetId,
+                    $ownerId,
+                    'reject'
+                );
                 $assignmentId = (int) $existingAssignment['assignment_id'];
                 if (!$this->db->commit()) {
                     throw new RuntimeException(
@@ -489,42 +491,6 @@ class General {
                 }
                 $this->assignment = new GeneralAssignment($assignmentId);
                 return true;
-            }
-
-            // 目标实体锁保证计数、COST校验和插入是一个不可穿透的临界区 / The target row makes count, COST validation, and insertion one indivisible critical section
-            $query = "SELECT ga.assignment_id, g.general_id,
-                             g.cost, g.is_active
-                      FROM general_assignments AS ga
-                      INNER JOIN generals AS g
-                        ON g.general_id = ga.general_id
-                      WHERE ga.assignment_type = ?
-                        AND ga.target_id = ?
-                      ORDER BY ga.assignment_id
-                      FOR UPDATE";
-            $stmt = $this->db->prepare($query);
-            $stmt->bind_param('si', $assignmentType, $targetId);
-            $stmt->execute();
-            $result = $stmt->get_result();
-            $assignedCount = 0;
-            $assignedCost = 0.0;
-            while ($result && ($assignedGeneral = $result->fetch_assoc())) {
-                if ((int) $assignedGeneral['is_active'] !== 1) {
-                    continue;
-                }
-                $assignedCount++;
-                $assignedCost += max(
-                    0.0,
-                    (float) $assignedGeneral['cost']
-                );
-            }
-            $stmt->close();
-
-            $generalCost = max(0.0, (float) $lockedGeneral['cost']);
-            if ($assignedCount >= $assignmentLimit
-                || $assignedCost + $generalCost
-                    > (float) $owner['max_general_cost'] + 0.000001) {
-                $this->db->rollback();
-                return false;
             }
 
             if ($existingAssignment) {
@@ -567,6 +533,14 @@ class General {
             $assignmentId = (int) $this->db->insert_id;
             $stmt->close();
 
+            // 所有直接和批量转移路径共用同一编制上限裁决 / Direct and bulk transfer paths share one authoritative roster-limit decision
+            self::enforceAssignmentLimitsInCurrentTransaction(
+                $assignmentType,
+                $targetId,
+                $ownerId,
+                'reject'
+            );
+
             if (!$this->db->commit()) {
                 throw new RuntimeException(
                     '提交武将编制失败 / Failed to commit general assignment'
@@ -581,6 +555,231 @@ class General {
             );
             return false;
         }
+    }
+
+    /**
+     * 在现有事务内统一执行目标编制人数与COST上限 / Enforce target headcount and COST limits in the current transaction
+     *
+     * 调用者必须先按“赛季、玩家、目标”顺序取得必要锁。reject 模式让整个
+     * 操作回滚；unassign 模式优先保留原有编制，并解除超限转入武将的分配。
+     * The caller must already follow the season, player, and target lock order.
+     * Reject mode aborts the operation; unassign mode preserves the existing
+     * roster first and removes overflow transfers from assignment.
+     *
+     * @param string $assignmentType 分配类型 / Assignment type
+     * @param int $targetId 目标ID / Target ID
+     * @param int $ownerId 玩家ID / Owner ID
+     * @param string $overflowMode reject或unassign / reject or unassign
+     * @param array $preferredOverflowAssignmentIds 优先解除的转入分配ID / Transferred assignment IDs to remove first
+     * @return array 被解除分配的武将ID / Unassigned general IDs
+     */
+    public static function enforceAssignmentLimitsInCurrentTransaction(
+        $assignmentType,
+        $targetId,
+        $ownerId,
+        $overflowMode = 'reject',
+        $preferredOverflowAssignmentIds = []
+    ) {
+        if (!in_array($assignmentType, ['city', 'army'], true)
+            || !in_array($overflowMode, ['reject', 'unassign'], true)
+            || (int) $targetId <= 0
+            || (int) $ownerId <= 0) {
+            throw new InvalidArgumentException(
+                '编制上限校验参数无效 / Invalid roster-limit arguments'
+            );
+        }
+
+        $db = Database::getInstance()->getConnection();
+        $targetId = (int) $targetId;
+        $ownerId = (int) $ownerId;
+
+        $query = "SELECT max_general_cost
+                  FROM users
+                  WHERE user_id = ?
+                  FOR UPDATE";
+        $stmt = $db->prepare($query);
+        $stmt->bind_param('i', $ownerId);
+        $stmt->execute();
+        $result = $stmt->get_result();
+        $owner = $result ? $result->fetch_assoc() : null;
+        $stmt->close();
+        if (!$owner) {
+            throw new RuntimeException(
+                '编制所属玩家不存在 / Roster owner does not exist'
+            );
+        }
+
+        if ($assignmentType === 'city') {
+            $query = "SELECT owner_id, level
+                      FROM cities
+                      WHERE city_id = ?
+                      FOR UPDATE";
+        } else {
+            $query = "SELECT owner_id, level
+                      FROM armies
+                      WHERE army_id = ?
+                      FOR UPDATE";
+        }
+        $stmt = $db->prepare($query);
+        $stmt->bind_param('i', $targetId);
+        $stmt->execute();
+        $result = $stmt->get_result();
+        $target = $result ? $result->fetch_assoc() : null;
+        $stmt->close();
+        if (!$target || (int) $target['owner_id'] !== $ownerId) {
+            throw new RuntimeException(
+                '编制目标已经失效或易主 / Roster target is stale or changed owners'
+            );
+        }
+
+        $assignmentLimit = $assignmentType === 'city'
+            ? max(0, (int) $target['level'])
+            : max(0, 1 + (int) $target['level']);
+        $costLimit = max(0.0, (float) $owner['max_general_cost']);
+
+        $query = "SELECT ga.assignment_id, g.general_id, g.owner_id,
+                         g.cost, g.is_active
+                  FROM general_assignments AS ga
+                  INNER JOIN generals AS g
+                    ON g.general_id = ga.general_id
+                  WHERE ga.assignment_type = ?
+                    AND ga.target_id = ?
+                  ORDER BY ga.assignment_id
+                  FOR UPDATE";
+        $stmt = $db->prepare($query);
+        $stmt->bind_param('si', $assignmentType, $targetId);
+        $stmt->execute();
+        $result = $stmt->get_result();
+        $roster = [];
+        while ($result && ($row = $result->fetch_assoc())) {
+            $roster[] = $row;
+        }
+        $stmt->close();
+
+        $overflowAssignmentIds = self::calculateOverflowAssignmentIds(
+            $roster,
+            $assignmentLimit,
+            $costLimit,
+            $ownerId,
+            $preferredOverflowAssignmentIds
+        );
+        $rosterByAssignmentId = [];
+        foreach ($roster as $row) {
+            $rosterByAssignmentId[(int) $row['assignment_id']] = $row;
+        }
+
+        if (empty($overflowAssignmentIds)) {
+            return [];
+        }
+        if ($overflowMode === 'reject') {
+            throw new RuntimeException(
+                '目标编制超过武将人数或COST上限 / Target roster exceeds its headcount or COST limit'
+            );
+        }
+
+        $unassignedGeneralIds = [];
+        foreach ($overflowAssignmentIds as $assignmentId) {
+            if (!isset($rosterByAssignmentId[$assignmentId])) {
+                throw new RuntimeException(
+                    '超限武将编制数据无效 / Invalid overflow roster data'
+                );
+            }
+            $row = $rosterByAssignmentId[$assignmentId];
+            $query = "DELETE FROM general_assignments
+                      WHERE assignment_id = ?
+                        AND assignment_type = ?
+                        AND target_id = ?";
+            $stmt = $db->prepare($query);
+            $stmt->bind_param(
+                'isi',
+                $assignmentId,
+                $assignmentType,
+                $targetId
+            );
+            $deleted = $stmt->execute() && $stmt->affected_rows === 1;
+            $stmt->close();
+            if (!$deleted) {
+                throw new RuntimeException(
+                    '解除超限武将分配失败 / Failed to unassign an overflow general'
+                );
+            }
+            $unassignedGeneralIds[] = (int) $row['general_id'];
+        }
+
+        return $unassignedGeneralIds;
+    }
+
+    /**
+     * 计算必须解除的超限分配 / Calculate assignments that must be removed for overflow
+     * @param array $roster 编制行 / Roster rows
+     * @param int $assignmentLimit 人数上限 / Headcount limit
+     * @param float $costLimit COST上限 / COST limit
+     * @param int $ownerId 玩家ID / Owner ID
+     * @param array $preferredOverflowAssignmentIds 优先解除的转入分配 / Transfer assignments to remove first
+     * @return array 超限分配ID / Overflow assignment IDs
+     */
+    public static function calculateOverflowAssignmentIds(
+        $roster,
+        $assignmentLimit,
+        $costLimit,
+        $ownerId,
+        $preferredOverflowAssignmentIds = []
+    ) {
+        $assignmentLimit = max(0, (int) $assignmentLimit);
+        $costLimit = max(0.0, (float) $costLimit);
+        $ownerId = (int) $ownerId;
+        $preferredOverflow = [];
+        foreach ((array) $preferredOverflowAssignmentIds as $assignmentId) {
+            $assignmentId = (int) $assignmentId;
+            if ($assignmentId > 0) {
+                $preferredOverflow[$assignmentId] = true;
+            }
+        }
+
+        $orderedRoster = array_values((array) $roster);
+        // 先接受原编制，再按分配ID接受新转入武将 / Accept the original roster first, then transfers by assignment ID
+        usort(
+            $orderedRoster,
+            function ($left, $right) use ($preferredOverflow) {
+                $leftId = (int) $left['assignment_id'];
+                $rightId = (int) $right['assignment_id'];
+                $leftTransferred = isset($preferredOverflow[$leftId])
+                    ? 1
+                    : 0;
+                $rightTransferred = isset($preferredOverflow[$rightId])
+                    ? 1
+                    : 0;
+                if ($leftTransferred !== $rightTransferred) {
+                    return $leftTransferred <=> $rightTransferred;
+                }
+                return $leftId <=> $rightId;
+            }
+        );
+
+        $acceptedCount = 0;
+        $acceptedCost = 0.0;
+        $overflowAssignmentIds = [];
+        foreach ($orderedRoster as $row) {
+            $assignmentId = (int) $row['assignment_id'];
+            if ((int) $row['owner_id'] !== $ownerId) {
+                $overflowAssignmentIds[] = $assignmentId;
+                continue;
+            }
+            if ((int) $row['is_active'] !== 1) {
+                continue;
+            }
+
+            $generalCost = max(0.0, (float) $row['cost']);
+            if ($acceptedCount >= $assignmentLimit
+                || $acceptedCost + $generalCost > $costLimit + 0.000001) {
+                $overflowAssignmentIds[] = $assignmentId;
+                continue;
+            }
+            $acceptedCount++;
+            $acceptedCost += $generalCost;
+        }
+
+        return $overflowAssignmentIds;
     }
 
     /**

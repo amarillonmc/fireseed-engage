@@ -20,6 +20,7 @@ class MapGenerator {
         $this->db->begin_transaction();
 
         try {
+            $this->lockStandaloneWorldReplacement();
             $query = "SELECT COUNT(*) AS count FROM map_tiles";
             $result = executePreparedSql($this->db, $query);
             if (!$result) {
@@ -72,10 +73,15 @@ class MapGenerator {
      * @return void
      */
     private function generateWorldContents() {
+        $tileRatios = $this->readMapTileRatios();
         $this->generateEmptyTiles();
-        $this->generateResourcePoints();
-        $this->generateNpcForts();
+        $this->generateResourcePoints($tileRatios['resource']);
+        $this->generateNpcForts($tileRatios['npc_fort']);
         $this->generateSpecialPoints();
+        $this->assertEmptyTileCapacity(
+            $tileRatios['required_empty_tiles']
+                - (int) WORLD_SPECIAL_SITE_COUNT
+        );
     }
 
     /**
@@ -93,6 +99,43 @@ class MapGenerator {
     }
 
     /**
+     * 锁定独立地图替换边界 / Lock the standalone world-replacement boundary
+     *
+     * 后台生成与重置不经过赛季服务，因此必须先独占当前赛季，避免与注册建城
+     * 或其他世界写入交错。赛季重建使用事务内入口且已持有同一把锁。
+     * Administration generation and reset bypass the season service, so they
+     * must exclusively lock the current season before racing registration or
+     * another world write. Seasonal regeneration already owns this lock.
+     *
+     * @return void
+     */
+    private function lockStandaloneWorldReplacement() {
+        $query = "SELECT season_id
+                  FROM seasons
+                  WHERE ended_at IS NULL
+                  ORDER BY season_number DESC
+                  LIMIT 1
+                  FOR UPDATE";
+        $stmt = $this->db->prepare($query);
+        if (!$stmt || !$stmt->execute()) {
+            if ($stmt) {
+                $stmt->close();
+            }
+            throw new RuntimeException(
+                '无法锁定当前赛季 / Failed to lock the current season'
+            );
+        }
+        $result = $stmt->get_result();
+        $season = $result ? $result->fetch_assoc() : null;
+        $stmt->close();
+        if (!$season) {
+            throw new RuntimeException(
+                '当前赛季不存在 / No current season exists'
+            );
+        }
+    }
+
+    /**
      * 拒绝会孤立现有城池的地图替换 / Reject a world replacement that would orphan cities
      * @return void
      */
@@ -100,17 +143,24 @@ class MapGenerator {
         // 城池以坐标关联地图而非外键；先拒绝会制造孤儿城池的独立清图。
         // Cities reference the map by coordinates rather than a foreign key,
         // so reject standalone clears that would orphan live cities.
-        $result = executePreparedSql(
-            $this->db,
-            "SELECT COUNT(*) AS count FROM cities"
-        );
-        if (!$result) {
+        $query = "SELECT city_id
+                  FROM cities
+                  ORDER BY city_id
+                  LIMIT 1
+                  FOR UPDATE";
+        $stmt = $this->db->prepare($query);
+        if (!$stmt || !$stmt->execute()) {
+            if ($stmt) {
+                $stmt->close();
+            }
             throw new RuntimeException(
                 '无法检查现有城池 / Failed to inspect existing cities'
             );
         }
-        $row = $result->fetch_assoc();
-        if ($row && (int) $row['count'] > 0) {
+        $result = $stmt->get_result();
+        $city = $result ? $result->fetch_assoc() : null;
+        $stmt->close();
+        if ($city) {
             throw new RuntimeException(
                 '存在玩家城池，必须通过赛季重建替换世界 / Player cities exist; rebuild the world through the season lifecycle'
             );
@@ -156,9 +206,10 @@ class MapGenerator {
     
     /**
      * 生成资源点 / Generate resource points
+     * @param float $resourceTileRatio 资源点占比 / Resource-node ratio
      * @return void
      */
-    private function generateResourcePoints() {
+    private function generateResourcePoints($resourceTileRatio) {
         // 亮、夜是可跨赛季积累的稀有资源，默认权重明显低于四种赛季资源。
         // Bright and night persist across seasons, so their default node
         // weights are intentionally much lower than the four seasonal types.
@@ -185,16 +236,6 @@ class MapGenerator {
         }
 
         // 占比、资源量和六系权重均为内测临时基准，可在后台统一调节 / Tile share, amounts, and six-type weights are provisional beta settings managed centrally
-        $resourceTileRatio = max(
-            0.0,
-            min(
-                1.0,
-                (float) $this->readNumericConfig(
-                    'map_resource_tile_ratio',
-                    0.50
-                )
-            )
-        );
         $resourceAmountMin = max(
             0,
             min(
@@ -238,9 +279,11 @@ class MapGenerator {
                       WHERE type = 'empty'
                       ORDER BY RAND()
                       LIMIT $quota";
-            if (!executePreparedSql($this->db, $query)) {
-                throw new RuntimeException('生成资源点失败 / Failed to generate resource points');
-            }
+            $this->executeQuotaUpdate(
+                $query,
+                $quota,
+                '生成资源点失败 / Failed to generate resource points'
+            );
         }
     }
 
@@ -302,9 +345,10 @@ class MapGenerator {
      * 读取数值配置 / Read a numeric configuration value
      * @param string $key 配置键 / Configuration key
      * @param int|float $default 默认值 / Default value
+     * @param bool $strict 已存在非数值时是否失败 / Whether an existing nonnumeric value must fail
      * @return int|float 数值 / Numeric value
      */
-    private function readNumericConfig($key, $default) {
+    private function readNumericConfig($key, $default, $strict = false) {
         $query = "SELECT `value` FROM game_config WHERE `key` = ?";
         $stmt = $this->db->prepare($query);
         if (!$stmt) {
@@ -323,26 +367,138 @@ class MapGenerator {
         $row = $result ? $result->fetch_assoc() : null;
         $stmt->close();
 
+        if ($row && !is_numeric($row['value']) && $strict) {
+            throw new RuntimeException(
+                '地图配置不是有效数值 / Map configuration is not numeric'
+            );
+        }
         return $row && is_numeric($row['value'])
             ? $row['value'] + 0
             : $default;
     }
+
+    /**
+     * 读取并联合校验地图内容占比 / Read and jointly validate world-content ratios
+     * @return array 资源点与NPC据点占比 / Resource and NPC-fort ratios
+     */
+    private function readMapTileRatios() {
+        $resourceRatio = (float) $this->readNumericConfig(
+            'map_resource_tile_ratio',
+            0.50,
+            true
+        );
+        $npcFortRatio = (float) $this->readNumericConfig(
+            'map_npc_fort_tile_ratio',
+            0.25,
+            true
+        );
+        $maxPlayers = (int) $this->readNumericConfig(
+            'max_players',
+            1000,
+            true
+        );
+        $query = "SELECT COUNT(*) AS total FROM users";
+        $stmt = $this->db->prepare($query);
+        if (!$stmt || !$stmt->execute()) {
+            if ($stmt) {
+                $stmt->close();
+            }
+            throw new RuntimeException(
+                '无法读取玩家容量 / Failed to read player capacity'
+            );
+        }
+        $result = $stmt->get_result();
+        $row = $result ? $result->fetch_assoc() : null;
+        $stmt->close();
+        if (!$row || $maxPlayers < 1) {
+            throw new RuntimeException(
+                '玩家容量配置无效 / Invalid player capacity'
+            );
+        }
+        $playerCapacity = max($maxPlayers, (int) $row['total']);
+        $requiredEmptyTiles = $playerCapacity
+            + (int) WORLD_SPECIAL_SITE_COUNT;
+        $totalTileCount = (int) MAP_WIDTH * (int) MAP_HEIGHT;
+        if (!GameConfig::areMapTileRatiosValid(
+            $resourceRatio,
+            $npcFortRatio,
+            $requiredEmptyTiles,
+            $totalTileCount
+        )) {
+            throw new RuntimeException(
+                '资源点与NPC据点占比未给全部玩家和特殊地点保留空地 / Resource and NPC-fort ratios leave insufficient space for all players and special sites'
+            );
+        }
+
+        return [
+            'resource' => $resourceRatio,
+            'npc_fort' => $npcFortRatio,
+            'required_empty_tiles' => $requiredEmptyTiles
+        ];
+    }
+
+    /**
+     * 执行并核对随机配额更新 / Execute and verify a randomized quota update
+     * @param string $query 更新语句 / Update statement
+     * @param int $expectedRows 预期更新行数 / Expected affected rows
+     * @param string $failureMessage 失败信息 / Failure message
+     * @return void
+     */
+    private function executeQuotaUpdate(
+        $query,
+        $expectedRows,
+        $failureMessage
+    ) {
+        $stmt = $this->db->prepare($query);
+        if (!$stmt) {
+            throw new RuntimeException($failureMessage);
+        }
+        $executed = $stmt->execute();
+        $affectedRows = (int) $stmt->affected_rows;
+        $stmt->close();
+        if (!$executed || $affectedRows !== (int) $expectedRows) {
+            throw new RuntimeException(
+                $failureMessage
+                . ': expected ' . (int) $expectedRows
+                . ', generated ' . max(0, $affectedRows)
+            );
+        }
+    }
+
+    /**
+     * 核对特殊地点写入后仍有足够主城空地 / Verify capital capacity after writing special sites
+     * @param int $requiredPlayerTiles 玩家所需空地 / Empty tiles required for players
+     * @return void
+     */
+    private function assertEmptyTileCapacity($requiredPlayerTiles) {
+        $query = "SELECT COUNT(*) AS total
+                  FROM map_tiles
+                  WHERE type = 'empty' AND owner_id IS NULL";
+        $stmt = $this->db->prepare($query);
+        if (!$stmt || !$stmt->execute()) {
+            if ($stmt) {
+                $stmt->close();
+            }
+            throw new RuntimeException(
+                '无法核对主城空地 / Failed to verify capital capacity'
+            );
+        }
+        $result = $stmt->get_result();
+        $row = $result ? $result->fetch_assoc() : null;
+        $stmt->close();
+        if (!$row || (int) $row['total'] < (int) $requiredPlayerTiles) {
+            throw new RuntimeException(
+                '地图没有为全部玩家保留主城空地 / The map lacks capital space for every player'
+            );
+        }
+    }
     
     /**
      * 生成NPC城池 / Generate NPC forts
+     * @param float $npcFortRatio NPC据点占比 / NPC-fort ratio
      * @return void
      */
-    private function generateNpcForts() {
-        $npcFortRatio = max(
-            0.0,
-            min(
-                1.0,
-                (float) $this->readNumericConfig(
-                    'map_npc_fort_tile_ratio',
-                    0.25
-                )
-            )
-        );
+    private function generateNpcForts($npcFortRatio) {
         $npcFortCount = (int) floor(
             (MAP_WIDTH * MAP_HEIGHT) * $npcFortRatio
         );
@@ -388,9 +544,11 @@ class MapGenerator {
                       WHERE type = 'empty'
                       ORDER BY RAND()
                       LIMIT $quota";
-            if (!executePreparedSql($this->db, $query)) {
-                throw new RuntimeException('生成NPC据点失败 / Failed to generate NPC forts');
-            }
+            $this->executeQuotaUpdate(
+                $query,
+                $quota,
+                '生成NPC据点失败 / Failed to generate NPC forts'
+            );
         }
     }
     
@@ -424,6 +582,11 @@ class MapGenerator {
             ['redknife', '雷德奈芙 Redknife'],
             ['caeperra', '开里培拉 Caeperra']
         ];
+        if (count($gateways) + 1 !== (int) WORLD_SPECIAL_SITE_COUNT) {
+            throw new RuntimeException(
+                '特殊地点数量配置不一致 / Special-site capacity is inconsistent'
+            );
+        }
         $radius = (int) floor(min(MAP_WIDTH, MAP_HEIGHT) * 0.35);
         foreach ($gateways as $index => $gateway) {
             // 数组依次对应1点至12点，3点方向为数学零度 / Entries map from one to twelve o'clock, with three o'clock at zero radians
@@ -581,6 +744,7 @@ class MapGenerator {
     public function resetMap() {
         $this->db->begin_transaction();
         try {
+            $this->lockStandaloneWorldReplacement();
             $this->clearExistingWorld();
             $this->db->commit();
             return true;

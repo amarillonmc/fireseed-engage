@@ -167,6 +167,15 @@ class AuthSecurity {
                 'max_players' => $maxPlayers
             ];
         }
+        if (!City::hasAvailableInitialCityTile()) {
+            return [
+                'open' => false,
+                'message' => '当前地图已无可用主城空格，请等待管理员重建地图'
+                    . ' / The current world has no capital space; wait for an administrator to rebuild it.',
+                'current_players' => $currentPlayers,
+                'max_players' => $maxPlayers
+            ];
+        }
 
         return [
             'open' => true,

@@ -33,6 +33,8 @@ $init = file_get_contents($root . '/includes/init.php');
 $logout = file_get_contents($root . '/logout.php');
 $authSecurityPath = $root . '/includes/classes/AuthSecurity.php';
 $authSecurity = file_get_contents($authSecurityPath);
+$userClass = file_get_contents($root . '/includes/classes/User.php');
+$cityClass = file_get_contents($root . '/includes/classes/City.php');
 
 foreach ([
     'ranking' => $ranking,
@@ -47,7 +49,9 @@ foreach ([
     'configuration' => $config,
     'initialization' => $init,
     'logout' => $logout,
-    'authentication security' => $authSecurity
+    'authentication security' => $authSecurity,
+    'user class' => $userClass,
+    'city class' => $cityClass
 ] as $sourceName => $source) {
     assertReleaseGate(
         $source !== false,
@@ -122,8 +126,32 @@ assertReleaseGate(
     strpos($init, 'AuthSecurity::enforceMaintenanceMode(') !== false
         && strpos($register, 'AuthSecurity::getRegistrationAvailability(')
             !== false
-        && strpos($register, "GET_LOCK(") !== false,
+        && strpos($register, "GET_LOCK(") !== false
+        && strpos(
+            $authSecurity,
+            'City::hasAvailableInitialCityTile()'
+        ) !== false,
     'Maintenance, registration switches, and capacity must be enforced at runtime'
+);
+assertReleaseGate(
+    strpos(
+        $userClass,
+        'City::createInitialPlayerCityInCurrentTransaction($userId)'
+    ) !== false
+        && strpos($userClass, 'lockSeasonForWorldAction($this->db)') !== false
+        && strpos(
+            $userClass,
+            '$user->createUser('
+        ) !== false
+        && preg_match(
+            '/createAdminUser.*?createUser\\(.*?false\\s*\\);/s',
+            $userClass
+        ) === 1
+        && strpos(
+            $cityClass,
+            'public static function hasAvailableInitialCityTile()'
+        ) !== false,
+    'Player registration must atomically create a capital while pre-world administrators opt out'
 );
 
 assertReleaseGate(

@@ -85,15 +85,25 @@ Fireseed Engage - Internal-beta gate, research economy, and seasonal mechanics i
    Resource-node share and amounts plus NPC-fort share and level-one-to-nine weights are now migrated, validated provisional settings.
 5. 标准与规格两路独立审查提出的全部真实 P1/P2 均已修复，并为每项边界补充回归断言。
    Every confirmed P1/P2 from the independent standards and specification reviews was fixed with regression coverage.
+6. 直接分配、战斗驻军合并、属臣释放迁城及兼容入口统一使用事务内武将人数与COST上限裁决；批量转入超限者保留卡牌所有权并自动解除分配。
+   Direct assignment, battle garrison merges, vassal relocation, and the compatibility entry point now share one transactional headcount/COST authority; overflow transfers remain owned but become unassigned.
+7. 资源点与NPC据点按实际整数配额联合校验，并为“当前账号数或注册上限中的较大者”及十三个特殊地点预留空格；生成后再次核对主城容量。
+   Resource-node and NPC-fort integer quotas are jointly validated while reserving tiles for the greater of current accounts or the registration cap plus thirteen special sites; capital capacity is rechecked after generation.
+8. 主城仍优先使用中心附近随机出生点；随机未命中时会锁定并使用任一剩余空格，因此多玩家换季不再依赖概率。
+   Capitals still prefer randomized central spawns, but now lock and use any remaining empty tile as an exhaustive fallback, removing chance from multi-player season rollover.
+9. 提高注册人数上限时会核对当前已部署地图的实际主城容量；开放注册也会动态检查空格，账号、资源钱包与首都在同一事务中创建，任何并发抢占都会整体回滚而不会留下孤立账号。
+   Raising the registration cap now checks the deployed world's actual capital capacity; open registration also checks empty space dynamically, while the account, resource wallet, and capital are created atomically so concurrent tile claims roll back without orphaning accounts.
+10. 后台独立生成或重置地图会先排他锁定当前赛季，再以锁定式当前读检查城池，避免与并发注册交错后留下城市与地图不一致状态。
+    Standalone administration generation or reset now exclusively locks the current season before a locking city read, preventing concurrent registration from leaving cities inconsistent with the rebuilt world.
 
 七、验证结果 / Validation
 
-1. 19 个 PHP 测试文件共 887 项断言全部通过。
-   All 19 PHP test files passed with 887 assertions.
-2. 全仓库 139 个 PHP 文件语法检查通过。
-   PHP syntax checks passed for all 139 files.
-3. assets/js 下 2 个 JavaScript 文件语法检查通过。
-   JavaScript syntax checks passed for both files under assets/js.
+1. 20 个 PHP 测试文件共 911 项断言全部通过。
+   All 20 PHP test files passed with 911 assertions.
+2. 全仓库 140 个 PHP 文件语法检查通过。
+   PHP syntax checks passed for all 140 files.
+3. assets/js 下 2 个 JavaScript 文件及 2 段相关后台内联脚本语法检查通过。
+   JavaScript syntax checks passed for both files under assets/js and two relevant inline administration scripts.
 4. git diff --check 通过；仅报告 Git 的 CRLF 工作区提示，无补丁空白错误。
    git diff --check passed with only Git workspace line-ending notices and no whitespace defects.
 5. 安装与迁移专项审计未发现残留 P1/P2。
