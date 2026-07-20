@@ -27,6 +27,7 @@ $targetValid = $targetX >= 0 && $targetX < MAP_WIDTH
 $isWorldSite = false;
 $canAttack = false;
 $targetMessage = '';
+$targetTags = [];
 
 if ($targetValid) {
     $query = "SELECT site_id FROM world_sites WHERE tile_id = ? LIMIT 1";
@@ -42,9 +43,13 @@ if ($targetValid) {
         $targetMessage = '该地点属于赛季目标，请在赛季页面完成行军与进攻。';
     } elseif ($targetTile->getType() === 'npc_fort') {
         $canAttack = true;
+        $targetTags = ['tile', 'npc', 'structure'];
     } elseif ($targetTile->getType() === 'player_city'
         || (in_array($targetTile->getType(), ['empty', 'resource'], true)
             && $targetTile->getOwnerId() !== null)) {
+        $targetTags = $targetTile->getType() === 'player_city'
+            ? ['city', 'structure', 'player']
+            : ['tile', 'player'];
         $ownerId = (int) $targetTile->getOwnerId();
         $allianceService = new AllianceService();
         $canAttack = $allianceService->canUsersFight($user->getUserId(), $ownerId);
@@ -69,9 +74,40 @@ if ($canAttack
 }
 
 $eligibleArmies = [];
-foreach (Army::getUserArmies($user->getUserId()) as $army) {
-    if ($army->getStatus() === 'idle' && $army->getCombatPower() > 0) {
-        $eligibleArmies[] = $army;
+if ($canAttack) {
+    foreach (Army::getUserArmies($user->getUserId()) as $army) {
+        if ($army->getStatus() !== 'idle') {
+            continue;
+        }
+
+        $armyPosition = $army->getCurrentPosition();
+        $distance = abs($targetX - (int) $armyPosition[0])
+            + abs($targetY - (int) $armyPosition[1]);
+        // 使用与出发快照相同的上下文计算预览 / Use the departure-snapshot context for previews
+        $battleContext = [
+            'phase' => 'battle',
+            'side' => 'attack',
+            'target_tags' => $targetTags,
+            'distance' => $distance
+        ];
+        $marchContext = [
+            'phase' => 'march',
+            'distance' => $distance
+        ];
+        $combatPower = $army->getCombatPower($battleContext);
+        $movementSpeed = $army->getMovementSpeed($marchContext);
+        if ($combatPower > 0 && $movementSpeed > 0) {
+            $eligibleArmies[] = [
+                'army' => $army,
+                'position' => $armyPosition,
+                'distance' => $distance,
+                'combat_power' => $combatPower,
+                'movement_speed' => $movementSpeed,
+                'travel_seconds' => (int) ceil(
+                    $distance / $movementSpeed * 3600
+                )
+            ];
+        }
     }
 }
 
@@ -119,15 +155,18 @@ $pageTitle = '选择出征军队';
                 <div class="message info">没有可出征的待命军队。</div>
             <?php else: ?>
                 <div class="gameplay-grid">
-                    <?php foreach ($eligibleArmies as $army): ?>
+                    <?php foreach ($eligibleArmies as $armyPreview): ?>
+                    <?php $army = $armyPreview['army']; ?>
                     <article class="gameplay-card">
                         <h4><?php echo escapeHtml($army->getName()); ?></h4>
-                        <p>战斗力：<?php echo number_format($army->getCombatPower()); ?></p>
+                        <p>对该目标战斗力：<?php echo number_format($armyPreview['combat_power']); ?></p>
                         <p>
-                            当前位置：（<?php echo number_format($army->getCurrentPosition()[0]); ?>,
-                            <?php echo number_format($army->getCurrentPosition()[1]); ?>）
+                            当前位置：（<?php echo number_format($armyPreview['position'][0]); ?>,
+                            <?php echo number_format($armyPreview['position'][1]); ?>）
                         </p>
-                        <p>行军速度：<?php echo number_format($army->getMovementSpeed(), 2); ?> 格/小时</p>
+                        <p>距离：<?php echo number_format($armyPreview['distance']); ?> 格</p>
+                        <p>行军速度：<?php echo number_format($armyPreview['movement_speed'], 2); ?> 格/小时</p>
+                        <p>预计抵达：<?php echo formatTime($armyPreview['travel_seconds']); ?></p>
                         <button type="button" class="attack-button" data-army-id="<?php echo $army->getArmyId(); ?>">
                             出征
                         </button>

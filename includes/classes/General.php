@@ -800,11 +800,12 @@ class General {
     }
 
     /**
-     * 获取武将加成
-     * @param string $type 加成类型
-     * @return array 加成数组
+     * 获取武将加成 / Gets this general's bonuses
+     * @param string $type 加成类型 / Bonus domain
+     * @param array $context 玩法上下文 / Gameplay context
+     * @return array 加成数组 / Bonus values
      */
-    public function getBonus($type) {
+    public function getBonus($type, array $context = []) {
         if (!$this->isValid) {
             return [];
         }
@@ -828,16 +829,45 @@ class General {
 
         // 技能加成 / Apply passive or currently active skill effects
         foreach ($this->skills as $skill) {
-            $skillEffect = $this->getApplicableSkillEffect($skill);
-            foreach ($skillEffect as $effectType => $effectValue) {
-                if (!is_numeric($effectValue)) {
-                    continue;
-                }
-                if (isset($bonus[$effectType])) {
-                    $bonus[$effectType] += $effectValue;
-                } else {
-                    $bonus[$effectType] = $effectValue;
-                }
+            $skillEffect = $this->getApplicableSkillEffect(
+                $skill,
+                $context
+            );
+            $bonus = self::mergeSkillBonusEffects(
+                $bonus,
+                $skillEffect
+            );
+        }
+
+        return $bonus;
+    }
+
+    /**
+     * 将单项技能效果合入武将加成 / Merges one skill's effects into a general's bonuses
+     * @param array $bonus 已累计加成 / Accumulated bonuses
+     * @param array $skillEffect 待合并技能效果 / Skill effects to merge
+     * @return array 合并后的加成 / Merged bonuses
+     */
+    public static function mergeSkillBonusEffects(
+        array $bonus,
+        array $skillEffect
+    ) {
+        foreach ($skillEffect as $effectType => $effectValue) {
+            if (!is_numeric($effectValue)) {
+                continue;
+            }
+
+            $value = (float) $effectValue;
+            $isMultiplier = strpos(
+                (string) $effectType,
+                '_multiplier'
+            ) !== false;
+            if (isset($bonus[$effectType])) {
+                $bonus[$effectType] = $isMultiplier
+                    ? (float) $bonus[$effectType] * $value
+                    : (float) $bonus[$effectType] + $value;
+            } else {
+                $bonus[$effectType] = $value;
             }
         }
 
@@ -847,13 +877,18 @@ class General {
     /**
      * 获取当前可生效的技能效果 / Get skill effects that currently apply
      * @param GeneralSkill $skill 武将技能 / General skill
+     * @param array $context 玩法上下文 / Gameplay context
      * @return array 可应用效果 / Applicable effects
      */
-    private function getApplicableSkillEffect($skill) {
+    private function getApplicableSkillEffect(
+        $skill,
+        array $context = []
+    ) {
         $baseEffect = $skill->getEffect();
         $baseEffect = is_array($baseEffect) ? $baseEffect : [];
 
         $query = "SELECT mapped.card_id, card.activation_type, card.is_active,
+                         card.max_level,
                          card.effect_json AS catalog_effect_json,
                          active.effect_json AS active_effect_json,
                          active.expires_at
@@ -887,6 +922,14 @@ class General {
             )) {
                 return [];
             }
+            if (SkillDefinitionValidator::isStructured($baseEffect)) {
+                return $this->evaluateStructuredSkillEffect(
+                    $baseEffect,
+                    $skill->getSkillLevel(),
+                    $skill->getSkillLevel(),
+                    $context
+                );
+            }
             return $this->scalePassiveEffect(
                 $baseEffect,
                 $skill->getSkillLevel()
@@ -899,17 +942,84 @@ class General {
             $activeEffect = $row['active_effect_json']
                 ? json_decode($row['active_effect_json'], true)
                 : [];
-            return is_array($activeEffect) ? $activeEffect : [];
+            if (!is_array($activeEffect)) {
+                return [];
+            }
+            if (SkillDefinitionValidator::isStructured($activeEffect)) {
+                return $this->evaluateStructuredSkillEffect(
+                    $activeEffect,
+                    1,
+                    1,
+                    $context,
+                    true
+                );
+            }
+            return $activeEffect;
+        }
+
+        $passiveDefinition = self::selectPassiveEffectDefinition(
+            $row['catalog_effect_json'],
+            $baseEffect,
+            true
+        );
+        $maximumSkillLevel = max(1, (int) $row['max_level']);
+        $effectiveSkillLevel = SkillValueResolver::clampSkillLevel(
+            $skill->getSkillLevel(),
+            $maximumSkillLevel
+        );
+        if (SkillDefinitionValidator::isStructured($passiveDefinition)) {
+            return $this->evaluateStructuredSkillEffect(
+                $passiveDefinition,
+                $effectiveSkillLevel,
+                $maximumSkillLevel,
+                $context
+            );
         }
 
         return $this->scalePassiveEffect(
-            self::selectPassiveEffectDefinition(
-                $row['catalog_effect_json'],
-                $baseEffect,
-                true
-            ),
-            $skill->getSkillLevel()
+            $passiveDefinition,
+            $effectiveSkillLevel
         );
+    }
+
+    /**
+     * 求值第二版结构化技能并在错误时安全关闭 / Evaluates a version-two skill and fails closed on errors
+     * @param array $definition 技能定义 / Skill definition
+     * @param int $skillLevel 技能等级 / Skill level
+     * @param int $maxLevel 最高等级 / Maximum level
+     * @param array $context 玩法上下文 / Gameplay context
+     * @param bool $allowSnapshot 是否为受信任活动效果快照 / Whether this is a trusted active-effect snapshot
+     * @return array 已编译修正 / Compiled modifiers
+     */
+    private function evaluateStructuredSkillEffect(
+        array $definition,
+        $skillLevel,
+        $maxLevel,
+        array $context,
+        $allowSnapshot = false
+    ) {
+        $context['skill_level'] = max(1, (int) $skillLevel);
+        $context['max_level'] = max(1, (int) $maxLevel);
+        $context['general_cost'] = max(0.0, (float) $this->cost);
+        $context['general_intelligence'] = max(
+            0,
+            (int) $this->intelligence
+        );
+        $context['general_stats'] = [
+            'attack' => max(0, (int) $this->attack),
+            'defense' => max(0, (int) $this->defense),
+            'speed' => max(0, (int) $this->speed),
+            'intelligence' => max(0, (int) $this->intelligence)
+        ];
+
+        $evaluation = SkillEffectEngine::evaluate(
+            $definition,
+            $context,
+            $allowSnapshot === true
+        );
+        return $evaluation['valid']
+            ? $evaluation['modifiers']
+            : [];
     }
 
     /**
@@ -1061,9 +1171,14 @@ class General {
      * 汇总当前可生效技能中的指定数值 / Sum one numeric key across currently applicable skills
      * @param string $effectType 效果键 / Effect key
      * @param float $maximum 最大安全值 / Safe maximum
+     * @param array $context 玩法上下文 / Gameplay context
      * @return float 非负汇总值 / Non-negative total
      */
-    public function getSkillEffectTotal($effectType, $maximum = 100.0) {
+    public function getSkillEffectTotal(
+        $effectType,
+        $maximum = 100.0,
+        array $context = []
+    ) {
         if (!$this->isValid) {
             return 0.0;
         }
@@ -1076,7 +1191,7 @@ class General {
 
         $total = 0.0;
         foreach ($this->skills as $skill) {
-            $effect = $this->getApplicableSkillEffect($skill);
+            $effect = $this->getApplicableSkillEffect($skill, $context);
             if (!isset($effect[$effectType])
                 || !is_numeric($effect[$effectType])) {
                 continue;

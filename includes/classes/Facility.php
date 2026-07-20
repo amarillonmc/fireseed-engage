@@ -777,7 +777,11 @@ class Facility {
         }
 
         // 驻城武将训练速度按倍率缩短整批队列时长 / Assigned-general training speed shortens the whole batch duration
-        return $city->getAdjustedCityActionDuration($baseSeconds, 'training_speed');
+        return $city->getAdjustedCityActionDuration(
+            $baseSeconds,
+            'training_speed',
+            $soldierType
+        );
     }
 
     /**
@@ -812,9 +816,17 @@ class Facility {
         if ($productionBonus === null) {
             $city = new City($this->cityId);
             $bonuses = $city->isValid()
-                ? $city->getAssignedGeneralCityBonuses()
+                ? $city->getAssignedGeneralCityBonuses([
+                    'phase' => 'production'
+                ])
                 : ['production' => 0];
-            $productionBonus = $bonuses['production'];
+            $productionBonus = isset($bonuses['production'])
+                ? (float) $bonuses['production']
+                : 0.0;
+            $scopedKey = 'production_' . (string) $this->subtype;
+            if (isset($bonuses[$scopedKey])) {
+                $productionBonus += (float) $bonuses[$scopedKey];
+            }
         }
 
         // 在累计产量上应用驻城百分比，避免逐 tick 舍入损失 / Apply the city percentage after accumulation to avoid per-tick rounding loss

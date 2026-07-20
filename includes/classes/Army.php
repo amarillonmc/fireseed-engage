@@ -26,7 +26,7 @@ class Army {
     private $returnTime;
     private $cityId;
     private $units = [];
-    private $generalBonusCache = null;
+    private $generalBonusCache = [];
     private $isValid = false;
     
     /**
@@ -325,7 +325,10 @@ class Army {
         
         // 计算移动时间
         $distance = abs($targetX - $this->currentX) + abs($targetY - $this->currentY); // 曼哈顿距离
-        $movementSpeed = $this->getMovementSpeed(); // 格/小时
+        $movementSpeed = $this->getMovementSpeed([
+            'phase' => 'march',
+            'distance' => $distance
+        ]); // 格/小时 / Tiles per hour
         if ($movementSpeed <= 0) {
             return false;
         }
@@ -624,7 +627,10 @@ class Army {
         
         // 计算返回时间
         $distance = abs($cityX - $this->currentX) + abs($cityY - $this->currentY); // 曼哈顿距离
-        $movementSpeed = $this->getMovementSpeed(); // 格/小时
+        $movementSpeed = $this->getMovementSpeed([
+            'phase' => 'return',
+            'distance' => $distance
+        ]); // 格/小时 / Tiles per hour
         if ($movementSpeed <= 0) {
             return false;
         }
@@ -677,16 +683,20 @@ class Army {
     
     /**
      * 获取军队战斗力
-     * @return int 战斗力
+     * @param array $context 战斗上下文 / Battle context
+     * @return int 战斗力 / Combat power
      */
-    public function getCombatPower() {
+    public function getCombatPower(array $context = []) {
         if (!$this->isValid) {
             return 0;
         }
         
         $totalAttack = 0.0;
         $totalDefense = 0.0;
-        $bonuses = $this->getActiveGeneralBonuses();
+        if (!isset($context['phase'])) {
+            $context['phase'] = 'battle';
+        }
+        $bonuses = $this->getActiveGeneralBonuses($context);
         
         foreach ($this->units as $unit) {
             $soldierType = $unit['soldier_type'];
@@ -731,9 +741,10 @@ class Army {
     
     /**
      * 获取军队移动速度
-     * @return float 移动速度（格/小时）
+     * @param array $context 行军上下文 / March context
+     * @return float 移动速度（格/小时） / Movement speed in tiles per hour
      */
-    public function getMovementSpeed() {
+    public function getMovementSpeed(array $context = []) {
         if (!$this->isValid || empty($this->units)) {
             return 0;
         }
@@ -747,24 +758,42 @@ class Army {
                 $this->getSoldierMovementSpeed($soldierType);
         }
 
-        $bonuses = $this->getActiveGeneralBonuses();
-        return self::calculateSlowestMovementSpeed(
+        if (!isset($context['phase'])) {
+            $context['phase'] = 'march';
+        }
+        $bonuses = $this->getActiveGeneralBonuses($context);
+        $speed = self::calculateSlowestMovementSpeed(
             $baseSpeedsByType,
             $soldierTypes,
             $bonuses
         );
+        if ($context['phase'] === 'return') {
+            $returnSpeed = isset($bonuses['return_speed'])
+                ? self::normalizeBonusValue(
+                    $bonuses['return_speed'],
+                    self::MAX_ASSIGNED_GENERAL_BONUS_PERCENT
+                )
+                : 0.0;
+            $speed *= 1.0 + $returnSpeed / 100.0;
+        }
+
+        return $speed;
     }
 
     /**
      * 获取存活随军武将提供的减伤百分比 / Get damage reduction from living assigned generals
+     * @param array $context 战斗上下文 / Battle context
      * @return float 0至75的减伤百分比 / Damage-reduction percentage from 0 to 75
      */
-    public function getDamageReduction() {
+    public function getDamageReduction(array $context = []) {
         if (!$this->isValid) {
             return 0.0;
         }
 
-        $bonuses = $this->getActiveGeneralBonuses();
+        if (!isset($context['phase'])) {
+            $context['phase'] = 'battle';
+        }
+        $bonuses = $this->getActiveGeneralBonuses($context);
         return min(
             self::MAX_DAMAGE_REDUCTION_PERCENT,
             max(0.0, (float) $bonuses['damage_reduction'])
@@ -773,14 +802,18 @@ class Army {
 
     /**
      * 获取存活随军武将提供的侦察范围点数 / Get scout-range points from living assigned generals
+     * @param array $context 侦察上下文 / Scouting context
      * @return float 0至15的侦察范围点数 / Scout-range points from 0 to 15
      */
-    public function getScoutRangeBonus() {
+    public function getScoutRangeBonus(array $context = []) {
         if (!$this->isValid) {
             return 0.0;
         }
 
-        $bonuses = $this->getActiveGeneralBonuses();
+        if (!isset($context['phase'])) {
+            $context['phase'] = 'scouting';
+        }
+        $bonuses = $this->getActiveGeneralBonuses($context);
         return min(
             self::MAX_SCOUT_RANGE_BONUS,
             max(0.0, (float) $bonuses['scout_range'])
@@ -789,11 +822,22 @@ class Army {
 
     /**
      * 汇总本军存活武将的全局与定向加成 / Aggregate global and targeted bonuses from living assigned generals
+     * @param array $context 玩法上下文 / Gameplay context
      * @return array 全局、兵种、元素及旧效果加成 / Global, unit, element, and legacy bonuses
      */
-    private function getActiveGeneralBonuses() {
-        if ($this->generalBonusCache !== null) {
-            return $this->generalBonusCache;
+    public function getSkillModifiers(array $context = []) {
+        return $this->getActiveGeneralBonuses($context);
+    }
+
+    /**
+     * 汇总本军存活武将的全局与定向加成 / Aggregates bonuses from living assigned generals
+     * @param array $context 玩法上下文 / Gameplay context
+     * @return array 汇总修正 / Aggregated modifiers
+     */
+    private function getActiveGeneralBonuses(array $context = []) {
+        $cacheKey = hash('sha256', serialize($context));
+        if (isset($this->generalBonusCache[$cacheKey])) {
+            return $this->generalBonusCache[$cacheKey];
         }
 
         $generalBonusSets = [];
@@ -805,15 +849,15 @@ class Army {
                 continue;
             }
 
-            $generalBonusSets[] = $general->getBonus('army');
+            $generalBonusSets[] = $general->getBonus('army', $context);
             $livingGeneralElements[] = $general->getElement();
         }
 
-        $this->generalBonusCache = self::aggregateArmyBonusRules(
+        $this->generalBonusCache[$cacheKey] = self::aggregateArmyBonusRules(
             $generalBonusSets,
             $livingGeneralElements
         );
-        return $this->generalBonusCache;
+        return $this->generalBonusCache[$cacheKey];
     }
 
     /**
@@ -895,16 +939,34 @@ class Army {
             'defense' => 0.0,
             'speed' => 0.0,
             'damage_reduction' => 0.0,
-            'scout_range' => 0.0
+            'scout_range' => 0.0,
+            'return_speed' => 0.0,
+            'siege_damage_percent' => 0.0,
+            'siege_damage_flat' => 0.0,
+            'attack_multiplier' => 1.0,
+            'defense_multiplier' => 1.0,
+            'speed_multiplier' => 1.0,
+            'siege_damage_multiplier' => 1.0
         ];
         $globalCaps = [
             'attack' => self::MAX_ASSIGNED_GENERAL_BONUS_PERCENT,
             'defense' => self::MAX_ASSIGNED_GENERAL_BONUS_PERCENT,
             'speed' => self::MAX_ASSIGNED_GENERAL_BONUS_PERCENT,
             'damage_reduction' => self::MAX_DAMAGE_REDUCTION_PERCENT,
-            'scout_range' => self::MAX_SCOUT_RANGE_BONUS
+            'scout_range' => self::MAX_SCOUT_RANGE_BONUS,
+            'return_speed' => self::MAX_ASSIGNED_GENERAL_BONUS_PERCENT,
+            'siege_damage_percent' =>
+                self::MAX_ASSIGNED_GENERAL_BONUS_PERCENT,
+            'siege_damage_flat' => 1000000000.0
+        ];
+        $globalMultiplierFactors = [
+            'attack_multiplier' => [],
+            'defense_multiplier' => [],
+            'speed_multiplier' => [],
+            'siege_damage_multiplier' => []
         ];
         $unitBonuses = [];
+        $unitMultiplierFactors = [];
         $elementPerBonuses = [];
 
         foreach ($soldierTypes as $soldierType) {
@@ -912,6 +974,10 @@ class Army {
                 $combatStats,
                 0.0
             );
+            $unitMultiplierFactors[$soldierType] = [];
+            foreach ($combatStats as $stat) {
+                $unitMultiplierFactors[$soldierType][$stat] = [];
+            }
         }
         foreach (array_keys($elementMap) as $elementKey) {
             $elementPerBonuses[$elementKey] = array_fill_keys(
@@ -937,17 +1003,40 @@ class Army {
             }
 
             foreach ($combatStats as $stat) {
+                $multiplierKey = $stat . '_multiplier';
+                if (array_key_exists($multiplierKey, $generalBonus)) {
+                    $globalMultiplierFactors[$multiplierKey][] =
+                        $generalBonus[$multiplierKey];
+                }
+            }
+            if (array_key_exists(
+                'siege_damage_multiplier',
+                $generalBonus
+            )) {
+                $globalMultiplierFactors['siege_damage_multiplier'][] =
+                    $generalBonus['siege_damage_multiplier'];
+            }
+
+            foreach ($combatStats as $stat) {
                 foreach ($soldierTypes as $soldierType) {
                     $effectKey = 'unit_' . $stat . '_' . $soldierType;
-                    if (!array_key_exists($effectKey, $generalBonus)) {
-                        continue;
+                    if (array_key_exists($effectKey, $generalBonus)) {
+                        $unitBonuses[$soldierType][$stat] =
+                            self::boundedBonusAdd(
+                                $unitBonuses[$soldierType][$stat],
+                                $generalBonus[$effectKey],
+                                self::MAX_DIRECTIONAL_GENERAL_BONUS_PERCENT
+                            );
                     }
-                    $unitBonuses[$soldierType][$stat] =
-                        self::boundedBonusAdd(
-                            $unitBonuses[$soldierType][$stat],
-                            $generalBonus[$effectKey],
-                            self::MAX_DIRECTIONAL_GENERAL_BONUS_PERCENT
-                        );
+                    $multiplierKey = 'unit_' . $stat
+                        . '_multiplier_' . $soldierType;
+                    if (array_key_exists(
+                        $multiplierKey,
+                        $generalBonus
+                    )) {
+                        $unitMultiplierFactors[$soldierType][$stat][] =
+                            $generalBonus[$multiplierKey];
+                    }
                 }
 
                 foreach (array_keys($elementMap) as $elementKey) {
@@ -964,6 +1053,11 @@ class Army {
                         );
                 }
             }
+        }
+
+        foreach ($globalMultiplierFactors as $key => $factors) {
+            $globalBonuses[$key] =
+                self::combineNormalizedMultipliers($factors);
         }
 
         $elementStacks = self::countElementStacks(
@@ -992,6 +1086,14 @@ class Army {
                         $unitBonuses[$soldierType][$stat],
                         $elementBonuses[$stat],
                         self::MAX_DIRECTIONAL_GENERAL_BONUS_PERCENT
+                    );
+            }
+            $directionalBonuses[$soldierType]['multipliers'] =
+                [];
+            foreach ($combatStats as $stat) {
+                $directionalBonuses[$soldierType]['multipliers'][$stat] =
+                    self::combineNormalizedMultipliers(
+                        $unitMultiplierFactors[$soldierType][$stat]
                     );
             }
         }
@@ -1064,7 +1166,24 @@ class Army {
             $soldierType,
             $stat
         );
-        return (float) $baseValue * (1 + $bonusPercent / 100);
+        $globalMultiplierKey = $stat . '_multiplier';
+        $globalMultiplier = isset($bonusRules[$globalMultiplierKey])
+            ? self::normalizeMultiplier(
+                $bonusRules[$globalMultiplierKey]
+            )
+            : 1.0;
+        $unitMultiplier = isset(
+            $bonusRules['directional'][$soldierType]['multipliers'][$stat]
+        )
+            ? self::normalizeMultiplier(
+                $bonusRules['directional'][$soldierType]['multipliers'][$stat]
+            )
+            : 1.0;
+
+        return (float) $baseValue
+            * (1 + $bonusPercent / 100)
+            * $globalMultiplier
+            * $unitMultiplier;
     }
 
     /**
@@ -1166,6 +1285,73 @@ class Army {
         );
 
         return min($safeCap, $safeCurrent + $safeAddition);
+    }
+
+    /**
+     * 标准化乘算倍率 / Normalizes a multiplicative modifier
+     * @param mixed $value 原始倍率 / Raw multiplier
+     * @return float 零至十的倍率 / Multiplier from zero to ten
+     */
+    private static function normalizeMultiplier($value) {
+        if (!is_numeric($value)
+            || !is_finite((float) $value)
+            || (float) $value < 0.0) {
+            return 1.0;
+        }
+
+        return min(10.0, (float) $value);
+    }
+
+    /**
+     * 无顺序依赖地合并规范化倍率 / Combines normalized multipliers without order dependence
+     * @param array $values 原始倍率集合 / Raw multiplier values
+     * @return float 未按消费上限截断的有限乘积 / Finite product without the consumer cap
+     */
+    private static function combineNormalizedMultipliers(array $values) {
+        $logarithms = [];
+        foreach ($values as $value) {
+            $multiplier = self::normalizeMultiplier($value);
+            if ($multiplier === 0.0) {
+                return 0.0;
+            }
+            if ($multiplier === 1.0) {
+                continue;
+            }
+            $logarithms[] = log($multiplier);
+        }
+
+        if (empty($logarithms)) {
+            return 1.0;
+        }
+
+        // 固定求和次序并补偿舍入误差 / Fix summation order and compensate rounding error
+        usort($logarithms, function ($left, $right) {
+            $magnitudeOrder = abs($left) <=> abs($right);
+            return $magnitudeOrder !== 0
+                ? $magnitudeOrder
+                : $left <=> $right;
+        });
+        $sum = 0.0;
+        $compensation = 0.0;
+        foreach ($logarithms as $logarithm) {
+            $adjusted = $logarithm - $compensation;
+            $next = $sum + $adjusted;
+            $compensation = ($next - $sum) - $adjusted;
+            $sum = $next;
+        }
+
+        $maximumLogarithm = log(PHP_FLOAT_MAX);
+        if (!is_finite($sum) || $sum >= $maximumLogarithm) {
+            return PHP_FLOAT_MAX;
+        }
+
+        $minimumPositive = PHP_FLOAT_MIN * PHP_FLOAT_EPSILON;
+        if ($sum < log($minimumPositive)) {
+            return 0.0;
+        }
+
+        $product = exp($sum);
+        return is_finite($product) ? $product : PHP_FLOAT_MAX;
     }
     
     /**

@@ -33,12 +33,6 @@ if (isset($_SERVER['REQUEST_METHOD']) && $_SERVER['REQUEST_METHOD'] === 'POST') 
 
 $resource = new Resource($user->getUserId());
 $overview = $seasonService->getOverview($user->getUserId());
-$idleArmies = [];
-foreach ($overview['armies'] as $army) {
-    if ($army->getStatus() === 'idle' && $army->getCombatPower() > 0) {
-        $idleArmies[] = $army;
-    }
-}
 $statusLabels = [
     'active' => '进行中',
     'victory_countdown' => '银白之孔占领计时中',
@@ -87,6 +81,36 @@ $pageTitle = '十二门与赛季';
                     <?php
                     $maxDurability = max(1, (int) $site['max_durability']);
                     $durabilityPercent = min(100, max(0, (int) floor((int) $site['durability'] / $maxDurability * 100)));
+                    // 地点预览只使用与结算一致的同址、进攻方与目标标签 / Site previews use only the colocated attack-side target context shared with resolution
+                    $siteTargetTags = ['structure'];
+                    $siteTargetTags[] = $site['owner_id'] === null
+                        ? 'npc'
+                        : 'player';
+                    $siteBattleContext = [
+                        'phase' => 'battle',
+                        'side' => 'attack',
+                        'target_tags' => $siteTargetTags,
+                        'distance' => 0
+                    ];
+                    $siteArmies = [];
+                    $siteArmyPowers = [];
+                    foreach ($overview['armies'] as $army) {
+                        $position = $army->getCurrentPosition();
+                        if ($army->getStatus() !== 'idle'
+                            || (int) $position[0] !== (int) $site['x']
+                            || (int) $position[1] !== (int) $site['y']) {
+                            continue;
+                        }
+                        $siteArmyPower = $army->getCombatPower(
+                            $siteBattleContext
+                        );
+                        if ($siteArmyPower <= 0) {
+                            continue;
+                        }
+                        $siteArmies[] = $army;
+                        $siteArmyPowers[$army->getArmyId()] =
+                            $siteArmyPower;
+                    }
                     ?>
                     <article class="gameplay-card">
                         <h4><?php echo escapeHtml($site['display_name']); ?></h4>
@@ -109,18 +133,21 @@ $pageTitle = '十二门与赛季';
                                 <input type="hidden" name="site_id" value="<?php echo (int) $site['site_id']; ?>">
                                 <label>已抵达目标的待命军队
                                     <select name="army_id" required>
-                                        <?php foreach ($idleArmies as $army): ?>
+                                        <?php foreach ($siteArmies as $army): ?>
                                             <?php $position = $army->getCurrentPosition(); ?>
                                             <option value="<?php echo (int) $army->getArmyId(); ?>">
                                                 <?php echo escapeHtml($army->getName()); ?>
                                                 （<?php echo (int) $position[0]; ?>, <?php echo (int) $position[1]; ?>；
-                                                <?php echo number_format($army->getCombatPower()); ?>）
+                                                地点战力 <?php echo number_format($siteArmyPowers[$army->getArmyId()]); ?>）
                                             </option>
                                         <?php endforeach; ?>
                                     </select>
                                 </label>
-                                <button class="gameplay-button danger" type="submit" <?php echo empty($idleArmies) ? 'disabled' : ''; ?>>发动进攻</button>
+                                <button class="gameplay-button danger" type="submit" <?php echo empty($siteArmies) ? 'disabled' : ''; ?>>发动进攻</button>
                             </form>
+                            <?php if (empty($siteArmies)): ?>
+                                <p class="muted">当前没有已抵达此地点且可出战的待命军队。</p>
+                            <?php endif; ?>
                         <?php endif; ?>
                     </article>
                 <?php endforeach; ?>

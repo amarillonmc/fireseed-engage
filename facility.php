@@ -328,6 +328,12 @@ if ($facility) {
                     <?php if (!empty($trainingTypes)
                         && $facility->getConstructionTime() === null
                         && $facility->getUpgradeTime() === null): ?>
+                        <?php
+                        $trainingCostBonuses =
+                            $city->getAssignedGeneralCityBonuses([
+                                'phase' => 'training'
+                            ]);
+                        ?>
                         <h3>训练士兵</h3>
                         <div id="training-message"></div>
                         <table class="barracks-table">
@@ -344,7 +350,16 @@ if ($facility) {
                                     <tr>
                                         <td><?php echo escapeHtml(getSoldierName($soldierType)); ?></td>
                                         <td>
-                                            <?php foreach (Soldier::getTrainingCost($soldierType) as $type => $amount): ?>
+                                            <?php
+                                            $displayTrainingCost =
+                                                Soldier::getAdjustedTrainingCost(
+                                                    $city->getCityId(),
+                                                    $soldierType,
+                                                    1,
+                                                    $trainingCostBonuses
+                                                );
+                                            ?>
+                                            <?php foreach ($displayTrainingCost as $type => $amount): ?>
                                                 <?php echo escapeHtml(getResourceName($type)); ?> <?php echo number_format($amount); ?>&nbsp;
                                             <?php endforeach; ?>
                                         </td>

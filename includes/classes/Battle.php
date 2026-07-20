@@ -110,13 +110,27 @@ class Battle {
                 return false;
         }
 
+        $battleContext = $this->buildAttackerBattleContext(
+            $attackerArmy,
+            $defenderType,
+            $defenderId
+        );
+        if ($battleContext === null) {
+            return false;
+        }
+
         // 保存出发时攻击快照，确保行军期间成长或编成变化不会改写战果 / Save the departure snapshot so growth or composition changes during travel cannot rewrite combat
-        $attackerPowerSnapshot = max(0, (int) $attackerArmy->getCombatPower());
+        $attackerPowerSnapshot = max(
+            0,
+            (int) $attackerArmy->getCombatPower($battleContext)
+        );
         $attackerDamageReductionSnapshot = max(
             0.0,
             min(
                 Army::MAX_DAMAGE_REDUCTION_PERCENT,
-                (float) $attackerArmy->getDamageReduction()
+                (float) $attackerArmy->getDamageReduction(
+                    $battleContext
+                )
             )
         );
         $attackerComposition = [];
@@ -134,8 +148,38 @@ class Battle {
         if ($attackerPowerSnapshot <= 0 || empty($attackerComposition)) {
             return false;
         }
+        $armyModifiers = $attackerArmy->getSkillModifiers(
+            $battleContext
+        );
+        $siegeModifierSnapshot = [
+            'siege_damage_percent' => isset(
+                $armyModifiers['siege_damage_percent']
+            )
+                ? (float) $armyModifiers['siege_damage_percent']
+                : 0.0,
+            'siege_damage_flat' => isset(
+                $armyModifiers['siege_damage_flat']
+            )
+                ? (float) $armyModifiers['siege_damage_flat']
+                : 0.0,
+            'siege_damage_multiplier' => isset(
+                $armyModifiers['siege_damage_multiplier']
+            )
+                ? (float) $armyModifiers['siege_damage_multiplier']
+                : 1.0
+        ];
         $attackerCompositionJson = json_encode(
-            $attackerComposition,
+            [
+                'schema_version' => 2,
+                'units' => $attackerComposition,
+                'skill_modifiers' => $siegeModifierSnapshot,
+                'battle_context' => [
+                    'distance' => max(
+                        0,
+                        (int) $battleContext['distance']
+                    )
+                ]
+            ],
             JSON_UNESCAPED_UNICODE
         );
         if ($attackerCompositionJson === false) {
@@ -238,6 +282,18 @@ class Battle {
                     ? $battleRow['attacker_composition_snapshot']
                     : null
             );
+            $departureSkillModifiers =
+                $this->decodeAttackerSkillModifierSnapshot(
+                    isset($battleRow['attacker_composition_snapshot'])
+                        ? $battleRow['attacker_composition_snapshot']
+                        : null
+                );
+            $departureBattleDistance =
+                self::decodeAttackerBattleDistanceSnapshot(
+                    isset($battleRow['attacker_composition_snapshot'])
+                        ? $battleRow['attacker_composition_snapshot']
+                        : null
+                );
             $useDepartureSnapshot = isset($battleRow['attacker_power_snapshot'])
                 && (int) $battleRow['attacker_power_snapshot'] > 0
                 && !empty($departureComposition);
@@ -369,13 +425,31 @@ class Battle {
                 ? $departureComposition
                 : $this->getCombatComposition('army', $attackerArmy);
             $defenderUnits = $this->getCombatComposition($defenderType, $defender);
+            $attackerContext = [
+                'phase' => 'battle',
+                'side' => 'attack',
+                'target_tags' => $this->getDefenderTargetTags(
+                    $defenderType,
+                    $defender
+                ),
+                'distance' => $departureBattleDistance
+            ];
             $rawAttackerPower = $useDepartureSnapshot
                 ? (int) $battleRow['attacker_power_snapshot']
-                : $attackerArmy->getCombatPower();
+                : $attackerArmy->getCombatPower($attackerContext);
+            $defenderContext = [
+                'phase' => $defenderType === 'city'
+                    ? 'city_defense'
+                    : 'battle',
+                'side' => 'defense',
+                'target_tags' => ['army', 'player'],
+                'distance' => $departureBattleDistance
+            ];
             $rawDefenderPower = $this->getDefenderPower(
                 $defenderType,
                 $defender,
-                $defenderUnits
+                $defenderUnits,
+                $defenderContext
             );
             if (empty($attackerUnits)
                 || $rawAttackerPower <= 0
@@ -402,9 +476,9 @@ class Battle {
             $lossRates = GameRules::getBattleLossRates($battleResult);
             $attackerDamageReduction = $useDepartureSnapshot
                 ? (float) $battleRow['attacker_damage_reduction_snapshot']
-                : $attackerArmy->getDamageReduction();
+                : $attackerArmy->getDamageReduction($attackerContext);
             $defenderDamageReduction = $defenderType === 'army'
-                ? $defender->getDamageReduction()
+                ? $defender->getDamageReduction($defenderContext)
                 : 0.0;
             $attackerLossRate = $this->applyDamageReduction(
                 $lossRates['attacker'],
@@ -483,7 +557,10 @@ class Battle {
                 $attackerLosses,
                 $defenderLosses,
                 $rewards,
-                $attackerUnits
+                $attackerUnits,
+                $useDepartureSnapshot
+                    ? $departureSkillModifiers
+                    : $attackerArmy->getSkillModifiers($attackerContext)
             );
 
             $counterDetails = [
@@ -1152,22 +1229,25 @@ class Battle {
     }
 
     /**
-     * 获取防守方战斗力
-     * @param string $defenderType 防守方类型
-     * @param object $defender 防守方对象
-     * @return int 战斗力
+     * 获取防守方战斗力 / Gets defender combat power
+     * @param string $defenderType 防守方类型 / Defender type
+     * @param object $defender 防守方对象 / Defender
+     * @param array $composition 防守方兵力 / Defender composition
+     * @param array $context 防守上下文 / Defense context
+     * @return int 战斗力 / Combat power
      */
     private function getDefenderPower(
         $defenderType,
         $defender,
-        $composition = []
+        $composition = [],
+        array $context = []
     ) {
         switch ($defenderType) {
             case 'army':
-                return $defender->getCombatPower();
+                return $defender->getCombatPower($context);
             case 'city':
                 // 城池方法已经包含守军、耐久、策略与驻城武将，不能重复结算 / City power already includes troops, durability, strategy, and assigned generals
-                return $defender->getDefensePower();
+                return $defender->getDefensePower($context);
             case 'tile':
                 // 地图格子防御力
                 if ($defender->getType() == 'npc_fort') {
@@ -1329,6 +1409,8 @@ class Battle {
      * @param array $attackerLosses 攻击方损失
      * @param array $defenderLosses 防守方损失
      * @param array $rewards 奖励
+     * @param array $attackerComposition 攻击方编成快照 / Attacker composition snapshot
+     * @param array $attackerSkillModifiers 攻城修正快照 / Siege-modifier snapshot
      */
     private function applyBattleResults(
         $attackerArmy,
@@ -1338,7 +1420,8 @@ class Battle {
         $attackerLosses,
         &$defenderLosses,
         &$rewards,
-        $attackerComposition
+        $attackerComposition,
+        $attackerSkillModifiers = []
     ) {
         $territoryCaptured = false;
         $this->applyArmyLosses($attackerArmy, $attackerLosses);
@@ -1371,7 +1454,8 @@ class Battle {
                 if ($attackerWon && $cityDefenseCleared) {
                     $durabilityDamage = $this->calculateSurvivingGolemSiegeDamage(
                         $attackerComposition,
-                        $attackerLosses
+                        $attackerLosses,
+                        $attackerSkillModifiers
                     );
                 }
                 $durabilityDamage = min(
@@ -1746,7 +1830,8 @@ class Battle {
      */
     private function calculateSurvivingGolemSiegeDamage(
         $attackerComposition,
-        $attackerLosses
+        $attackerLosses,
+        $skillModifiers = []
     ) {
         $lossesById = [];
         $legacyLosses = [];
@@ -1789,7 +1874,61 @@ class Battle {
                     * $quantity;
             }
         }
-        return (int) min(2147483647, max(0, round($damage)));
+        return self::applySiegeDamageModifiers(
+            $damage,
+            is_array($skillModifiers) ? $skillModifiers : []
+        );
+    }
+
+    /**
+     * 对基础攻城伤害应用百分比、倍率和固定值 / Applies percentage, multiplier, and flat siege modifiers
+     * @param mixed $baseDamage 基础伤害 / Base damage
+     * @param array $modifiers 攻城修正 / Siege modifiers
+     * @return int 安全整数伤害 / Safe integer damage
+     */
+    public static function applySiegeDamageModifiers(
+        $baseDamage,
+        array $modifiers
+    ) {
+        $base = is_numeric($baseDamage)
+            && is_finite((float) $baseDamage)
+            ? max(0.0, (float) $baseDamage)
+            : 0.0;
+        if ($base <= 0.0) {
+            return 0;
+        }
+        $percent = isset($modifiers['siege_damage_percent'])
+            && is_numeric($modifiers['siege_damage_percent'])
+            && is_finite((float) $modifiers['siege_damage_percent'])
+            ? min(
+                1000.0,
+                max(0.0, (float) $modifiers['siege_damage_percent'])
+            )
+            : 0.0;
+        $multiplier = isset($modifiers['siege_damage_multiplier'])
+            && is_numeric($modifiers['siege_damage_multiplier'])
+            && is_finite((float) $modifiers['siege_damage_multiplier'])
+            ? min(
+                10.0,
+                max(0.0, (float) $modifiers['siege_damage_multiplier'])
+            )
+            : 1.0;
+        $flat = isset($modifiers['siege_damage_flat'])
+            && is_numeric($modifiers['siege_damage_flat'])
+            && is_finite((float) $modifiers['siege_damage_flat'])
+            ? min(
+                1000000000.0,
+                max(0.0, (float) $modifiers['siege_damage_flat'])
+            )
+            : 0.0;
+        $damage = $base * (1.0 + $percent / 100.0)
+            * $multiplier
+            + $flat;
+
+        return (int) min(
+            2147483647,
+            max(0, round($damage))
+        );
     }
 
     /**
@@ -1965,6 +2104,127 @@ class Battle {
     }
 
     /**
+     * 构建出发时技能条件上下文 / Builds the departure-time skill-condition context
+     * @param Army $attackerArmy 攻击军队 / Attacking army
+     * @param string $defenderType 目标类型 / Target type
+     * @param int $defenderId 目标ID / Target ID
+     * @return array|null 上下文或空 / Context or null
+     */
+    private function buildAttackerBattleContext(
+        $attackerArmy,
+        $defenderType,
+        $defenderId
+    ) {
+        if ($defenderType === 'city') {
+            $defender = new City((int) $defenderId);
+            $position = $defender->isValid()
+                ? $defender->getCoordinates()
+                : null;
+        } elseif ($defenderType === 'army') {
+            $defender = new Army((int) $defenderId);
+            $position = $defender->isValid()
+                ? $defender->getCurrentPosition()
+                : null;
+        } elseif ($defenderType === 'tile') {
+            $defender = new Map((int) $defenderId);
+            $position = $defender->isValid()
+                ? [$defender->getX(), $defender->getY()]
+                : null;
+        } else {
+            return null;
+        }
+        if (!$position || count($position) !== 2) {
+            return null;
+        }
+
+        $attackerPosition = $attackerArmy->getCurrentPosition();
+        $distance = abs(
+            (int) $position[0] - (int) $attackerPosition[0]
+        ) + abs(
+            (int) $position[1] - (int) $attackerPosition[1]
+        );
+
+        return [
+            'phase' => 'battle',
+            'side' => 'attack',
+            'target_tags' => $this->getDefenderTargetTags(
+                $defenderType,
+                $defender
+            ),
+            'distance' => $distance
+        ];
+    }
+
+    /**
+     * 获取技能条件使用的目标标签 / Gets target tags used by skill conditions
+     * @param string $defenderType 防守类型 / Defender type
+     * @param object $defender 防守实体 / Defender entity
+     * @return array 目标标签 / Target tags
+     */
+    private function getDefenderTargetTags(
+        $defenderType,
+        $defender
+    ) {
+        if ($defenderType === 'city') {
+            return ['city', 'structure', 'player'];
+        }
+        if ($defenderType === 'army') {
+            return ['army', 'player'];
+        }
+        if ($defenderType !== 'tile') {
+            return [];
+        }
+
+        $tags = ['tile'];
+        if ($defender->getType() === 'npc_fort') {
+            $tags[] = 'npc';
+            $tags[] = 'structure';
+        } elseif ($defender->getOwnerId() !== null) {
+            $tags[] = 'player';
+        }
+
+        return $tags;
+    }
+
+    /**
+     * 安全解码出发时战斗距离 / Safely decodes the departure-time battle distance
+     * @param mixed $json 编成快照JSON / Composition snapshot JSON
+     * @return int 非负且数据库安全的距离 / Non-negative, database-safe distance
+     */
+    public static function decodeAttackerBattleDistanceSnapshot($json) {
+        if (!is_string($json) || $json === '') {
+            return 0;
+        }
+        $decoded = json_decode($json, true);
+        if (!is_array($decoded)
+            || !isset($decoded['schema_version'])
+            || (int) $decoded['schema_version'] !== 2
+            || !isset($decoded['battle_context'])
+            || !is_array($decoded['battle_context'])
+            || !array_key_exists(
+                'distance',
+                $decoded['battle_context']
+            )) {
+            return 0;
+        }
+
+        $distance = $decoded['battle_context']['distance'];
+        if (is_int($distance)) {
+            $numericDistance = (float) $distance;
+        } elseif (is_string($distance)
+            && preg_match('/^(0|[1-9][0-9]*)$/D', $distance)) {
+            $numericDistance = (float) $distance;
+        } else {
+            return 0;
+        }
+        if (!is_finite($numericDistance) || $numericDistance < 0.0) {
+            return 0;
+        }
+
+        return (int) min(2147483647.0, $numericDistance);
+    }
+
+    /**
      * 解码并验证出发时攻击编成 / Decode and validate the departure attacker composition
      */
     private function decodeAttackerCompositionSnapshot($json) {
@@ -1976,9 +2236,15 @@ class Battle {
             return [];
         }
 
+        $units = isset($decoded['schema_version'])
+            && (int) $decoded['schema_version'] === 2
+            && isset($decoded['units'])
+            && is_array($decoded['units'])
+            ? $decoded['units']
+            : $decoded;
         $allowedTypes = ['pawn', 'knight', 'rook', 'bishop', 'golem', 'scout'];
         $composition = [];
-        foreach ($decoded as $unit) {
+        foreach ($units as $unit) {
             if (!is_array($unit)
                 || !isset(
                     $unit['army_unit_id'],
@@ -2000,6 +2266,49 @@ class Battle {
             ];
         }
         return $composition;
+    }
+
+    /**
+     * 解码并限制出发时攻城修正 / Decodes and bounds departure-time siege modifiers
+     * @param mixed $json 编成快照JSON / Composition snapshot JSON
+     * @return array 攻城修正 / Siege modifiers
+     */
+    private function decodeAttackerSkillModifierSnapshot($json) {
+        $defaults = [
+            'siege_damage_percent' => 0.0,
+            'siege_damage_flat' => 0.0,
+            'siege_damage_multiplier' => 1.0
+        ];
+        if (!is_string($json) || $json === '') {
+            return $defaults;
+        }
+        $decoded = json_decode($json, true);
+        if (!is_array($decoded)
+            || !isset($decoded['skill_modifiers'])
+            || !is_array($decoded['skill_modifiers'])) {
+            return $defaults;
+        }
+
+        $modifiers = $decoded['skill_modifiers'];
+        foreach ($defaults as $key => $default) {
+            if (!isset($modifiers[$key])
+                || !is_numeric($modifiers[$key])
+                || !is_finite((float) $modifiers[$key])
+                || (float) $modifiers[$key] < 0.0) {
+                continue;
+            }
+            $maximum = $key === 'siege_damage_flat'
+                ? 1000000000.0
+                : ($key === 'siege_damage_multiplier'
+                    ? 10.0
+                    : 1000.0);
+            $defaults[$key] = min(
+                $maximum,
+                (float) $modifiers[$key]
+            );
+        }
+
+        return $defaults;
     }
 
     /**

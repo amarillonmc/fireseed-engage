@@ -42,8 +42,7 @@ class SeasonService {
         $army = new Army($armyId);
         if (!$army->isValid()
             || (int) $army->getOwnerId() !== $userId
-            || $army->getStatus() !== 'idle'
-            || $army->getCombatPower() <= 0) {
+            || $army->getStatus() !== 'idle') {
             return ['success' => false, 'message' => '只能使用自己的待命军队'];
         }
 
@@ -102,14 +101,31 @@ class SeasonService {
             $army = new Army($armyId);
             if (!$army->isValid()
                 || (int) $army->getOwnerId() !== $userId
-                || $army->getStatus() !== 'idle'
-                || $army->getCombatPower() <= 0) {
+                || $army->getStatus() !== 'idle') {
                 throw new RuntimeException('军队已经失效或没有战斗力');
             }
 
-            if ((int) $armyRow['current_x'] !== (int) $site['x']
-                || (int) $armyRow['current_y'] !== (int) $site['y']) {
+            $siteBattleDistance = abs(
+                (int) $armyRow['current_x'] - (int) $site['x']
+            ) + abs(
+                (int) $armyRow['current_y'] - (int) $site['y']
+            );
+            $siteTargetTags = ['structure'];
+            $siteTargetTags[] = $site['owner_id'] === null
+                ? 'npc'
+                : 'player';
+            // 地点战要求军队已在目标坐标，故权威曼哈顿距离必须为0 / Site assaults require the army at the target coordinates, so authoritative Manhattan distance must be zero
+            $siteBattleContext = [
+                'phase' => 'battle',
+                'side' => 'attack',
+                'target_tags' => $siteTargetTags,
+                'distance' => $siteBattleDistance
+            ];
+            if ($siteBattleDistance !== 0) {
                 throw new RuntimeException('军队必须先行军到目标地点');
+            }
+            if ($army->getCombatPower($siteBattleContext) <= 0) {
+                throw new RuntimeException('军队已经失效或没有战斗力');
             }
             if ($site['owner_id'] !== null && (int) $site['owner_id'] === $userId) {
                 throw new RuntimeException('不能攻击自己占领的地点');
@@ -130,7 +146,7 @@ class SeasonService {
                 );
             }
 
-            $attackerPower = $army->getCombatPower();
+            $attackerPower = $army->getCombatPower($siteBattleContext);
             $defenderGarrison = max(0, (int) $site['npc_garrison']);
             $defenderPower = max(
                 1,
@@ -138,13 +154,20 @@ class SeasonService {
             );
             $outcome = GameRules::calculateBattleOutcome($attackerPower, $defenderPower);
             $lossRates = GameRules::getBattleLossRates($outcome);
+            $attackerDamageReduction = $army->getDamageReduction(
+                $siteBattleContext
+            );
+            $attackerLossRate = $this->applyDamageReductionToLossRate(
+                $lossRates['attacker'],
+                $attackerDamageReduction
+            );
             $attackerLosses = $this->applyArmyLosses(
                 $armyId,
-                $lossRates['attacker']
+                $attackerLossRate
             );
             $generalHpLosses = $this->applyAssignedGeneralHpLosses(
                 $armyId,
-                $lossRates['attacker']
+                $attackerLossRate
             );
             $defenderLoss = GameRules::calculateBattleLosses(
                 $defenderGarrison,
@@ -645,6 +668,24 @@ class SeasonService {
     }
 
     /**
+     * 对战损率应用军队技能减免 / Applies army-skill reduction to a casualty rate
+     * @param float $lossRate 原始战损率 / Raw casualty rate
+     * @param float $reductionPercent 减免百分比 / Reduction percentage
+     * @return float 封顶后的战损率 / Bounded casualty rate
+     */
+    private function applyDamageReductionToLossRate(
+        $lossRate,
+        $reductionPercent
+    ) {
+        $boundedRate = min(1.0, max(0.0, (float) $lossRate));
+        $boundedReduction = min(
+            Army::MAX_DAMAGE_REDUCTION_PERCENT,
+            max(0.0, (float) $reductionPercent)
+        );
+        return $boundedRate * (1.0 - $boundedReduction / 100.0);
+    }
+
+    /**
      * 应用攻击方战损 / Apply attacker troop losses
      * @param int $armyId 军队ID / Army ID
      * @param float $lossRate 战损率 / Loss rate
@@ -972,6 +1013,21 @@ class SeasonService {
                        INTERVAL {$resetHours} HOUR
                      )",
                 '暂停冻结期资源生产失败'
+            ],
+            [
+                "UPDATE resource_production_states
+                 SET settled_at = DATE_ADD(
+                       settled_at,
+                       INTERVAL {$resetHours} HOUR
+                     ),
+                     dirty_at = CASE
+                       WHEN dirty_at IS NULL THEN NULL
+                       ELSE DATE_ADD(
+                         dirty_at,
+                         INTERVAL {$resetHours} HOUR
+                       )
+                     END",
+                '暂停冻结期独立资源生产游标失败'
             ],
             [
                 "UPDATE cities

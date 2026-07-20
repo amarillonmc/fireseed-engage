@@ -462,6 +462,79 @@ class Soldier {
     }
 
     /**
+     * 应用驻城技能的训练费用减免 / Applies assigned-general training-cost reduction
+     * @param array $cost 基础资源费用 / Base resource costs
+     * @param mixed $reductionPercent 减免百分比 / Reduction percentage
+     * @return array 减免后的整数费用 / Reduced integer costs
+     */
+    public static function applyTrainingCostReduction(
+        array $cost,
+        $reductionPercent
+    ) {
+        $reduction = is_numeric($reductionPercent)
+            && is_finite((float) $reductionPercent)
+            ? min(95.0, max(0.0, (float) $reductionPercent))
+            : 0.0;
+        $adjusted = [];
+        foreach ($cost as $resourceType => $amount) {
+            if (!is_string($resourceType)
+                || !is_numeric($amount)
+                || (float) $amount < 0.0) {
+                continue;
+            }
+            $adjusted[$resourceType] = max(
+                0,
+                (int) ceil(round(
+                    (float) $amount
+                        * (1.0 - $reduction / 100.0),
+                    8
+                ))
+            );
+        }
+
+        return $adjusted;
+    }
+
+    /**
+     * 获取驻城技能修正后的训练费用 / Gets training costs adjusted by assigned-city skills
+     * @param int $cityId 城池ID / City ID
+     * @param string $soldierType 兵种类型 / Soldier type
+     * @param int $quantity 数量 / Quantity
+     * @param array|null $cityBonuses 已汇总的驻城加成 / Pre-aggregated assigned-city bonuses
+     * @return array 修正后的资源费用 / Adjusted resource costs
+     */
+    public static function getAdjustedTrainingCost(
+        $cityId,
+        $soldierType,
+        $quantity = 1,
+        $cityBonuses = null
+    ) {
+        $baseCost = self::getTrainingCost($soldierType, $quantity);
+        if (empty($baseCost)) {
+            return $baseCost;
+        }
+
+        if (!is_array($cityBonuses)) {
+            $city = new City((int) $cityId);
+            if (!$city->isValid()) {
+                return $baseCost;
+            }
+            $cityBonuses = $city->getAssignedGeneralCityBonuses([
+                'phase' => 'training'
+            ]);
+        }
+        $reduction = isset($cityBonuses['training_cost_reduction'])
+            ? (float) $cityBonuses['training_cost_reduction']
+            : 0.0;
+        $scopedKey = 'training_cost_reduction_' . $soldierType;
+        if (isset($cityBonuses[$scopedKey])) {
+            $reduction += (float) $cityBonuses[$scopedKey];
+        }
+
+        return self::applyTrainingCostReduction($baseCost, $reduction);
+    }
+
+    /**
      * 原子化追加士兵训练队列 / Atomically append a soldier training batch
      * @param int $userId 用户ID / User ID
      * @param int $cityId 城池ID / City ID
@@ -528,6 +601,13 @@ class Soldier {
             if (!$facility->isValid() || $trainingSeconds <= 0) {
                 throw new RuntimeException('训练设施状态无效 / Training facility state is invalid');
             }
+
+            // 全兵种与指定兵种减免可组合，并在扣款前封顶为95%。 / Global and unit-specific reductions compose and are capped at 95% before deduction.
+            $trainingCost = self::getAdjustedTrainingCost(
+                $cityId,
+                $soldierType,
+                $quantity
+            );
 
             $trainingLevel = $facilityType === 'barracks'
                 ? $facility->getMaxSoldierLevel()

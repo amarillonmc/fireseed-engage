@@ -32,6 +32,8 @@ $recruitment = file_get_contents($root . '/includes/classes/RecruitmentService.p
 $cron = file_get_contents($root . '/cron_tasks.php');
 $startResearch = file_get_contents($root . '/api/start_research.php');
 $trainSoldiers = file_get_contents($root . '/api/train_soldiers.php');
+$getSoldiers = file_get_contents($root . '/api/get_soldiers.php');
+$soldier = file_get_contents($root . '/includes/classes/Soldier.php');
 $buildPage = file_get_contents($root . '/build.php');
 $facilityPage = file_get_contents($root . '/facility.php');
 $moveArmyPage = file_get_contents($root . '/move_army.php');
@@ -101,12 +103,61 @@ assertServiceInvariant(
     'Zero-HP generals must not activate skills'
 );
 assertServiceInvariant(
+    substr_count(
+        $skillCards,
+        'SkillDefinitionValidator::validate('
+    ) >= 2
+        && strpos(
+            $skillCards,
+            '!$legacyValidation[\'legacy\']'
+        ) !== false
+        && strpos(
+            $skillCards,
+            'Invalid legacy skill definition'
+        ) !== false,
+    'Structured and legacy active definitions must both pass central runtime validation'
+);
+assertServiceInvariant(
     strpos($general, "if ((int) \$row['is_active'] !== 1)") !== false,
     'Disabled mapped cards must contribute no general bonus'
 );
 assertServiceInvariant(
     strpos($general, "['主动', '主动技能', 'active']") !== false,
     'Every supported legacy active-skill label must fail closed'
+);
+assertServiceInvariant(
+    strpos(
+        $general,
+        '$effectiveSkillLevel = SkillValueResolver::clampSkillLevel('
+    ) !== false
+        && strpos(
+            $general,
+            '$passiveDefinition,' . "\n"
+                . '                $effectiveSkillLevel,'
+        ) !== false
+        && strpos(
+            $general,
+            '$this->scalePassiveEffect(' . "\n"
+                . '            $passiveDefinition,' . "\n"
+                . '            $effectiveSkillLevel'
+        ) !== false,
+    'Mapped structured and legacy passive skills must evaluate at a level clamped to the catalog maximum'
+);
+assertServiceInvariant(
+    strpos(
+        $skillCards,
+        '$effectiveSkillLevel = SkillValueResolver::clampSkillLevel('
+    ) !== false
+        && strpos(
+            $skillCards,
+            "'skill_level' => \$effectiveSkillLevel"
+        ) !== false
+        && strpos(
+            $skillCards,
+            '$baseEffects,' . "\n"
+                . '                    $effectiveSkillLevel,'
+        ) !== false,
+    'Structured and legacy active skills must both use the clamped effective level without rewriting stored levels'
 );
 assertServiceInvariant(
     strpos($general, 'function getSkillEffectTotal') !== false,
@@ -158,14 +209,25 @@ foreach ([
     'economy' => $economy,
     'map generator' => $mapGenerator,
     'progress' => $progress,
-    'season' => $season,
-    'installer' => $install
+    'season' => $season
 ] as $sourceName => $source) {
     assertServiceInvariant(
         strpos($source, '->query(') === false,
         "{$sourceName} mutations and reads must not bypass prepared statements"
     );
 }
+assertServiceInvariant(
+    substr_count($install, '->query(') === 1
+        && strpos(
+            $install,
+            'isInstallerSqlServerPrepareCommand('
+        ) !== false
+        && strpos(
+            $install,
+            'Command text comes only from bundled SQL files'
+        ) !== false,
+    'Installer direct SQL must be limited to bundled server-side PREPARE controls'
+);
 assertServiceInvariant(
     strpos($freshSql, "SET SESSION time_zone = '+08:00'") !== false,
     'Fresh schema seeding must use the application time zone'
@@ -224,6 +286,18 @@ assertServiceInvariant(
 assertServiceInvariant(
     strpos($startResearch, 'validateCsrfToken(') !== false,
     'Research mutations must validate a CSRF token'
+);
+assertServiceInvariant(
+    strpos($soldier, 'function getAdjustedTrainingCost(') !== false
+        && strpos(
+            $getSoldiers,
+            '$trainingCostBonuses'
+        ) !== false
+        && strpos(
+            $facilityPage,
+            '$trainingCostBonuses'
+        ) !== false,
+    'Training-cost skill reductions must be shared by charging and both previews'
 );
 assertServiceInvariant(
     strpos($functions, 'function getSeasonGameplayLockState') !== false

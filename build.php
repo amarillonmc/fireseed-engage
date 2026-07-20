@@ -155,6 +155,15 @@ if (!$city || !$city->isValid() || (int) $city->getOwnerId() !== (int) $user->ge
 $x = isset($_POST['x']) ? (int) $_POST['x'] : (isset($_GET['x']) ? (int) $_GET['x'] : 0);
 $y = isset($_POST['y']) ? (int) $_POST['y'] : (isset($_GET['y']) ? (int) $_GET['y'] : 0);
 $options = getFacilityConstructionOptions();
+$adjustedConstructionSeconds = [];
+foreach ($options as $optionType => $option) {
+    // 预先计算实际建造时间供预览与执行共用 / Precompute actual construction time for both preview and execution
+    $adjustedConstructionSeconds[$optionType] =
+        $city->getAdjustedCityActionDuration(
+            (int) $option['seconds'],
+            'build_speed'
+        );
+}
 $resourceTypes = ['bright', 'warm', 'cold', 'green', 'day', 'night'];
 $message = '';
 $messageType = 'info';
@@ -216,11 +225,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     throw new DomainException($deductionError);
                 }
 
-                // 存活驻城武将的建造速度缩短设施建造时间 / Living assigned generals shorten facility construction time
-                $constructionSeconds = $city->getAdjustedCityActionDuration(
-                    (int) $options[$type]['seconds'],
-                    'build_speed'
-                );
+                // 在城池锁内重算权威时长，避免并发技能变更沿用旧预览 / Recompute the authoritative duration under the city lock so concurrent skill changes cannot reuse a stale preview
+                $constructionSeconds =
+                    $city->getAdjustedCityActionDuration(
+                        (int) $options[$type]['seconds'],
+                        'build_speed'
+                    );
                 $constructionTime = date('Y-m-d H:i:s', time() + $constructionSeconds);
                 $facility = new Facility();
                 $createdFacilityId = $facility->createFacility(
@@ -318,7 +328,13 @@ $pageTitle = $city->getName() . ' - 建造设施';
                         <select id="type" name="type" required>
                             <?php foreach ($options as $optionType => $option): ?>
                                 <option value="<?php echo escapeHtml($optionType); ?>">
-                                    <?php echo escapeHtml($option['name']); ?>（<?php echo formatTime($option['seconds']); ?>）
+                                    <?php echo escapeHtml($option['name']); ?>
+                                    <?php if ($adjustedConstructionSeconds[$optionType] !== (int) $option['seconds']): ?>
+                                        （实际 <?php echo formatTime($adjustedConstructionSeconds[$optionType]); ?>；
+                                        基础 <?php echo formatTime($option['seconds']); ?>）
+                                    <?php else: ?>
+                                        （<?php echo formatTime($adjustedConstructionSeconds[$optionType]); ?>）
+                                    <?php endif; ?>
                                 </option>
                             <?php endforeach; ?>
                         </select>
@@ -350,7 +366,7 @@ $pageTitle = $city->getName() . ' - 建造设施';
                         </tr>
                     </thead>
                     <tbody>
-                        <?php foreach ($options as $option): ?>
+                        <?php foreach ($options as $optionType => $option): ?>
                             <tr>
                                 <td><?php echo escapeHtml($option['name']); ?></td>
                                 <td>
@@ -358,7 +374,12 @@ $pageTitle = $city->getName() . ' - 建造设施';
                                         <?php echo escapeHtml(getResourceName($type)); ?> <?php echo number_format($amount); ?>&nbsp;
                                     <?php endforeach; ?>
                                 </td>
-                                <td><?php echo formatTime($option['seconds']); ?></td>
+                                <td>
+                                    <?php echo formatTime($adjustedConstructionSeconds[$optionType]); ?>
+                                    <?php if ($adjustedConstructionSeconds[$optionType] !== (int) $option['seconds']): ?>
+                                        <small>（基础 <?php echo formatTime($option['seconds']); ?>）</small>
+                                    <?php endif; ?>
+                                </td>
                             </tr>
                         <?php endforeach; ?>
                     </tbody>

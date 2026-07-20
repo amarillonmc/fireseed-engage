@@ -484,7 +484,8 @@ function performInstallation($config) {
             'sql/armies.sql',
             'sql/army_units.sql',
             'sql/battles.sql',
-            'sql/gameplay_expansion.sql'
+            'sql/gameplay_expansion.sql',
+            'sql/upgrade_20260718_skill_mechanisms.sql'
         ];
         
         foreach ($sqlFiles as $sqlFile) {
@@ -936,6 +937,56 @@ function getInstallerSqlTransactionCommand($statement) {
         trim($matches[1])
     ));
     return $command === 'START TRANSACTION' ? 'START' : $command;
+}
+
+/**
+ * 识别必须由服务器SQL层直接处理的控制命令 / Detects SQL controls that require direct server execution
+ *
+ * 命令文本只来自项目内置SQL文件，不包含用户输入。
+ * Command text comes only from bundled SQL files and contains no user input.
+ *
+ * @param string $statement SQL语句 / SQL statement
+ * @return bool 是否为服务器预处理控制命令 / Whether this is a server-side prepare control
+ */
+function isInstallerSqlServerPrepareCommand($statement) {
+    $normalized = trim((string) $statement);
+    do {
+        $before = $normalized;
+        // 只剥离语句前方的项目SQL注释，绝不在正文搜索允许关键字。 /
+        // Strip only leading bundled-SQL comments; never search the executable body for an allowed keyword.
+        $normalized = preg_replace(
+            '/\A(?:'
+                . '[ \t\r\n]+'
+                . '|--(?=[ \t\r\n]|\z)[^\r\n]*(?:\R|\z)'
+                . '|#[^\r\n]*(?:\R|\z)'
+                . '|\/\*.*?\*\/'
+                . ')+/s',
+            '',
+            $normalized
+        );
+        $normalized = trim((string) $normalized);
+    } while ($normalized !== $before);
+
+    // 触发器DDL不能可移植地走服务器预处理协议；整个正文须从触发器关键字开始。 /
+    // Trigger DDL is not portable through server prepare; the complete body must start with its keyword.
+    if (preg_match(
+        '/\ACREATE[ \t\r\n]+TRIGGER\b[\s\S]*\z/i',
+        $normalized
+    ) === 1) {
+        return true;
+    }
+
+    return preg_match(
+        '/\A(?:'
+            . 'PREPARE[ \t]+[a-z0-9_]+[ \t]+FROM[ \t]+@[a-z0-9_]+'
+            . '|EXECUTE[ \t]+[a-z0-9_]+'
+            . '|DEALLOCATE[ \t]+PREPARE[ \t]+[a-z0-9_]+'
+            . '|DROP[ \t]+TRIGGER(?:[ \t]+IF[ \t]+EXISTS)?[ \t]+'
+                . '(?:`[^`]+`|[a-z0-9_]+)'
+                . '(?:\.(?:`[^`]+`|[a-z0-9_]+))?'
+            . ')\z/i',
+        $normalized
+    ) === 1;
 }
 
 /**

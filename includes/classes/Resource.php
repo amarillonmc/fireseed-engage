@@ -2,6 +2,18 @@
 // 种火集结号 - 资源类
 
 class Resource {
+    private const PRODUCTION_SNAPSHOT_SCHEMA_VERSION = 2;
+    private const PRODUCTION_INTEGER_MAX = 2147483647;
+    private const MAX_PRODUCTION_STREAMS_PER_RESOURCE = 10000;
+    private const PRODUCTION_RESOURCE_TYPES = [
+        'bright',
+        'warm',
+        'cold',
+        'green',
+        'day',
+        'night'
+    ];
+
     private $db;
     private $userId;
     private $resourceId;
@@ -432,9 +444,53 @@ class Resource {
             }
 
             $now = time();
-            $lastUpdate = strtotime((string) $resourceRow['last_update']);
-            if ($lastUpdate === false) {
-                $lastUpdate = $now;
+            $nowDate = date('Y-m-d H:i:s', $now);
+
+            // 独立生产游标不会被消费、奖励或后台资源调整重置 / The independent production cursor is not reset by spending, rewards, or administrative resource changes
+            // 锁定状态后的城池、设施、武将与技能读取均为非锁定MVCC读取；变更触发器可在本事务提交后线性化，不形成state→实体的反向等待 / City, facility, general, and skill reads after this lock are nonlocking MVCC reads; mutation triggers may linearize after this transaction commits without creating a state-to-entity reverse wait
+            $query = "SELECT settled_at, dirty_since_offset_seconds,
+                             dirty_at, change_count,
+                             change_window_observed,
+                             scheduled_offset_seconds,
+                             scheduled_change_count, snapshot_json
+                      FROM resource_production_states
+                      WHERE user_id = ?
+                      FOR UPDATE";
+            $stmt = $db->prepare($query);
+            $stmt->bind_param('i', $userId);
+            $stmt->execute();
+            $result = $stmt->get_result();
+            $productionState = $result ? $result->fetch_assoc() : null;
+            $stmt->close();
+
+            if (!$productionState) {
+                $query = "INSERT INTO resource_production_states
+                          (user_id, settled_at,
+                           dirty_since_offset_seconds, dirty_at,
+                           change_count, change_window_observed,
+                           scheduled_offset_seconds,
+                           scheduled_change_count, snapshot_json)
+                          VALUES (?, ?, NULL, NULL, 0, 0,
+                                  NULL, 0, NULL)";
+                $stmt = $db->prepare($query);
+                $stmt->bind_param('is', $userId, $nowDate);
+                if (!$stmt->execute()) {
+                    $stmt->close();
+                    throw new RuntimeException(
+                        '初始化资源生产状态失败 / Failed to initialize resource production state'
+                    );
+                }
+                $stmt->close();
+                $productionState = [
+                    'settled_at' => $nowDate,
+                    'dirty_since_offset_seconds' => null,
+                    'dirty_at' => null,
+                    'change_count' => 0,
+                    'change_window_observed' => 0,
+                    'scheduled_offset_seconds' => null,
+                    'scheduled_change_count' => 0,
+                    'snapshot_json' => null
+                ];
             }
             $elapsedSeconds = max(0, $now - $lastUpdate);
             $productionInterval = max(
@@ -493,6 +549,47 @@ class Resource {
                             + max(0.0, (float) $produced)
                     );
                 }
+                if ($captureRequested) {
+                    // 边界覆盖的tick尚未结束时保留旧快照、首末边界与变化次数 / Retain the old snapshot, first/latest boundaries, and change count while a boundary-covered tick remains unsettled
+                    $nextDirtyAt = date(
+                        'Y-m-d H:i:s',
+                        (int) $settlement[
+                            'change_window_boundary_at'
+                        ]
+                    );
+                    $nextDirtySinceOffset = max(
+                        0,
+                        (int) $dirtySinceAt - $nextSettledAt
+                    );
+                    $nextChangeCount = max(
+                        1,
+                        (int) $effectiveChangeCount
+                    );
+                    $nextChangeWindowObserved =
+                        $effectiveChangeCount > 1;
+                } else {
+                    $nextDirtyAt = null;
+                    $nextDirtySinceOffset = null;
+                    $nextChangeCount = 0;
+                    $nextChangeWindowObserved = false;
+                }
+            }
+
+            if ((int) $settlement['settled_ticks'] < 1) {
+                self::persistProductionState(
+                    $db,
+                    $userId,
+                    date('Y-m-d H:i:s', $nextSettledAt),
+                    $nextDirtySinceOffset,
+                    $nextDirtyAt,
+                    $nextChangeCount,
+                    $nextChangeWindowObserved,
+                    $nextSchedule['offset_seconds'],
+                    $nextSchedule['change_count'],
+                    $nextSnapshotJson
+                );
+                $db->commit();
+                return false;
             }
 
             $remainderColumns = [
@@ -559,13 +656,26 @@ class Resource {
                 $settledDate,
                 $userId
             );
-            if (!$stmt->execute() || $stmt->affected_rows !== 1) {
+            if (!$stmt->execute()) {
                 $stmt->close();
                 throw new RuntimeException(
                     '更新资源产出失败 / Failed to update resource production'
                 );
             }
             $stmt->close();
+
+            self::persistProductionState(
+                $db,
+                $userId,
+                $settlementDate,
+                $nextDirtySinceOffset,
+                $nextDirtyAt,
+                $nextChangeCount,
+                $nextChangeWindowObserved,
+                $nextSchedule['offset_seconds'],
+                $nextSchedule['change_count'],
+                $nextSnapshotJson
+            );
 
             $db->commit();
             return true;
