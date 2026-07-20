@@ -2,27 +2,17 @@
 // 种火集结号 - 游戏安装脚本 / Fireseed Engage - Game installer
 
 require_once __DIR__ . '/config/version.php';
+require_once __DIR__ . '/includes/installer_authorization.php';
 
 // 安装器使用独立会话并启用安全 Cookie 选项 / Use an isolated installer session with secure cookie settings
-$isHttpsRequest = (
-    isset($_SERVER['HTTPS'])
-    && $_SERVER['HTTPS'] !== ''
-    && strtolower((string) $_SERVER['HTTPS']) !== 'off'
-) || (isset($_SERVER['SERVER_PORT']) && (int) $_SERVER['SERVER_PORT'] === 443);
 $installerTrustProxyHeaders = filter_var(
     getenv('FIRESEED_TRUST_PROXY_HEADERS'),
     FILTER_VALIDATE_BOOLEAN
 );
-if (!$isHttpsRequest
-    && $installerTrustProxyHeaders
-    && isset($_SERVER['HTTP_X_FORWARDED_PROTO'])
-) {
-    $forwardedProtocols = explode(
-        ',',
-        (string) $_SERVER['HTTP_X_FORWARDED_PROTO']
-    );
-    $isHttpsRequest = strtolower(trim($forwardedProtocols[0])) === 'https';
-}
+$isHttpsRequest = isSecureInstallerRequest(
+    $_SERVER,
+    $installerTrustProxyHeaders
+);
 ini_set('session.use_strict_mode', '1');
 ini_set('session.use_only_cookies', '1');
 session_name('fireseed_installer');
@@ -46,46 +36,46 @@ if (file_exists(__DIR__ . '/config/installed.lock')) {
     );
 }
 
-// 所有浏览器安装都必须提供一次性环境令牌，避免反向代理把公网请求伪装成本机来源。 / Every browser installation requires a one-time environment token because reverse proxies can make public requests appear loopback-local.
-$requiredInstallToken = getenv('FIRESEED_INSTALL_TOKEN');
+// 直接回环由网络边界授权；远程安装使用环境变量或一次性文件令牌。 / Direct loopback uses the network boundary; remote installs use an environment or one-time file token.
 if (empty($_SESSION['installer_authorized'])) {
-    $installerTokenError = '';
+    $isDirectLoopbackTransport =
+        isDirectInstallerLoopbackRequest($_SERVER);
+    if ($isDirectLoopbackTransport) {
+        if (!session_regenerate_id(true)) {
+            http_response_code(500);
+            die(
+                '无法建立本机安装会话'
+                . ' / Failed to establish the local installer session.'
+            );
+        }
+        $_SESSION['installer_authorized'] = true;
+        $_SESSION['installer_authorized_at'] = time();
+        $_SESSION['installer_authorization_mode'] = 'loopback';
+    }
+}
+
+if (empty($_SESSION['installer_authorized'])) {
+    $installerCredential = resolveInstallerAuthorizationToken(
+        __DIR__,
+        getenv('FIRESEED_INSTALL_TOKEN')
+    );
+    $installerTokenError = (string) $installerCredential['error'];
     $requestMethod = isset($_SERVER['REQUEST_METHOD'])
         ? strtoupper((string) $_SERVER['REQUEST_METHOD'])
         : 'GET';
-    $remoteAddress = isset($_SERVER['REMOTE_ADDR'])
-        ? (string) $_SERVER['REMOTE_ADDR']
-        : '';
-    $requestHost = isset($_SERVER['HTTP_HOST'])
-        ? strtolower((string) $_SERVER['HTTP_HOST'])
-        : '';
-    $isLoopbackHost = preg_match(
-        '/^(?:localhost|127\.0\.0\.1|\[::1\])(?::[0-9]+)?$/D',
-        $requestHost
-    ) === 1;
-    $hasForwardedClientHeaders = isset(
-        $_SERVER['HTTP_FORWARDED']
-    ) || isset(
-        $_SERVER['HTTP_X_FORWARDED_FOR']
-    ) || isset(
-        $_SERVER['HTTP_X_FORWARDED_HOST']
-    ) || isset(
-        $_SERVER['HTTP_X_REAL_IP']
-    );
-    $isDirectLoopbackTransport =
-        in_array($remoteAddress, ['127.0.0.1', '::1'], true)
-        && $isLoopbackHost
-        && !$hasForwardedClientHeaders;
-    $allowInsecureLocalInstall = $isDirectLoopbackTransport
-        && filter_var(
-            getenv('FIRESEED_ALLOW_INSECURE_LOCAL_INSTALL'),
-            FILTER_VALIDATE_BOOLEAN
-        );
-    $hasSafeTokenTransport = $isHttpsRequest
-        || $allowInsecureLocalInstall;
-    if (!$hasSafeTokenTransport) {
+    $hasSafeTokenTransport = $isHttpsRequest;
+    if ($installerTokenError === '' && !$hasSafeTokenTransport) {
         $installerTokenError =
-            '安装授权必须使用 HTTPS；仅本机开发可显式开启不安全回环安装';
+            '远程安装授权必须使用 HTTPS'
+            . ' / Remote installer authorization requires HTTPS.';
+    } elseif ($installerTokenError === ''
+        && $installerCredential['source'] === null
+    ) {
+        $installerTokenError =
+            '未配置远程安装令牌；请设置 FIRESEED_INSTALL_TOKEN'
+            . ' 或创建 config/install-token.php'
+            . ' / No remote installer token is configured; set'
+            . ' FIRESEED_INSTALL_TOKEN or create config/install-token.php.';
     }
 
     if ($requestMethod === 'POST' && isset($_POST['install_token'])) {
@@ -95,10 +85,12 @@ if (empty($_SESSION['installer_authorized'])) {
         if (!$hasSafeTokenTransport) {
             $installerTokenError =
                 '安装授权必须使用 HTTPS；令牌未被处理';
-        } elseif (!is_string($requiredInstallToken)
-            || $requiredInstallToken === ''
+        } elseif ($installerCredential['source'] === null
             || $suppliedInstallToken === ''
-            || !hash_equals($requiredInstallToken, $suppliedInstallToken)
+            || !hash_equals(
+                (string) $installerCredential['token'],
+                $suppliedInstallToken
+            )
         ) {
             $installerTokenError = '安装令牌无效';
         } else {
@@ -125,11 +117,21 @@ if (empty($_SESSION['installer_authorized'])) {
                     @unlink($tokenClaimPath);
                     $installerTokenError = '无法建立安全安装会话';
                 } else {
+                    if ($installerCredential['source'] === 'file'
+                        && is_string($installerCredential['path'])
+                        && !@unlink($installerCredential['path'])) {
+                        error_log(
+                            'The consumed installer token file could not be '
+                            . 'deleted: ' . $installerCredential['path']
+                        );
+                    }
                     if (DIRECTORY_SEPARATOR !== '\\') {
                         @chmod($tokenClaimPath, 0600);
                     }
                     $_SESSION['installer_authorized'] = true;
                     $_SESSION['installer_authorized_at'] = time();
+                    $_SESSION['installer_authorization_mode'] =
+                        (string) $installerCredential['source'];
                     header('Location: install.php', true, 303);
                     exit;
                 }
@@ -147,7 +149,11 @@ if (empty($_SESSION['installer_authorized'])) {
     http_response_code(
         !$hasSafeTokenTransport
             ? 426
-            : ($installerTokenError === '' ? 401 : 403)
+            : (
+                $installerTokenError === ''
+                    ? 401
+                    : 403
+            )
     );
     $escapedTokenError = htmlspecialchars(
         $installerTokenError,
@@ -163,12 +169,15 @@ if (empty($_SESSION['installer_authorized'])) {
         . 'box-sizing:border-box;margin:.75rem 0;padding:.7rem}'
         . '.error{color:#a00}</style></head><body>'
         . '<h1>安装授权 / Installer authorization</h1>'
-        . '<p>请输入 FIRESEED_INSTALL_TOKEN。令牌只通过 POST 提交，'
-        . '成功后立即失效。</p>'
+        . '<p>远程安装请输入 FIRESEED_INSTALL_TOKEN 或'
+        . ' config/install-token.php 提供的一次性令牌。'
+        . '令牌只通过 POST 提交，成功后立即失效。</p>'
         . ($escapedTokenError !== ''
             ? '<p class="error">' . $escapedTokenError . '</p>'
             : '')
         . ($hasSafeTokenTransport
+            && $installerCredential['source'] !== null
+            && $installerCredential['error'] === ''
             ? '<form method="post"><label for="install-token">'
                 . '一次性令牌 / One-time token</label>'
                 . '<input id="install-token" type="password" '

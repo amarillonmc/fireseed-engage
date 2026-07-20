@@ -23,6 +23,9 @@ function assertInternalBetaInvariant($condition, $message) {
 $sources = [
     'config' => file_get_contents($root . '/config/config.php'),
     'installer' => file_get_contents($root . '/install.php'),
+    'installer_authorization' => file_get_contents(
+        $root . '/includes/installer_authorization.php'
+    ),
     'database' => file_get_contents($root . '/includes/database.php'),
     'resource' => file_get_contents($root . '/includes/classes/Resource.php'),
     'map' => file_get_contents($root . '/includes/classes/Map.php'),
@@ -68,7 +71,14 @@ assertInternalBetaInvariant(
     strpos($sources['installer'], "__DIR__ . '/config/local.php'")
         !== false
         && strpos($sources['installer'], 'FIRESEED_INSTALL_TOKEN') !== false
-        && strpos($sources['installer'], '$isLoopbackRequest') === false
+        && strpos(
+            $sources['installer'],
+            'isDirectInstallerLoopbackRequest($_SERVER)'
+        ) !== false
+        && strpos(
+            $sources['installer'],
+            'resolveInstallerAuthorizationToken('
+        ) !== false
         && strpos($sources['installer'], "\$_GET['install_token']") === false
         && strpos($sources['installer'], "fopen(\$tokenClaimPath, 'x')")
             !== false
@@ -85,21 +95,26 @@ assertInternalBetaInvariant(
             "getenv('FIRESEED_TRUST_PROXY_HEADERS')"
         ) !== false
         && strpos(
-            $sources['installer'],
+            $sources['installer_authorization'],
+            'function isDirectInstallerLoopbackRequest('
+        ) !== false
+        && strpos(
+            $sources['installer_authorization'],
             'HTTP_X_FORWARDED_PROTO'
         ) !== false
         && strpos(
-            $sources['installer'],
-            "getenv('FIRESEED_ALLOW_INSECURE_LOCAL_INSTALL')"
-        ) !== false
-        && strpos(
-            $sources['installer'],
-            '$hasSafeTokenTransport'
-        ) !== false
-        && strpos(
-            $sources['installer'],
+            $sources['installer_authorization'],
             'HTTP_X_FORWARDED_FOR'
         ) !== false
+        && strpos(
+            $sources['installer_authorization'],
+            "'install-token.php'"
+        ) !== false
+        && strpos(
+            $sources['installer'],
+            'FIRESEED_ALLOW_INSECURE_LOCAL_INSTALL'
+        ) === false
+        && strpos($sources['installer'], '$hasSafeTokenTransport') !== false
         && strpos(
             $sources['installer'],
             "header('Location: install.php', true, 303)"

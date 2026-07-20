@@ -26,8 +26,8 @@ Fireseed Engage - Internal-beta gate, research economy, and seasonal mechanics i
 
 三、安装器与升级 / Installer and upgrades
 
-1. 所有浏览器安装均要求高熵 FIRESEED_INSTALL_TOKEN；令牌仅经安全 POST 提交，授权时轮换会话并原子消费。
-   Every browser install requires a high-entropy token submitted only by secure POST, followed by session rotation and atomic consumption.
+1. 直接回环安装使用网络边界授权；远程浏览器安装可使用高熵 FIRESEED_INSTALL_TOKEN 或一次性文件令牌，令牌仅经安全 POST 提交，授权时轮换会话并原子消费。
+   Direct loopback installation trusts its network boundary; remote browser installation accepts either a high-entropy environment token or one-time file token submitted only by secure POST, followed by session rotation and atomic consumption.
 2. 安装过程使用全局文件互斥锁；本地配置与安装锁采用完整写入校验和同目录原子替换，失败时恢复原配置。
    A process-wide file mutex serializes installation; local configuration and installation locks use complete-write checks, same-directory replacement, and failure restoration.
 3. 数据库表单、环境变量和最终运行配置必须指向同一数据库；字符集固定 utf8mb4，应用与数据库时区固定 Asia/Shanghai / +08:00。
@@ -98,10 +98,10 @@ Fireseed Engage - Internal-beta gate, research economy, and seasonal mechanics i
 
 七、验证结果 / Validation
 
-1. 20 个 PHP 测试文件共 911 项断言全部通过。
-   All 20 PHP test files passed with 911 assertions.
-2. 全仓库 140 个 PHP 文件语法检查通过。
-   PHP syntax checks passed for all 140 files.
+1. 21 个 PHP 测试文件共 927 项断言全部通过。
+   All 21 PHP test files passed with 927 assertions.
+2. 全仓库 142 个 PHP 文件语法检查通过。
+   PHP syntax checks passed for all 142 files.
 3. assets/js 下 2 个 JavaScript 文件及 2 段相关后台内联脚本语法检查通过。
    JavaScript syntax checks passed for both files under assets/js and two relevant inline administration scripts.
 4. git diff --check 通过；仅报告 Git 的 CRLF 工作区提示，无补丁空白错误。

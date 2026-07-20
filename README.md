@@ -18,7 +18,17 @@ PHP 7.4 or 8.2 is supported. The application requires MySQL/MariaDB, the extensi
 
 1. 创建空数据库和仅对该数据库拥有权限的数据库账户。
 2. 将站点根目录指向本仓库，并确认服务器会阻止直接访问 `config/`、`doc/`、`includes/`、`logs/`、`sql/`、`tests/` 和 `tools/`。
-3. 无论本机还是远程安装，都必须先设置高强度一次性环境变量 `FIRESEED_INSTALL_TOKEN`，然后通过 HTTPS 直接访问不带参数的 `install.php`，在授权表单中提交令牌。令牌只通过 POST 传输，成功授权后会轮换会话并原子标记为已消费；看到环境检查页后立即撤销该环境变量。仅在直接回环地址进行本机开发且无法提供 TLS 时，可临时设置 `FIRESEED_ALLOW_INSECURE_LOCAL_INSTALL=true`，绝不能在共享或代理环境开启。
+3. 通过以下任一方式进入安装器：
+   - 将临时站点严格绑定到 `127.0.0.1` / `::1`，并以 `localhost` 或回环 IP 直接访问不带参数的 `install.php`。直接回环安装不要求 HTTPS 或令牌；仅“不绑定域名”并不等于安全，监听地址和防火墙仍必须阻止外部通过服务器 IP 访问。
+   - 在能管理 PHP 进程的服务器上设置至少 32 字节真随机的 `FIRESEED_INSTALL_TOKEN`，通过 HTTPS 打开 `install.php` 并在授权表单中提交；授权后立即从 PHP 进程环境撤销该变量。
+   - 在不能注入进程环境变量的 cPanel／共享主机上创建被 Git 忽略的 `config/install-token.php`，通过 HTTPS 提交其中的令牌：
+
+     ```php
+     <?php
+     return '在此填写至少32字节真随机的一次性令牌';
+     ```
+
+     环境变量令牌优先于文件令牌。授权成功后安装器会尝试删除令牌文件；无论删除是否成功，原子消费标记都会阻止再次使用，操作者仍应确认文件已经移除。
 4. 完成环境检查、数据库配置和管理员创建。安装器会把机密写入被 Git 忽略的 `config/local.php`，并创建 `config/installed.lock`。
 5. 安装完成后，在 Web 服务器层禁用或移除 `install.php` 的访问。
 6. 配置每分钟执行：
@@ -27,11 +37,11 @@ PHP 7.4 or 8.2 is supported. The application requires MySQL/MariaDB, the extensi
    php /absolute/path/to/fireseed-engage/cron_tasks.php
    ```
 
-Every browser installation requires a high-entropy `FIRESEED_INSTALL_TOKEN`, including localhost access. Open `install.php` over HTTPS without query parameters and submit the token through its POST form; revoke the environment variable as soon as authorization succeeds. `FIRESEED_ALLOW_INSECURE_LOCAL_INSTALL=true` is an explicit loopback-only development escape hatch and must never be enabled on a shared or proxied deployment. The installer is rerunnable until its lock file is created. It writes deployment secrets only to the untracked `config/local.php`; the tracked configuration contains safe defaults and environment-variable support.
+Direct, unproxied loopback access is authorized without HTTPS or a token. Remote installation requires HTTPS and either a high-entropy `FIRESEED_INSTALL_TOKEN` or an untracked `config/install-token.php` that returns the token string. Environment tokens take precedence; file tokens support cPanel-style hosting without PHP worker environment control. Successful token authorization rotates the session, atomically consumes the credential, and attempts to remove a file token. The installer remains rerunnable until its installation lock is created.
 
-若授权后会话丢失且安装尚未完成，应先确认没有其他安装进程，再删除 `config/.install-token-consumed`、设置一个全新的令牌并重新授权。不要复用旧令牌。
+若令牌授权后会话丢失且安装尚未完成，应先确认没有其他安装进程，再删除 `config/.install-token-consumed`，设置一个全新的环境令牌或重新创建令牌文件并授权。不要复用旧令牌。直接回环安装不使用该消费标记，可直接重新进入。
 
-If the authorized session is lost before installation completes, first verify that no installer is running, then remove `config/.install-token-consumed`, set a new token, and authorize again. Never reuse the previous token.
+If a token-authorized session is lost before installation completes, first verify that no installer is running, remove `config/.install-token-consumed`, configure a new environment or file token, and authorize again. Never reuse the previous token. Direct loopback installation does not use the token-consumption marker.
 
 已经存在 `config/installed.lock` 时，不要只删除锁文件并在原数据库上就地重装。应先备份，确认没有安装或定时任务进程，准备经过核验的空数据库，并同时按恢复流程处理本地配置与安装授权标记。
 

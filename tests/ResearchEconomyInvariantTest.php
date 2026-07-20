@@ -36,6 +36,12 @@ foreach ($files as $name => $path) {
         fwrite(STDERR, "FAIL: Unable to read {$path}\n");
         exit(1);
     }
+    // 源码断言在 Windows 与 POSIX 工作区使用同一换行语义 / Normalize source assertions across Windows and POSIX line endings
+    $sources[$name] = str_replace(
+        ["\r\n", "\r"],
+        "\n",
+        $sources[$name]
+    );
 }
 
 /**
@@ -223,10 +229,11 @@ foreach ([
     );
 }
 assertResearchEconomy(
-    strpos(
+    preg_match(
+        '/getUserResourceStorageCapacity\(\R\s*'
+            . '\$userId,\R\s*\$resourceType/',
         $sources['map'],
-        "getUserResourceStorageCapacity(\n                \$userId,\n                \$resourceType"
-    ) !== false
+    ) === 1
         && strpos(
             $sources['battle'],
             "in_array(\$type, ['bright', 'night'], true)"
